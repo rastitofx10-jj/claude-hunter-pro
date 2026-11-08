@@ -1103,7 +1103,12 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
   // בעבר: ציד "נכשל" שנכנס שוב ל-runNextLocked (הלקוח לא עצר את המשאבה)
   // הריץ את השלב הכושל מחדש בלולאה אינסופית — שריפת מכסת GitHub/LLM ללא השגחה.
   // כל כניסה חדשה לשלב חייבת מצב running; ניסיון חוזר = retry מפורש.
-  if (row.status === "failed") throw new LiveHuntError("הציד נכשל — נדרש ניסיון חוזר מפורש (retry)", 409);
+  if (row.status === "failed") {
+    // המצב הכושל מוצמד לשגיאה (.state) — ה-route מחזיר אותו בגוף התשובה,
+    // והמשאבה בלקוח קוראת אותו (payload.hunt) ועוצרת במקום לרוץ בלולאה.
+    const guardErr = new LiveHuntError("הציד נכשל — נדרש ניסיון חוזר מפורש (retry)", 409);
+    throw Object.assign(guardErr, { state: serializeLiveHunt(row) });
+  }
 
   const startedAt = Date.now();
   const doneStages = safeJsonParse<LiveHuntStageRecord[]>(row.stages ?? "[]", []).filter(
