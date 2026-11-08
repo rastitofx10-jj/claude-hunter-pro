@@ -181,32 +181,99 @@ function evolvedKind(q: string): "code" | "repo" {
 const MAX_HUNT_QUERIES = 24;
 
 /**
- * זריעה גנרציונית: השאילתות שהלהקה הציעה בציד האב מממשות בפועל בציד הבן.
- * (בעבר: queryEvolution נרשם ונזרק — הלמידה לא חזרה לשטח. עכשיו הדור הבא צד איתן.)
+ * שומר סף דטרמיניסטי לשאילתות מתפתחות — לא סומכים על ה-LLM לציית לכללים.
+ * ראיות מהשטח: Gen4+Gen5 קיבלו מהמודל שוב ושוב repo:anthropic-ai/claude — מאגר שלא קיים,
+ * למרות שהפרומפט אסר זאת מפורשות וכלל רשימת מתות. כל 10-12 השאילתות חזרו 0 תוצאות.
+ * הכלל כאן בקוד:
+ * 1. מתאם repo:owner/name חוקי רק אם owner/name ברשימת מאגרים אמיתיים (אליטה/מועמדים/אנתרופיק ידועים).
+ * 2. שאילתה בלי מתאם repo: עוברת (חיפוש קוד חופשי לא יכול להיות מאגר לא-קיים).
+ * 3. דפוס מת מהדור הקודם (0 תוצאות) נחסם אפילו אם המודל שינה רק מילה.
  */
-async function parentEvolvedQueries(ctx: HuntCtx): Promise<{ queries: SweepQuery[]; blindSpots: string[]; parentId: number | null }> {
-  if (!ctx.seededFrom) return { queries: [], blindSpots: [], parentId: null };
+function validateEvolvedQueries(
+  rawQueries: string[],
+  realRepos: Set<string>,
+  deadQueries: string[],
+  maxKeep = 10
+): { kept: string[]; dropped: { q: string; why: string }[] } {
+  const deadPatterns = deadQueries
+    .map((d) => d.replace(/["']/g, "").split(/\s+/).filter((w) => w.length > 3))
+    .filter((w) => w.length > 0);
+  const kept: string[] = [];
+  const dropped: { q: string; why: string }[] = [];
+  for (const raw of rawQueries) {
+    const q = String(raw ?? "").trim();
+    if (q.length < 8 || q.length > 240) {
+      dropped.push({ q, why: "אורך לא תקין" });
+      continue;
+    }
+    const repoMatch = q.match(/\brepo:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/);
+    if (repoMatch && !realRepos.has(repoMatch[1].toLowerCase())) {
+      dropped.push({ q, why: `repo:${repoMatch[1]} לא ברשימת מאגרים אמיתיים` });
+      continue;
+    }
+    const bare = q.replace(/["']/g, "").toLowerCase();
+    const isDeadPattern = deadPatterns.some(
+      (dw) => dw.length >= 2 && dw.every((w) => bare.includes(w.toLowerCase()))
+    );
+    if (isDeadPattern) {
+      dropped.push({ q, why: "שכפול דפוס שהחזיר 0 תוצאות בדור הקודם" });
+      continue;
+    }
+    if (kept.some((k) => k.toLowerCase() === bare)) {
+      dropped.push({ q, why: "כפילות" });
+      continue;
+    }
+    kept.push(q);
+    if (kept.length >= maxKeep) break;
+  }
+  return { kept, dropped };
+}
+
+/**
+ * זריעה גנרציונית: השאילתות שהלהקה הציעה בציד האב מממשות בפועל בציד הבן — עם שומר סף דטרמיניסטי.
+ * (בעבר: queryEvolution נרשם ונזרק; אחר-כך: הועבר כמו שהוא — והמודל המציא מאגרים לא-קיימים בכל דור)
+ */
+async function parentEvolvedQueries(ctx: HuntCtx): Promise<{ queries: SweepQuery[]; blindSpots: string[]; parentId: number | null; dropped: { q: string; why: string }[] }> {
+  if (!ctx.seededFrom) return { queries: [], blindSpots: [], parentId: null, dropped: [] };
   const parent = await db.liveHunt.findUnique({ where: { id: ctx.seededFrom } });
-  if (!parent) return { queries: [], blindSpots: [], parentId: null };
+  if (!parent) return { queries: [], blindSpots: [], parentId: null, dropped: [] };
   const stages = safeJsonParse<LiveHuntStageRecord[]>(parent.stages ?? "[]", []);
   const attack = stages.find((s) => s.key === "attack")?.evidence as { queryEvo?: { nextQueries?: unknown; blindSpots?: unknown } } | undefined;
   const raw = Array.isArray(attack?.queryEvo?.nextQueries) ? (attack!.queryEvo!.nextQueries as unknown[]) : [];
   const blind = Array.isArray(attack?.queryEvo?.blindSpots) ? (attack!.queryEvo!.blindSpots as unknown[]) : [];
-  const queries: SweepQuery[] = raw
-    .map((x) => String(x ?? "").trim())
-    .filter((q) => q.length >= 8 && q.length <= 240)
-    .slice(0, 10)
-    .map((q) => ({ q, kind: evolvedKind(q), origin: `evolved:gen${ctx.generation}` }));
-  return { queries, blindSpots: blind.map((b) => String(b)).slice(0, 4), parentId: parent.id };
+
+  // מאגרים אמיתיים: הכל שנראה אי-פעם + מאגרי אנתרופיק רשמיים (קיימים וידועים)
+  const known = await previousKnownRepos();
+  const realRepos = new Set([...known].map((r) => r.toLowerCase()));
+  for (const r of ["anthropics/claude-code", "anthropics/skills", "anthropics/anthropic-sdk-python", "anthropics/anthropic-sdk-typescript", "anthropics/cookbooks"]) {
+    realRepos.add(r.toLowerCase());
+  }
+  // שאילתות מתות = מה שהאב הריץ וקיבל 0 תוצאות
+  const parentHunt = stages.find((s) => s.key === "hunt")?.evidence as { queries?: { q?: unknown; count?: unknown }[] } | undefined;
+  const deadQueries = (parentHunt?.queries ?? [])
+    .filter((r) => typeof r?.q === "string" && r?.count === 0)
+    .map((r) => r.q as string);
+
+  const rawStrings = raw.map((x) => String(x ?? "").trim()).filter((q) => q.length >= 8);
+  const { kept, dropped } = validateEvolvedQueries(rawStrings, realRepos, deadQueries, 10);
+  const queries: SweepQuery[] = kept.map((q) => ({ q, kind: evolvedKind(q), origin: `evolved:gen${ctx.generation}` }));
+  return { queries, blindSpots: blind.map((b) => String(b)).slice(0, 4), parentId: parent.id, dropped };
 }
 
-/** איחוד כל המאגרים שדורות קודמים כבר ראו — לבדיקת חדשנות של הדור */
+/** איחוד כל המאגרים שדורות קודמים כבר ראו — לבדיקת חדשנות של הדור.
+ * (בעבר: קראנו רק flat[top12]+topCandidates[top10] — הזיכרון היה קטום, וה-metric "חדשים מעבר לידע קודם" היה מזויף: תמיד ~935-22.
+ * עכשיו: קוראים את כל המועמדים שנראו (allNames) — מדידה אמיתית.) */
 async function previousKnownRepos(): Promise<Set<string>> {
   const hunts = await db.liveHunt.findMany({ where: { status: "done" }, orderBy: { id: "desc" }, take: 6 });
   const known = new Set<string>();
   for (const h of hunts) {
     const stages = safeJsonParse<LiveHuntStageRecord[]>(h.stages ?? "[]", []);
-    const he = stages.find((s) => s.key === "hunt")?.evidence as { flat?: { fullName?: unknown }[]; topCandidates?: { fullName?: unknown }[] } | undefined;
+    const he = stages.find((s) => s.key === "hunt")?.evidence as {
+      allNames?: { fullName?: unknown }[];
+      flat?: { fullName?: unknown }[];
+      topCandidates?: { fullName?: unknown }[];
+    } | undefined;
+    for (const f of he?.allNames ?? []) if (typeof f?.fullName === "string") known.add(f.fullName);
     for (const f of he?.flat ?? []) if (typeof f?.fullName === "string") known.add(f.fullName);
     for (const t of he?.topCandidates ?? []) if (typeof t?.fullName === "string") known.add(t.fullName);
   }
@@ -233,10 +300,14 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   // חדשנות — מה הדור הזה מגלה מעבר לכל הידע המצטבר של הדורות הקודמים
   const known = await previousKnownRepos();
   const novelCandidates = candidates.filter((c) => !known.has(c.fullName));
+  const repeatPct = candidates.length ? Math.round(((candidates.length - novelCandidates.length) / candidates.length) * 100) : 0;
 
   const hard = candidates.filter((c) => c.evidence === "hard").length;
-  const genTag = ctx.generation > 1 ? ` · דור ${ctx.generation} (זריעה מציד #${seed.parentId}: ${evolved.length} שאילתות)` : "";
-  const novelTag = known.size > 0 ? ` · ${novelCandidates.length} חדשים מעבר לידע קודם` : "";
+  const genTag =
+    ctx.generation > 1
+      ? ` · דור ${ctx.generation} (זריעה מציד #${seed.parentId}: ${evolved.length} שאילתות${seed.dropped.length ? `, ${seed.dropped.length} נפסלו בשומר-הסף` : ""})`
+      : "";
+  const novelTag = known.size > 0 ? ` · ${novelCandidates.length} חדשים / ${repeatPct}% כבר נראו בדורות קודמים` : "";
   const summary = `${queries.length} שאילתות · ${candidates.length} מועמדים מדורגים · ${hard} עם ראיה קשה · ${repoHits.length} מאגרים${genTag}${novelTag}`;
 
   return {
@@ -247,7 +318,10 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       seededFrom: seed.parentId,
       evolvedQueries: evolved.map((q) => ({ q: q.q, kind: q.kind, origin: q.origin })),
       parentBlindSpots: seed.blindSpots,
+      evolvedDropped: seed.dropped,
       novelCandidates: known.size > 0 ? novelCandidates.length : null,
+      repeatPct: known.size > 0 ? repeatPct : null,
+      allNames: candidates.map((c) => ({ fullName: c.fullName })),
       novelTop: novelCandidates.slice(0, 10).map((c) => ({
         fullName: c.fullName,
         stars: c.stars,
@@ -386,7 +460,15 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
 
   const queryEvo =
     (await llmTry(
-      () => queryEvolution((readHuntEvidence(ctx)?.executedQueries as string[] | undefined) ?? [], swarm.elite),
+      () =>
+        queryEvolution(
+          ((readHuntEvidence(ctx)?.queries as { q?: unknown; count?: unknown; error?: unknown }[] | undefined) ?? []).map((r) => ({
+            q: typeof r?.q === "string" ? r.q : "",
+            count: typeof r?.count === "number" ? r.count : -1,
+            error: typeof r?.error === "string" ? r.error : null,
+          })),
+          swarm.elite
+        ),
       failures,
       "אבולוציית שאילתות"
     )) ?? { nextQueries: [], blindSpots: [], rationale: "" };
@@ -431,17 +513,19 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const mined: MinedRepoReport[] = await mineTopCandidates(top, token, 3);
   const reposMined = mined.filter((m) => !m.error).length;
   const dnaAdded = mined.reduce((acc, m) => acc + (m.newCount ?? 0), 0);
+  const stubsSkipped = mined.reduce((acc, m) => acc + (m.skippedStubs ?? 0), 0);
 
-  const summary = `${reposMined} מאגרים נכרו · ${dnaAdded} גנים חדשים בספרייה${
+  const summary = `${reposMined} מאגרים נכרו · ${dnaAdded} גנים חדשים בספרייה${stubsSkipped ? ` · ${stubsSkipped} גני-סתם נפסלו` : ""}${
     mined.some((m) => m.error) ? ` · ${mined.filter((m) => m.error).length} כישלונות` : ""
   }`;
 
   return {
     summary,
     evidence: {
-      mined: mined.map((m) => ({ repo: m.repo, artifacts: m.artifacts, newCount: m.newCount, updatedCount: m.updatedCount, kinds: m.kinds, error: m.error ?? null })),
+      mined: mined.map((m) => ({ repo: m.repo, artifacts: m.artifacts, newCount: m.newCount, updatedCount: m.updatedCount, skippedStubs: m.skippedStubs ?? 0, kinds: m.kinds, error: m.error ?? null })),
       reposMined,
       dnaAdded,
+      stubsSkipped,
     },
   };
 }

@@ -131,12 +131,14 @@ export async function triageBatch(batch: CandidateFlat[]): Promise<TriageVerdict
 
 ${list}
 
-בצע טריאז׳ה מודיעינית לכל מועמד. חשדן מוחלט:
-— ראיה ״קשה-מאומתת״ = המחרוזת נמצאה בתוכן קובץ אמיתי — הראיה היחידה ל-elite.
+בצע טריאז׳ה מודיעינית השוואתית. הכללים:
+— ראיה ״קשה-מאומתת״ = המחרוזת נמצאה בתוכן קובץ אמיתי — תנאי הכרחי ל-elite, אבל לא מספיק.
+— elite = רק החזקים באמת מול המטרה: השקעה כספית מוכחת במודלי פרימיום 5.5+ ויכולות .claude אמתיות. אם כל המועמדים נראים דומים, דרג אותם זה מול זה ותן elite רק לשליש החזק ביותר — השאר watch עם נימוק מה חסר להם.
 — ראיה ״רכה״ = אזכור בתיאור בלבד — אסור לתת elite, לכל היותר watch. אסור לומר שהשתמשו במודל בקוד.
 — בלי ראיה = noise.
+— אסור לסמן את כל הרשימה elite. פיזור אמיתי: אם היית שופט שוב ושוב ותמיד כולם elite — הטריאז׳ה שלך חסרת ערך.
 החזר JSON בדיוק:
-{"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "נימוק קצר בעברית המציין בדיוק מאיפה הראיה (תוכן קוד / תיאור)"}]}`;
+{"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "נימוק קצר בעברית המציין בדיוק מאיפה הראיה (תוכן קוד / תיאור) ולמה זה טוב/חלש יחסית לאחרים"}]}`;
   const j = await llmJson(prompt);
   return parseTriage(j, batch);
 }
@@ -282,13 +284,24 @@ export interface QueryEvolution {
 }
 
 export async function queryEvolution(
-  executedQueries: string[],
+  executedQueries: { q: string; count: number; error?: string | null }[],
   elite: CandidateFlat[]
 ): Promise<QueryEvolution> {
-  const prompt = `הרצנו את השאילתות הבאות ב-GitHub:
-${executedQueries.map((q) => `— ${q}`).join("\n")}
+  const perQuery = executedQueries
+    .map((r) => `— [${r.error ? `שגיאה: ${String(r.error).slice(0, 60)}` : `${r.count} תוצאות`}] ${r.q}`)
+    .join("\n");
+  const dead = executedQueries.filter((r) => !r.error && r.count === 0).slice(0, 8);
+  const deadList = dead.map((r) => r.q).join(" | ") || "אין";
+  const prompt = `הרצנו את השאילתות הבאות ב-GitHub — עם מספר התוצאות האמיתי של כל אחת:
+${perQuery}
 
 ומצאנו ${elite.length} מאגרי אליטה: ${elite.slice(0, 15).map((c) => c.fullName).join(", ") || "אין"}
+
+כללים קשוחים:
+1. שאילתה עם 0 תוצאות היא מתה — אסור לחזור על דפוס שלה. מתות שכבר זוהו: ${deadList}
+2. אסור להמציא מתאמי repo:owner/name — owner/name חוקי רק מהרשימת האליטה האמיתית למעלה, ורק אם רוצים לצלול לעומק של מאגר ספציפי.
+3. שאילתה שמחזירה מאות אלפי תוצאות היא רעש יותר מאותת — צמצם עם מילות ראיה ספציפיות (למשל שמות קבצים, מחרוזות תצורה, שמות משתני סביבה) שקיימות בקוד של צרכני מודלי 5.5+.
+4. שאף ל-8-12 שאילתות שכל אחת מהן צפויה להחזיר 5-200 תוצאות איכותיות.
 
 הצע את הסבב הבא: אילו שאילתות GitHub יחשפו את מה שפספסנו?
 {"nextQueries": ["8-12 שאילתות חדשות בתחביר GitHub (code/repo search), ממוקדות עוד יותר בראיות של מודלי 5.5+"], "blindSpots": ["מה הסריקה הנוכחית לא רואה"], "rationale": "למה דווקא אלה"}`;

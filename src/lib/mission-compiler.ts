@@ -273,7 +273,19 @@ ${brief}
 
 /** שלב 2: SKILL.md כ-markdown חופשי — בלי אילוץ JSON, הכי יציב.
  * מחזיר גם מקור: "ai" או "fallback" — המשתמש רואה בממשק אם ה-SKILL.md נוצר ב-AI
- * (בעבר: כשל שקט הוחלף בגיבוי מקומי ואיש לא ידע). */
+ * (בעבר: כשל שקט הוחלף בגיבוי מקומי ואיש לא ידע).
+ * אבחנה מהשטח (Gen3-5): המודל עוטף את בלוק ה-YAML בלבד ב-```yaml ... ``` —
+ * stripOuterFence לא מסיר את זה (הגדר לא עוטפת את כל המסמך), הולידציה /^---/ נכשלת → fallback.
+ * normalizeFrontmatterFence מנרמל גדר-YAML פותחת ל-frontmatter אמיתי. */
+function normalizeFrontmatterFence(raw: string): string {
+  const m = raw.match(/^```(?:yaml|markdown|md)?\s*\n([\s\S]*?)\n```\s*\n?/);
+  if (!m) return raw;
+  const block = m[1] ?? "";
+  if (!/^name:|^description:/m.test(block)) return raw;
+  const rest = raw.slice(m[0].length);
+  return block.startsWith("---") ? block + "\n" + rest : `---\n${block}\n---\n\n${rest}`;
+}
+
 async function compileSkillMd(goal: string, plan: PlanOnly): Promise<{ md: string; source: "ai" | "fallback" }> {
   const phaseSummary = plan.phases
     .map((p, i) => `${i + 1}. ${p.title} — ${p.objective}\n   Steps: ${p.steps.join(" | ")}`)
@@ -290,26 +302,32 @@ Requirements:
 - Then operational instructions: role, rules, step-by-step procedure aligned to the phases, verification checklist, and failure-recovery guidance
 - Minimum 35 lines of practical content, markdown only — no code fences around the whole file (fenced code examples INSIDE are allowed and encouraged)`;
 
-  try {
-    const zai = await getZai();
-    const completion = await withTimeout(
-      zai.chat.completions.create({
-        messages: [
-          { role: "assistant", content: "You are an elite skills engineer. Respond with the raw SKILL.md file content only — markdown, starting with YAML frontmatter. No surrounding code fences." },
-          { role: "user", content: prompt },
-        ],
-        thinking: { type: "disabled" },
-      }),
-      TIMEOUT_MS,
-      "יצירת ה-SKILL.md"
-    );
-    // מסיר רק גדר עוטפת אם קיימת — גדרות קוד פנימיות נשמרות
-    // (בעבר: replace גורף הרס כל דוגמאות הקוד בתוך ה-SKILL.md)
-    const raw = stripOuterFence(completion.choices[0]?.message?.content ?? "");
-    if (raw.length > 200 && /^---/.test(raw)) return { md: raw, source: "ai" };
-  } catch (e) {
-    // לוג שקט → לוג שרת מפורש: כשל AI לא עוד בלתי-נראה
-    console.error("[mission:compileSkillMd] AI failed, using local fallback:", e);
+  // ניסיון AI — פעמיים: הרבה כשלים הם זמניים (טיימאאוט/JSON רעוע), ונפילה ל-fallback פה זו ירידת רמה של משימה שלמה.
+  // (בעבר: ניסיון אחד — Gen3+Gen4 נפלו שתיהן ל-fallback ואיש לא שם לב בדוחות)
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const zai = await getZai();
+      const completion = await withTimeout(
+        zai.chat.completions.create({
+          messages: [
+            { role: "assistant", content: "You are an elite skills engineer. Respond with the raw SKILL.md file content only — markdown, starting with YAML frontmatter. No surrounding code fences." },
+            { role: "user", content: prompt },
+          ],
+          thinking: { type: "disabled" },
+        }),
+        TIMEOUT_MS,
+        "יצירת ה-SKILL.md"
+      );
+      // מסיר רק גדר עוטפת אם קיימת — גדרות קוד פנימיות נשמרות
+      // (בעבר: replace גורף הרס כל דוגמאות הקוד בתוך ה-SKILL.md)
+      const raw = normalizeFrontmatterFence(stripOuterFence(completion.choices[0]?.message?.content ?? ""));
+      if (raw.length > 200 && /^---/.test(raw)) return { md: raw, source: "ai" };
+      // ה-AI ענה אבל התוצר לא עבר ולידציה — חובה לראות למה, אחרת זו נפילה שקטה שנייה
+      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — length=${raw.length} startsWithFrontmatter=${/^---/.test(raw)} head=${raw.slice(0, 160).replace(/\n/g, " ")}`);
+    } catch (e) {
+      // לוג שקט → לוג שרת מפורש: כשל AI לא עוד בלתי-נראה
+      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 failed:`, e);
+    }
   }
   return { md: fallbackSkillMd(goal, plan), source: "fallback" };
 }

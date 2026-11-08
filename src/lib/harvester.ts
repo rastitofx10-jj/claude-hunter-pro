@@ -32,6 +32,8 @@ export interface HarvestRepoReport {
   artifacts: number;
   kinds: string[];
   newCount: number;
+  updatedCount?: number;
+  skippedStubs?: number;
 }
 
 export interface HarvestResult {
@@ -136,9 +138,19 @@ export async function harvestRepo(fullName: string, token: string | null): Promi
 
   let newCount = 0;
   let updatedCount = 0;
+  let skippedStubs = 0;
   const kinds = new Set<string>();
 
-  for (const a of pkg.artifacts) {
+  // שער איכות — גן סתם (תוכן קצר מ-200 בייטים) לא נכנס לספרייה.
+  // (בעבר: DNA #133 נכנס עם 11 בייטים — CLAUDE.md ריק נחשב "גן")
+  const MIN_GENE_BYTES = 200;
+  const artifacts = pkg.artifacts.filter((a) => {
+    if ((a.content ?? "").length >= MIN_GENE_BYTES) return true;
+    skippedStubs++;
+    return false;
+  });
+
+  for (const a of artifacts) {
     const existing = await db.dnaArtifact.findUnique({
       where: { sourceRepo_path: { sourceRepo: fullName, path: a.path } },
       select: { id: true, content: true },
@@ -181,6 +193,7 @@ export async function harvestRepo(fullName: string, token: string | null): Promi
     kinds: Array.from(kinds),
     newCount,
     updatedCount,
+    skippedStubs,
   };
 }
 

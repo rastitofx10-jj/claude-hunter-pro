@@ -380,6 +380,7 @@ export interface MinedRepoReport {
   artifacts: number;
   newCount: number;
   updatedCount: number;
+  skippedStubs: number;
   kinds: string[];
   error?: string;
 }
@@ -426,7 +427,8 @@ export async function mineTopCandidates(
           repo: v.repo,
           artifacts: v.artifacts,
           newCount: v.newCount,
-          updatedCount: v.updatedCount,
+          updatedCount: v.updatedCount ?? 0,
+          skippedStubs: v.skippedStubs ?? 0,
           kinds: v.kinds,
         };
         reports.push(rep);
@@ -437,6 +439,7 @@ export async function mineTopCandidates(
           artifacts: 0,
           newCount: 0,
           updatedCount: 0,
+          skippedStubs: 0,
           kinds: [],
           error: r.reason instanceof Error ? r.reason.message : "כרייה נכשלה",
         };
