@@ -287,7 +287,10 @@ export default function ClaudeHunterPage() {
         </div>
       </header>
 
-      <div className="mx-auto flex w-full max-w-7xl flex-1 gap-0 px-0 lg:gap-6 lg:px-4">
+      {/* Mobile/tablet (<lg): column stack — nav row on top, content below.
+          Desktop (lg+): row — sidebar + content. Without flex-col the w-full
+          mobile nav crushed <main> to 0px width on every viewport under 1024px. */}
+      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-0 px-0 lg:flex-row lg:gap-6 lg:px-4">
         {/* ---------- sidebar (desktop) ---------- */}
         <nav aria-label="ניווט ראשי" className="hidden w-56 shrink-0 py-6 lg:block">
           <ul className="sticky top-20 space-y-1">
@@ -327,8 +330,10 @@ export default function ClaudeHunterPage() {
         </nav>
 
         {/* ---------- mobile nav ---------- */}
-        <div className="w-full lg:hidden">
-          <nav aria-label="ניווט ראשי" className="sticky top-[57px] z-30 border-b bg-background/90 backdrop-blur">
+        {/* sticky lives on the wrapper: a sticky child inside an equal-sized
+            parent has zero stick range, so the chips never stuck before */}
+        <div className="sticky top-[57px] z-30 w-full lg:hidden">
+          <nav aria-label="ניווט ראשי" className="border-b bg-background/90 backdrop-blur">
             <ul className="flex gap-1 overflow-x-auto px-3 py-2" style={{ scrollbarWidth: "none" }}>
               {navItems.map((n) => {
                 const active = activeTab === n.tab;
