@@ -87,7 +87,10 @@ function parseMission(m: {
     phases: parsePhasesSafe(plan.phases),
     promptSequence: arr(promptSeqRaw),
     skillMd: typeof m.skillMd === "string" ? m.skillMd : "",
-    skillMdSource: plan.skillMdSource === "fallback" ? "fallback" : "ai",
+    skillMdSource:
+      plan.skillMdSource === "ai" ? "ai" : plan.skillMdSource === "fallback" ? "fallback" : "unknown",
+    // (בעבר: כל ערך שאינו fallback סומן "ai" — שורות שהודרו לפני עידן הסימון
+    // הוצגו כ"נוצר ב-AI" גם כשלא ידוע. עכשיו: "unknown" כנה.)
     risks: arr<string>(risksRaw),
     successCriteria: arr<string>(criteriaRaw),
     selectedDna: arr(selectedDnaRaw),
@@ -155,8 +158,20 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         { status: 409 }
       );
     }
-    const m = await db.mission.update({ where: { id: numId }, data: { status } });
-    return NextResponse.json({ id: m.id, status: m.status });
+    // TOCTOU סגור: העדכון מותנה בסטטוס שנקרא — אם מישהו (PATCH/דיווח/צעד) שינה
+    // בינתיים, count=0 ומוחזר 409. בעבר: שתי קריאות PATCH מקבילות אישרו מול ערך
+    // קודם ושתיהן הצליחו — אחרון מנצח, כולל מעברים לא-חוקיים מורכבים.
+    const res = await db.mission.updateMany({
+      where: { id: numId, status: current.status },
+      data: { status },
+    });
+    if (res.count === 0) {
+      return NextResponse.json(
+        { error: "המצב השתנה בינתיים — רענן ונסה שוב" },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ id: numId, status });
   } catch (e) {
     if (isPrismaNotFound(e)) {
       return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
@@ -166,7 +181,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   }
 }
 
-/** מחיקת משימה — delete ישיר, P2025 → 404 (בלי חלון TOCTOU) */
+/** מחיקת משימה — בטרנזקציה: קודם ה-DNA שנולד ממנה (field:mission-<id>), אחר כך המשימה.
+ * בעבר: ה-DNA שנולד מהמשימה שרד את המחיקה לנצח — עדיין דורג בהידורים
+ * (חיזוק +2 לפי המקור) ו"ירש" לספרייה שיעורים ממשימה שכבר לא קיימת. */
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const numId = Number(id);
@@ -174,7 +191,13 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     return NextResponse.json({ error: "מזהה לא תקין" }, { status: 400 });
   }
   try {
-    await db.mission.delete({ where: { id: numId } });
+    await db.$transaction(async (tx) => {
+      const removed = await tx.dnaArtifact.deleteMany({
+        where: { sourceRepo: `field:mission-${numId}` },
+      });
+      await tx.mission.delete({ where: { id: numId } });
+      return removed;
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (isPrismaNotFound(e)) {

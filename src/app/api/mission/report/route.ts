@@ -2,15 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { distillFieldReport, MissionError } from "@/lib/mission-compiler";
 import { isTimeoutError, isPrismaNotFound } from "@/lib/ai-json";
+import { advanceStatus, OUTCOME_STATUS } from "@/lib/mission-status";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const OUTCOME_STATUS: Record<string, string> = {
-  success: "done",
-  partial: "partial",
-  failed: "failed",
-};
+/** ניקוי מטא-דאטה שנולדה מה-AI לפני שמירתה בספרייה — השם/התיאור של DNA
+ * נכנסים לפרומפטים של מהדר/מבצע בעתיד; תווי בקרה וגדרות שם זו דלת
+ * הזרקת-הוראות (בעבר: שדה חופשי לגמרי). */
+function sanitizeBornMeta(v: unknown, max: number): string {
+  return String(v ?? "")
+    .replace(/[<>`\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
 
 /**
  * מזקק מקומי (בלי AI) — רשת ביטחון קריטית:
@@ -42,8 +48,8 @@ function localDistill(input: { outcome: string; notes: string }) {
   };
 }
 
-/** סטטוס רק קדימה — דיווח שדה לא מדרג משימה שהגיעה כבר ל-done אחורה */
-const STATUS_RANK: Record<string, number> = { compiled: 0, in_progress: 1, partial: 2, done: 3, failed: 1 };
+/** סטטוס רק קדימה — דיווח שדה לא מדרג משימה שהגיעה כבר ל-done אחורה
+ * (הועבר ל-mission-status — בעבר הוגדר מחדש כאן ובשני קבצים נוספים) */
 
 /**
  * דיווח שדה — הלולאה המאבולוציונית:
@@ -107,92 +113,127 @@ export async function POST(req: NextRequest) {
       distillMethod = "local";
     }
 
-    // ---- סדר שמירה מתוקן: קודם הדיווח (הנתון היקר), רק אחר כך DNA חדש ----
-    // (בעבר: upsert DNA לפני mission.update — כשל upsert/P2002 זרק 500 והשליך
-    // את כל תוצאות הזיקוק שכבר הושגו)
-
-    // סטטוס רק קדימה — דיווח failed על משימה במצב done לא מדרג אותה אחורה
-    const nextStatus = OUTCOME_STATUS[outcome] ?? mission.status;
-    const finalStatus =
-      (STATUS_RANK[nextStatus] ?? 0) >= (STATUS_RANK[mission.status] ?? 0) ? nextStatus : mission.status;
-
-    // היסטוריית דיווחים — דיווח חוזר מוסיף רשומה במקום לדרוס את הקודם
-    // (בעבר: report חדש דרס לחלוטין את הישן — לקחים נאבדו)
-    let reportHistory: Array<Record<string, unknown>> = [];
-    try {
-      const prev: unknown = mission.report ? JSON.parse(mission.report) : null;
-      if (Array.isArray(prev)) {
-        reportHistory = prev.filter(
-          (x): x is Record<string, unknown> => typeof x === "object" && x !== null
-        );
-      } else if (prev && typeof prev === "object") {
-        // מעבר מפורמט-אובייקט יחיד להיסטוריה — הישן הופך לרשומה הראשונה
-        reportHistory = [prev as Record<string, unknown>];
-      }
-    } catch {
-      reportHistory = [];
-    }
-
-    // לידת DNA מהשדה — הלקח הופך יכולת ניידת בספרייה (רק מזיקוק אמיתי).
-    // DNA אחד למשימה בלבד: נתיב קבוע `field/lesson/SKILL.md` מונע התפצלות
-    // ארטיפקטים כשה-AI נותן שמות שונים לאותו לקח בדיווחים חוזרים
-    // (בעבר: השם מה-AI בנתיב → דיווחים חוזרים יצרו מספר DNA לאותה משימה).
-    let bornDnaId: number | null = null;
-    if (distilled.newDna) {
-      const desc = distilled.newDna.description;
-      const content = distilled.newDna.content;
+    // ---- סדר שמירה בטרנזקציה אחת + CAS ----
+    // בעבר: upsert DNA (רשומה ראשונה) ואז mission.update בכתיבה נפרדת —
+    //   1) כשל עדכון השאיר DNA יתום והשליך את הדיווח (ההפך מההערה שלמעלה).
+    //   2) שני טאבים קראו את אותו report ישן — השני דרס את דיווח הראשון (lost update).
+    // עכשיו: קריאה מחדש בתוך הטרנזקציה + updateMany מותנה (compare-and-swap על
+    // status+report) — אם מישהו כתב בינתיים, זה זורק REPORT_CHANGED_RETRY
+    // והלולאה מנסה שוב מערך טרי. ההרכה עצמה עדיין "דיווח קודם": כשל upsert DNA
+    // בתוך הטרנזקציה לא מפיל אותה (dnaBirthError נרשם במקום bornDnaId).
+    let lastErrFinal: unknown = null;
+    let savedDnaBirthError: string | null = null;
+    let savedBornDnaId: number | null = null;
+    let savedFinalStatus = mission.status;
+    let savedHistoryCount = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const created = await db.dnaArtifact.upsert({
-          where: {
-            sourceRepo_path: {
-              sourceRepo: `field:mission-${missionId}`,
-              path: "field/lesson/SKILL.md",
-            },
-          },
-          update: {
-            description: desc,
-            content,
-            size: content.length,
-          },
-          create: {
-            sourceRepo: `field:mission-${missionId}`,
-            path: "field/lesson/SKILL.md",
-            kind: "skill",
-            name: distilled.newDna.name || "field-lesson",
-            description: desc,
-            content,
-            size: content.length,
-          },
+        let bornDnaId: number | null = null;
+        let dnaBirthError: string | null = null;
+        await db.$transaction(async (tx) => {
+          // לידת DNA בתוך הטרנזקציה — כישלון לידה לא מפיל את הדיווח (נשמר כשגיאה גלויה)
+          if (distilled.newDna) {
+            try {
+              const desc = sanitizeBornMeta(distilled.newDna.description, 200);
+              const content = distilled.newDna.content;
+              const created = await tx.dnaArtifact.upsert({
+                where: {
+                  sourceRepo_path: {
+                    sourceRepo: `field:mission-${missionId}`,
+                    path: "field/lesson/SKILL.md",
+                  },
+                },
+                update: { description: desc, content, size: content.length },
+                create: {
+                  sourceRepo: `field:mission-${missionId}`,
+                  path: "field/lesson/SKILL.md",
+                  kind: "skill",
+                  // השם נכנס לפרומפטים עתידיים — מנוקה וקצוץ (בעבר: שדה חופשי)
+                  name: sanitizeBornMeta(distilled.newDna.name, 60) || "field-lesson",
+                  description: desc,
+                  content,
+                  size: content.length,
+                },
+              });
+              bornDnaId = created.id;
+            } catch (dnaErr) {
+              dnaBirthError = dnaErr instanceof Error ? dnaErr.message : "שגיאה";
+              console.error("[mission/report] DNA birth failed (report still saved):", dnaErr);
+            }
+          }
+
+          // קריאה מחדש בתוך הטרנזקציה — מי שכתב בינתיים נכנס ל-history שלנו, לא נדרס
+          const fresh = await tx.mission.findUnique({
+            where: { id: missionId },
+            select: { status: true, report: true },
+          });
+          if (!fresh) throw new MissionError("המשימה נעלמה במהלך הדיווח");
+
+          const nextStatus = OUTCOME_STATUS[outcome] ?? fresh.status;
+          const finalStatus = advanceStatus(fresh.status, nextStatus);
+
+          let reportHistory: Array<Record<string, unknown>> = [];
+          try {
+            const prev: unknown = fresh.report ? JSON.parse(fresh.report) : null;
+            if (Array.isArray(prev)) {
+              reportHistory = prev.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
+            } else if (prev && typeof prev === "object") {
+              reportHistory = [prev as Record<string, unknown>];
+            }
+          } catch {
+            reportHistory = [];
+          }
+
+          const newReport = {
+            outcome,
+            notes: notes || null,
+            verdict: distilled.verdict,
+            lessons: distilled.lessons,
+            bornDnaId,
+            dnaBirthError,
+            distillMethod,
+            reportedAt: new Date().toISOString(),
+          };
+          const finalReportJson = JSON.stringify([...reportHistory, newReport].slice(-20));
+
+          // CAS: אם status/report השתנו מחוץ לטרנזקציה — נזרקים ומנסים שוב על ערך טרי
+          const cas = await tx.mission.updateMany({
+            where: { id: missionId, status: fresh.status, report: fresh.report ?? "" },
+            data: { status: finalStatus, report: finalReportJson },
+          });
+          if (cas.count === 0) {
+            const err = new Error("REPORT_CHANGED_RETRY");
+            err.name = "ReportChangedRetry";
+            throw err;
+          }
+          savedBornDnaId = bornDnaId;
+          savedDnaBirthError = dnaBirthError;
+          savedFinalStatus = finalStatus;
+          savedHistoryCount = reportHistory.length + 1;
         });
-        bornDnaId = created.id;
-      } catch (dnaErr) {
-        // כשל שמירת DNA לא מאבד את הדיווח — רק מדלג על הלידה
-        console.error("[mission/report] DNA birth failed (report still saved):", dnaErr);
+        break;
+      } catch (txErr) {
+        if (txErr instanceof Error && txErr.name === "ReportChangedRetry" && attempt < 2) {
+          continue; // מישהו כתב בינתיים — לולאה חדשה על ערך טרי
+        }
+        lastErrFinal = txErr;
+        break;
       }
     }
-
-    const newReport = {
-      outcome,
-      notes: notes || null,
-      verdict: distilled.verdict,
-      lessons: distilled.lessons,
-      bornDnaId,
-      distillMethod,
-      reportedAt: new Date().toISOString(),
-    };
-    const finalReportJson = JSON.stringify([...reportHistory, newReport].slice(-20));
-
-    await db.mission.update({
-      where: { id: missionId },
-      data: { status: finalStatus, report: finalReportJson },
-    });
+    if (lastErrFinal) throw lastErrFinal;
 
     return NextResponse.json({
       ok: true,
       distillMethod,
       verdict: distilled.verdict,
       lessons: distilled.lessons,
-      bornDna: distilled.newDna ? { id: bornDnaId, name: distilled.newDna.name, description: distilled.newDna.description } : null,
+      bornDna: distilled.newDna
+        ? savedBornDnaId
+          ? { id: savedBornDnaId, name: sanitizeBornMeta(distilled.newDna.name, 60) || "field-lesson", description: sanitizeBornMeta(distilled.newDna.description, 200) }
+          : { id: null, birthError: savedDnaBirthError }
+        : null,
+      finalStatus: savedFinalStatus,
+      historyCount: savedHistoryCount,
     });
   } catch (e) {
     if (isPrismaNotFound(e)) {

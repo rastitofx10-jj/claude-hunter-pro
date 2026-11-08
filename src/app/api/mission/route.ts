@@ -11,7 +11,12 @@ const MAX_CONTEXT = 2000;
 /** רשימת משימות + סטטיסטיקת לולאה */
 export async function GET() {
   try {
-    const missions = await db.mission.findMany({ orderBy: { id: "desc" }, take: 50 });
+    // take 50 לתצוגה + total אמיתי — בעבר הכותרת הציגה items.length בלבד
+    // ומשימה מס' 51 ומעלה נעלמו מהממשק בלי שאיש ידע.
+    const [missions, total] = await Promise.all([
+      db.mission.findMany({ orderBy: { id: "desc" }, take: 50 }),
+      db.mission.count(),
+    ]);
     const [totalDna, fieldDna] = await Promise.all([
       db.dnaArtifact.count(),
       db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
@@ -45,7 +50,7 @@ export async function GET() {
         createdAt: m.createdAt,
       };
     });
-    return NextResponse.json({ items, stats: { totalDna, fieldDna } });
+    return NextResponse.json({ items, total, stats: { totalDna, fieldDna } });
   } catch (e) {
     console.error("[mission:list]", e);
     return NextResponse.json({ error: "טעינת המשימות נכשלה" }, { status: 500 });

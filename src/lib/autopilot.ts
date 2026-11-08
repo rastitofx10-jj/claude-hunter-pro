@@ -9,12 +9,17 @@
 // ============================================================
 
 import { db } from "@/lib/db";
-import { safeJsonParse } from "./ai-json";
+import { safeJsonParse, isTimeoutError } from "./ai-json";
 import { executePhase, extractHandoff, type AutopilotStep, type MissionPhase } from "./mission-compiler";
+import { advanceStatus } from "./mission-status";
 
 export interface AutopilotFailure {
   phaseIndex: number;
   error: string;
+  /** כשל חולף (timeout/תור עמוס) — יינסה שוב בקריאת הצעד הבאה, עד ניסיון נוסף אחד */
+  transient?: boolean;
+  /** מספר ניסיונות שנכשלו לשלב זה (נשמר בכתיבה בכל פעם מחדש — 1 לכישלון ראשון) */
+  attempts?: number;
 }
 
 export interface AutopilotState {
@@ -46,13 +51,20 @@ export function parseAutopilotState(raw: string | null): AutopilotState {
       executedAt: typeof s.executedAt === "string" ? s.executedAt : new Date(0).toISOString(),
     }));
   const failures = (Array.isArray(parsed.failures) ? parsed.failures : [])
-    .map((f) => {
+    .map((f): AutopilotFailure | null => {
       if (typeof f === "string") {
         // פורמט היסטורי: "שלב 2 (כותרת): הודעה"
         const m = f.match(/שלב (\d+)/);
-        return { phaseIndex: m ? Number(m[1]) - 1 : -1, error: f };
+        return { phaseIndex: m ? Number(m[1]) - 1 : -1, error: f, transient: false, attempts: 2 };
       }
-      return f && typeof f.phaseIndex === "number" ? { phaseIndex: f.phaseIndex, error: String(f.error ?? "שגיאה") } : null;
+      return f && typeof f.phaseIndex === "number"
+        ? {
+            phaseIndex: f.phaseIndex,
+            error: String(f.error ?? "שגיאה"),
+            transient: !!f.transient,
+            attempts: typeof f.attempts === "number" ? f.attempts : 2,
+          }
+        : null;
     })
     .filter((f): f is AutopilotFailure => !!f);
   return { steps, failures };
@@ -107,8 +119,15 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
 
   const state = parseAutopilotState(mission.autopilot);
   const executedIdx = new Set(state.steps.map((s) => s.phaseIndex));
-  const failedIdx = new Set(state.failures.map((f) => f.phaseIndex));
-  const nextIdx = phases.findIndex((_, i) => !executedIdx.has(i) && !failedIdx.has(i));
+  // כשל צמית = שלב שנכשל שלא-חולף, או חולף שכבר בזבז את ניסיון החזרה שלו.
+  // בעבר: timeout בודד סימן את השלב ככישלון צמיתות — nextIdx דילג עליו לנצח
+  // ולא היה שום מנגנון שחזור; המשימה נשארה חלקית לצמיתות.
+  const failedIdxPermanent = new Set(
+    state.failures
+      .filter((f) => !f.transient || (f.attempts ?? 2) >= 2)
+      .map((f) => f.phaseIndex),
+  );
+  const nextIdx = phases.findIndex((_, i) => !executedIdx.has(i) && !failedIdxPermanent.has(i));
 
   if (nextIdx === -1) {
     // הכל בוצע — נוודא שהסטטוס משקף (נשאר in_progress עד דיווח שדה)
@@ -123,9 +142,11 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
     };
   }
 
-  // ה-DNA שנבחר בהידור — תוכן מלא לביצוע
+  // ה-DNA שנבחר בהידור — תוכן מלא לביצוע. המבצע ממילא משתמש ב-6 הראשונים
+  // (executePhase: slice(0,6)) — בעבר נטענו כל 8 השורות כולל התוכן המלא
+  // של שתיים שלא הגיעו לאף פרומפט (השקעת DB לחינם).
   const dnaRefs = safeJsonParse<{ id: number }[]>(mission.dnaRefs, []);
-  const ids = dnaRefs.map((d) => d.id).filter((n) => Number.isInteger(n));
+  const ids = dnaRefs.map((d) => d.id).filter((n) => Number.isInteger(n)).slice(0, 6);
   const dnaRows = ids.length
     ? await db.dnaArtifact.findMany({
         where: { id: { in: ids } },
@@ -157,12 +178,24 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
     });
     executed = { phaseIndex: nextIdx, title: phase.title, deliverable, executedAt: new Date().toISOString() };
   } catch (e) {
-    failResult = { phaseIndex: nextIdx, error: e instanceof Error ? e.message : "שגיאה לא ידועה" };
+    const transient = isTimeoutError(e);
+    const prevAttempts = state.failures.find((f) => f.phaseIndex === nextIdx)?.attempts ?? 0;
+    failResult = {
+      phaseIndex: nextIdx,
+      error: e instanceof Error ? e.message : "שגיאה לא ידועה",
+      // transient=true → הצעד הבא ינסה את השלב שוב (עד attempts=2). בעבר: timeout
+      // בודד חיסל את השלב לצמיתות — המשימה נתקעה חלקית בלי דרך שחזור.
+      transient,
+      attempts: prevAttempts + 1,
+    };
   }
 
+  // רשומת כישלון אחת לשלב (האחרונה מנצחת) — ניסיון חוזר לא מצטבר שורות כפולות
+  const failureMap = new Map(state.failures.map((f) => [f.phaseIndex, f]));
+  if (failResult) failureMap.set(failResult.phaseIndex, failResult);
   const newState: AutopilotState = {
     steps: executed ? [...state.steps, executed] : state.steps,
-    failures: failResult ? [...state.failures, failResult] : state.failures,
+    failures: [...failureMap.values()].sort((a, b) => a.phaseIndex - b.phaseIndex),
   };
 
   // האם אחרי השלב הזה אין יותר שלבים ממתינים?
@@ -175,9 +208,12 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   // (בעבר: ריצת טייס מחדש על משימה חלקית/גמורה דרכה אחורה)
   const computed =
     allDone && newState.steps.length === 0 && newState.failures.length > 0 ? "failed" : "in_progress";
-  const STATUS_RANK: Record<string, number> = { compiled: 0, in_progress: 1, partial: 2, done: 3, failed: 1 };
-  const status =
-    (STATUS_RANK[computed] ?? 1) >= (STATUS_RANK[mission.status] ?? 0) ? computed : mission.status;
+  // מפתח המירוץ: mission.status נקרא בראש הפונקציה — לפני עד 220 שניות של
+  // executePhase. דיווח שדה שהסתיים במקביל (status → done) נרמס ל-in_progress
+  // ע"י הכתיבה הזו. עכשיו: קריאה מחדש בתוך הנעילה, מיד לפני הכתיבה.
+  const fresh = await db.mission.findUnique({ where: { id: missionId }, select: { status: true } });
+  const currentStatus = fresh?.status ?? mission.status;
+  const status = advanceStatus(currentStatus, computed);
 
   await db.mission.update({
     where: { id: missionId },

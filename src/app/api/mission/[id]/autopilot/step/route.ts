@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { runNextAutopilotPhase, AutopilotError } from "@/lib/autopilot";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+// worst-case in one step: 2 attempts × 110s timeout = 220s + queue wait —
+// בעבר 120 לא כיסה את זמן ה-LLM האמיתי ובפריסה hosted הפונקציה נהרגה באמצע.
+export const maxDuration = 300;
 
 /**
  * ביצוע השלב הבא הממתין במשימה (צעד אחד לכל קריאה):
