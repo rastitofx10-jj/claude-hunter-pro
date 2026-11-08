@@ -4,7 +4,7 @@
 // זו השכבה שהופכת "ריפו מוצלח" לגנים ניידים להשתלה.
 // ============================================================
 
-import { ghFetch, ghFetchRaw } from "./github";
+import { ghFetch, ghFetchRaw, mapLimit } from "./github";
 
 export interface MinedArtifact {
   path: string;
@@ -60,10 +60,11 @@ function classify(path: string): MinedArtifact["kind"] | null {
 /** חילוץ שם מפורמט frontmatter או מהנתיב */
 function extractName(path: string, content: string | null, kind: MinedArtifact["kind"]): string {
   if (content) {
-    const m = content.match(/^---\n([\s\S]*?)\n---/);
+    // \r?\n — ריפואים שנכתבו ב-Windows עם CRLF לא נתפסו כלל כ-frontmatter
+    const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (m) {
       const nameLine = m[1].match(/^name:\s*(.+)$/m)?.[1]?.trim();
-      if (nameLine) return nameLine;
+      if (nameLine) return nameLine.replace(/^["']|["']$/g, "");
     }
     const h1 = content.match(/^#\s+(.+)$/m)?.[1]?.trim();
     if (h1 && h1.length <= 80) return h1;
@@ -79,7 +80,7 @@ function extractName(path: string, content: string | null, kind: MinedArtifact["
 /** חילוץ description מ-frontmatter */
 function extractDescription(content: string | null): string | null {
   if (!content) return null;
-  const m = content.match(/^---\n([\s\S]*?)\n---/);
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (m) {
     const d = m[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
     if (d) return d.slice(0, 300);
@@ -89,15 +90,21 @@ function extractDescription(content: string | null): string | null {
 
 /**
  * כריית DNA מלאה מריפו: סריקת עץ → סינון קבצי יכולת → הורדת תכנים במקביל.
+ * defaultBranch אופציונלי: כשמגיע מה-GraphQL של שלב הגילוי — חוסך קריאת
+ * /repos נוספת לכל ריפו (בקציר של 6 ריפואים זה 6 קריאות פחות).
  */
 export async function mineDna(
   owner: string,
   repo: string,
-  token: string | null
+  token: string | null,
+  opts?: { defaultBranch?: string | null }
 ): Promise<DnaPackage> {
   const full = `${owner}/${repo}`;
-  const meta = await ghFetch<{ default_branch: string }>(`/repos/${full}`, token);
-  const branch = meta.default_branch || "main";
+  let branch = opts?.defaultBranch || "";
+  if (!branch) {
+    const meta = await ghFetch<{ default_branch: string }>(`/repos/${full}`, token);
+    branch = meta.default_branch || "main";
+  }
 
   const tree = await ghFetch<GhTree>(
     `/repos/${full}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
@@ -112,8 +119,12 @@ export async function mineDna(
     .sort((a, b) => rank(a.kind) - rank(b.kind))
     .slice(0, 12);
 
-  const results = await Promise.allSettled(
-    candidates.map(async (c): Promise<MinedArtifact> => {
+  // מקביליות מרוסנת (6) — 12 הורדות בבת אחת × 2 ריפואים במקביל = 24 קריאות
+  // פתוחות שיכולות להפיל מגבלת-משנה של GitHub. מנוע pool משותף מ-github.ts.
+  const results = await mapLimit(
+    candidates,
+    6,
+    async (c): Promise<MinedArtifact> => {
       let content: string | null = null;
       let rawUrl: string | null = null;
       let truncated = false;
@@ -140,12 +151,12 @@ export async function mineDna(
         size: c.size,
         truncated,
       };
-    })
+    }
   );
 
-  const artifacts = results
-    .filter((r): r is PromiseFulfilledResult<MinedArtifact> => r.status === "fulfilled")
-    .map((r) => r.value);
+  const artifacts = results;
+  // (mapLimit זורק רק אם קריאה בודדת זרקה — אבל ה-catch הפנימי מבטיח שהורדה
+  // שנכשלה מחזירה content=null ולא מפילה את כל הכרייה)
 
   return { repo: full, defaultBranch: branch, artifacts, scannedAt: new Date().toISOString(), treeTruncated: tree.truncated === true };
 }

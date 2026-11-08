@@ -1,9 +1,10 @@
 /**
- * verify-round4.ts — one-command verification suite (round 4).
+ * verify-round4.ts — one-command verification suite (rounds 4+5).
  *
  * Runs with bun (native TS):  bun run verify
  * Two layers:
- *   A. UNIT — pure core functions (model gate, scoring, JSON repair, parsing).
+ *   A. UNIT — pure core functions (model gate, scoring, JSON repair, parsing,
+ *             round-5: LLM queue, mapLimit, timeout flag).
  *   B. API  — live smoke tests against the dev server on :3000
  *             (skipped gracefully if the server is down).
  * The script never touches any real GitHub token.
@@ -13,7 +14,7 @@ import {
   isBlockedModelString,
   qualifyingModelOptions,
 } from "../src/lib/claude-models";
-import { tierOf, parseRepoInput, computeListScore } from "../src/lib/github";
+import { tierOf, parseRepoInput, computeListScore, mapLimit } from "../src/lib/github";
 import {
   extractJson,
   safeJsonParse,
@@ -21,6 +22,8 @@ import {
   stripFences,
   stripOuterFence,
   AiJsonError,
+  isTimeoutError,
+  markTimeoutError,
 } from "../src/lib/ai-json";
 
 // ---------- tiny harness ----------
@@ -119,6 +122,42 @@ ok(sanitizeSlug("בונה מסכים Fast!!", "fallback") === "fallback" || /^[a
 ok(sanitizeSlug("My Cool Skill", "fallback") === "my-cool-skill", "sanitizeSlug kebab-case");
 ok(stripFences("```json\n{\"a\":1}\n```") === "{\"a\":1}", "stripFences removes outer fence");
 ok(stripOuterFence("```\n# h\n```bash\nls\n```\n```") .includes("```bash"), "stripOuterFence keeps internal fences");
+
+section("A. UNIT — round 5: timeout flag, mapLimit, LLM queue");
+ok(isTimeoutError(markTimeoutError(new Error("x"))), "markTimeoutError → isTimeoutError true");
+ok(!isTimeoutError(new Error("x")), "plain error → isTimeoutError false");
+
+// mapLimit: שמירה על סדר + מקביליות חסומה
+{
+  let live = 0;
+  let peak = 0;
+  const items = Array.from({ length: 10 }, (_, i) => i);
+  const out = await mapLimit(items, 3, async (n) => {
+    live++;
+    peak = Math.max(peak, live);
+    await new Promise((r) => setTimeout(r, 20 + Math.random() * 30));
+    live--;
+    return n * 2;
+  });
+  ok(JSON.stringify(out) === JSON.stringify([0, 2, 4, 6, 8, 10, 12, 14, 16, 18]), "mapLimit preserves order & results");
+  ok(peak <= 3, `mapLimit respects the bound (peak=${peak} ≤ 3)`);
+}
+
+// התור הטורי: שתי קריאות AI במקביל — שתיהן חייבות להצליח (בעבר: 429 לאחת)
+{
+  const { llmComplete } = await import("../src/lib/zai");
+  const t0 = Date.now();
+  const both = await Promise.allSettled([
+    llmComplete([{ role: "system", content: "Return ONLY valid JSON." }, { role: "user", content: 'Return exactly {"n": 1}' }], { timeoutMs: 60_000, timeoutLabel: "verify-A" }),
+    llmComplete([{ role: "system", content: "Return ONLY valid JSON." }, { role: "user", content: 'Return exactly {"n": 2}' }], { timeoutMs: 60_000, timeoutLabel: "verify-B" }),
+  ]);
+  const okCount = both.filter((r) => r.status === "fulfilled").length;
+  ok(okCount === 2, `parallel LLM calls both succeed through the queue (${okCount}/2, ${Date.now() - t0}ms)`);
+  if (okCount === 2) {
+    const r1 = (both[0] as PromiseFulfilledResult<{ content: string }>).value.content;
+    ok(/"n"\s*:\s*1/.test(r1), "queue preserves per-call content (n=1)");
+  }
+}
 
 // ---------- B. API ----------
 section("B. API — smoke tests against :3000");

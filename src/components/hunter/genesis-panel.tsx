@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Dna,
@@ -72,6 +72,10 @@ interface HarvestResult {
   totalLibrary: number;
   fieldDna: number;
   skippedAlreadyMined: number;
+  /** סבב 5 — שקיפות מלאה: מה קרה בגילוי ומה נכשל */
+  queriesRun?: { q: string; count: number }[];
+  queriesFailed?: { q: string; error: string }[];
+  reposFailed?: { repo: string; error: string }[];
 }
 
 const KIND_META: Record<string, { label: string; emoji: string; color: string }> = {
@@ -95,6 +99,8 @@ export function GenesisPanel() {
   const [productContext, setProductContext] = useState("");
   const [chimera, setChimera] = useState<ChimeraResponse | null>(null);
   const [harvestResult, setHarvestResult] = useState<HarvestResult | null>(null);
+  // טיימר חי לקציר — פידבק שהצינור חי (בעבר: ספינר אילם למשך דקה שנראה כתקוע)
+  const [harvestElapsed, setHarvestElapsed] = useState(0);
 
   // ---------- queries ----------
   const { data: lib, isLoading: libLoading } = useQuery({
@@ -191,6 +197,18 @@ export function GenesisPanel() {
     },
     onError: (e: Error) => toast({ title: "הקציר נכשל", description: e.message, variant: "destructive" }),
   });
+
+  // טיימר חי בזמן קציר — אחרי ההגדרה (מונע TDZ) · פידבק שהצינור חי
+  useEffect(() => {
+    if (!harvest.isPending) {
+      setHarvestElapsed(0);
+      return;
+    }
+    setHarvestElapsed(0);
+    const t0 = Date.now();
+    const iv = setInterval(() => setHarvestElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(iv);
+  }, [harvest.isPending]);
 
   const exportCodex = async () => {
     try {
@@ -364,7 +382,7 @@ export function GenesisPanel() {
                 <Zap className="h-4 w-4" /> קציר אוטונומי — לחיצה אחת, הספרייה מתפוצצת
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                המנוע מגלה לבד מאגרי אליטה מחיפושי קוד 5.5+ (opus-5-5 · fable), מדרג לפי עושר סקילים, וכורה 6 הכי עשירים
+                המנוע מגלה לבד מאגרי אליטה מחיפושי קוד 5.5+ (opus-5-5 · fable · opus-6 · 6-5 · 7), מדרג לפי עושר סקילים, וכורה את 6 העשירים ביותר
               </p>
             </div>
             <Button
@@ -374,7 +392,7 @@ export function GenesisPanel() {
             >
               {harvest.isPending ? (
                 <>
-                  <Loader2 className="ml-1.5 h-4 w-4 animate-spin" /> קוצר מהאליטה… (עד דקה)
+                  <Loader2 className="ml-1.5 h-4 w-4 animate-spin" /> קוצר מהאליטה… <span className="tabular-nums opacity-80">{harvestElapsed}s</span>
                 </>
               ) : (
                 <>
@@ -400,6 +418,31 @@ export function GenesisPanel() {
                   </li>
                 ))}
               </ul>
+              {/* שקיפות מלאה — שקודם נעלם בשקט (סבב 5) */}
+              {(harvestResult.reposFailed?.length ?? 0) > 0 && (
+                <div className="mt-2 rounded border border-red-200 bg-red-50/50 p-2 dark:border-red-900 dark:bg-red-950/30">
+                  <p className="font-semibold text-red-700 dark:text-red-300">כרייה שנכשלה ({harvestResult.reposFailed?.length}):</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {harvestResult.reposFailed?.map((f) => (
+                      <li key={f.repo} className="font-mono text-[11px] text-red-700 dark:text-red-300" dir="ltr">
+                        {f.repo} — <span dir="rtl" className="font-sans">{f.error}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(harvestResult.queriesFailed?.length ?? 0) > 0 && (
+                <div className="mt-2 rounded border border-amber-200 bg-amber-50/50 p-2 dark:border-amber-900 dark:bg-amber-950/30">
+                  <p className="font-semibold text-amber-700 dark:text-amber-300">שאילתות גילוי שנפלו ({harvestResult.queriesFailed?.length}):</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {harvestResult.queriesFailed?.map((f) => (
+                      <li key={f.q} className="text-[11px] text-amber-800 dark:text-amber-300">
+                        <code dir="ltr" className="font-mono">{f.q}</code> — {f.error}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </div>

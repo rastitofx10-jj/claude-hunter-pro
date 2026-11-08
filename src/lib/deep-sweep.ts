@@ -6,9 +6,9 @@
 // פועל בצד שרת בלבד.
 // ============================================================
 
-import { ghFetch, ghSearchWithBackoff, computeListScore, tierOf, type TierKey } from "./github";
+import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey } from "./github";
 import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
-import { harvestRepo } from "./harvester";
+import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 
 // ---------- ארסנל השאילתות ----------
@@ -81,6 +81,8 @@ export interface Candidate {
   topics: string[];
   /** הוכחה: נמצא בתוכן קובץ אמיתי (GitHub code search מתאים תוכן) — ראיה קשה */
   contentEvidence: string[];
+  /** ענף ברירת המחדל מה-GraphQL — חוסך קריאת /repos בכרייה */
+  defaultBranch?: string | null;
   /** נמצא רק בתיאור/topics/נתיב — ראיה רכה, לא הוכחה של שימוש בקוד */
   textEvidence: string[];
   /** נתיבי קבצים אמיתיים שבהם נמצאה מחרוזת מודל רשומה — קרקע-אמת לאימות חוזר */
@@ -320,37 +322,28 @@ export function consolidateCandidates(
   return candidates;
 }
 
-/** העשרה — מטא-דאטה אמיתית למועמדים המובילים */
+/** העשרה — מטא-דאטה אמיתית למועמדים המובילים.
+ *  סבב 5: 30 קריאות REST + מרווחי 400ms ← 1-2 קריאות GraphQL (עלות 1 נקודה כל אחת).
+ *  שלב ה-enrich בסריקה ירד מ-~10 שניות לפחות משנייה. */
 export async function enrichCandidates(
   candidates: Candidate[],
   token: string | null,
   topN = 30
 ): Promise<number> {
   const targets = candidates.slice(0, topN);
-  let enriched = 0;
-  for (let i = 0; i < targets.length; i += 6) {
-    const batch = targets.slice(i, i + 6);
-    await Promise.allSettled(
-      batch.map(async (c) => {
-        try {
-          const meta = await ghFetch<{
-            stargazers_count: number;
-            pushed_at: string;
-            description: string | null;
-            topics?: string[];
-          }>(`/repos/${c.fullName}`, token);
-          c.stars = meta.stargazers_count ?? c.stars;
-          c.pushedAt = meta.pushed_at ?? c.pushedAt;
-          c.description = meta.description ?? c.description;
-          c.topics = Array.from(new Set([...c.topics, ...(meta.topics ?? [])]));
-          enriched++;
-        } catch {
-          // מאגר שנמחק/פרטי — נשאר עם מה שיש
-        }
-      })
-    );
-    await sleep(400);
+  // רק מי שחסר לו כוכבים (נמצא רק דרך חיפוש-קוד — חיפוש המאגרים כבר הביא כוכבים)
+  const needMeta = targets.filter((c) => c.stars === 0).map((c) => c.fullName);
+  if (needMeta.length > 0) {
+    const metaMap = await batchRepoMeta(needMeta, token);
+    for (const c of targets) {
+      const m = metaMap.get(c.fullName);
+      if (m) {
+        if (m.stars > 0) c.stars = m.stars;
+        c.defaultBranch = m.defaultBranch; // חוסך קריאת /repos לכל ריפו שייכרה
+      }
+    }
   }
+  const enriched = targets.filter((c) => c.stars > 0).length;
   // דירוג מחדש אחרי העשרה
   const evRank = { hard: 0, soft: 1, none: 2 } as const;
   candidates.sort((a, b) => evRank[a.evidence] - evRank[b.evidence] || b.score - a.score);
@@ -427,7 +420,10 @@ export async function mineTopCandidates(
 
   for (let i = 0; i < fresh.length; i += 2) {
     const batch = fresh.slice(i, i + 2);
-    const results = await Promise.allSettled(batch.map((c) => harvestRepo(c.fullName, token)));
+    // ענף ברירת המחדל מה-GraphQL של ההעשרה — חוסך קריאת /repos לכל ריפו
+    const results = await Promise.allSettled(
+      batch.map((c) => harvestRepo(c.fullName, token, { stars: c.stars, defaultBranch: c.defaultBranch ?? null }))
+    );
     // await במקום void — כתיבות התקדמות לא-מסודרות יכלו להחזיר progress אחורה
     for (let j = 0; j < results.length; j++) {
       const r = results[j];

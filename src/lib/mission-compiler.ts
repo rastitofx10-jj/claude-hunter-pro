@@ -7,8 +7,8 @@
 // פועל בצד שרת בלבד.
 // ============================================================
 
-import { AiJsonError, extractJson, isTimeoutError, sanitizeSlug, str, strArr, stripOuterFence, withTimeout } from "./ai-json";
-import { getZai } from "./zai";
+import { AiJsonError, extractJson, isTimeoutError, sanitizeSlug, str, strArr, stripOuterFence } from "./ai-json";
+import { llmComplete } from "./zai";
 
 export class MissionError extends Error {
   constructor(message: string) {
@@ -215,29 +215,26 @@ ${brief}
 }
 החזר 3-5 שלבים ו-3-5 פרומפטים ברצף, בסדר ביצוע. בתוך paste מותר backticks — אסורה מרכאה כפולה.`;
 
-  const zai = await getZai();
   let lastErr: unknown = null;
   let failureReason = "JSON";
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: COMPILER_ROLE },
-            {
-              role: "user",
-              content:
-                attempt === 0
-                  ? prompt
-                  : prompt + `\n\n⚠️ הניסיון הקודם נכשל (${failureReason === "JSON" ? "JSON שבור" : "שלבים חסרים"}) — קצר פלט, החזר JSON תקין עם מערך phases מלא ולא ריק.`,
-            },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        "הידור התוכנית"
+      // התור הגלובלי (zai.ts) — מקביליות 1 + retry 429; role:"system" אמיתי.
+      // הידור משימה = 2 קריאות AI (תוכנית + SKILL.md) — בלי תור, הרצה
+      // במקביל לכימרה/סריקה הפילה אחת מהן ב-429.
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: COMPILER_ROLE },
+          {
+            role: "user",
+            content:
+              attempt === 0
+                ? prompt
+                : prompt + `\n\n⚠️ הניסיון הקודם נכשל (${failureReason === "JSON" ? "JSON שבור" : "שלבים חסרים"}) — קצר פלט, החזר JSON תקין עם מערך phases מלא ולא ריק.`,
+          },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "הידור התוכנית", timeoutError: MissionError }
       );
-      const raw = completion.choices[0]?.message?.content ?? "";
       if (!raw.trim()) {
         lastErr = new MissionError("ה-AI החזיר תשובה ריקה");
         failureReason = "JSON";
@@ -324,24 +321,20 @@ Requirements:
   // (בעבר: ניסיון אחד — Gen3+Gen4 נפלו שתיהן ל-fallback ואיש לא שם לב בדוחות)
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const zai = await getZai();
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: "You are an elite skills engineer. Respond with the raw SKILL.md file content only — markdown, starting with YAML frontmatter. No surrounding code fences." },
-            { role: "user", content: prompt },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        "יצירת ה-SKILL.md"
+      // תור גלובלי + role:"system" — הוראות המהנדס מקבלות עדיפות אמיתית
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: "You are an elite skills engineer. Respond with the raw SKILL.md file content only — markdown, starting with YAML frontmatter. No surrounding code fences." },
+          { role: "user", content: prompt },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "יצירת ה-SKILL.md" }
       );
       // מסיר רק גדר עוטפת אם קיימת — גדרות קוד פנימיות נשמרות
       // (בעבר: replace גורף הרס כל דוגמאות הקוד בתוך ה-SKILL.md)
-      const raw = normalizeFrontmatterFence(stripOuterFence(completion.choices[0]?.message?.content ?? ""));
-      if (raw.length > 200 && /^---/.test(raw)) return { md: raw, source: "ai" };
+      const md = normalizeFrontmatterFence(stripOuterFence(raw));
+      if (md.length > 200 && /^---/.test(md)) return { md, source: "ai" };
       // ה-AI ענה אבל התוצר לא עבר ולידציה — חובה לראות למה, אחרת זו נפילה שקטה שנייה
-      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — length=${raw.length} startsWithFrontmatter=${/^---/.test(raw)} head=${raw.slice(0, 160).replace(/\n/g, " ")}`);
+      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — length=${md.length} startsWithFrontmatter=${/^---/.test(md)} head=${md.slice(0, 160).replace(/\n/g, " ")}`);
     } catch (e) {
       // לוג שקט → לוג שרת מפורש: כשל AI לא עוד בלתי-נראה
       console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 failed:`, e);
@@ -481,28 +474,23 @@ export async function distillFieldReport(input: {
 }
 אם ורק אם אין דבר להנציח: "newDna": null`;
 
-  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: DISTILLER_ROLE },
-            {
-              role: "user",
-              content:
-                attempt === 0
-                  ? prompt
-                  : prompt + "\n\n⚠️ התגובה הקודמת לא הייתה JSON תקין — תקן והחזר JSON בלבד.",
-            },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        "זיקוק הדיווח"
+      // תור גלובלי (zai.ts) — זיקוק בזמן autopilot לא מתנגש יותר עם כימרה/סריקה
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: DISTILLER_ROLE },
+          {
+            role: "user",
+            content:
+              attempt === 0
+                ? prompt
+                : prompt + "\n\n⚠️ התגובה הקודמת לא הייתה JSON תקין — תקן והחזר JSON בלבד.",
+          },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "זיקוק הדיווח", timeoutError: MissionError }
       );
-      const raw = completion.choices[0]?.message?.content ?? "";
       if (!raw.trim()) {
         lastErr = new MissionError("ה-AI החזיר תשובה ריקה");
         continue;
@@ -593,27 +581,23 @@ ${dnaExcerpts || "(אין — הסתמך על ידע כללי ועל המטרה)
 
 Produce the real deliverable for THIS phase now.`;
 
-  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: EXECUTOR_ROLE },
-            { role: "user", content: attempt === 0 ? prompt : prompt + "\n\n⚠️ הפלט הקודם ריק או קצר מדי — הפק תוצר מלא." },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        `ביצוע שלב ${input.phaseIndex + 1}`
+      // תור גלובלי — ביצוע שלב לא מתנגש עם קריאות AI אחרות בתהליך
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: EXECUTOR_ROLE },
+          { role: "user", content: attempt === 0 ? prompt : prompt + "\n\n⚠️ הפלט הקודם ריק או קצר מדי — הפק תוצר מלא." },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: `ביצוע שלב ${input.phaseIndex + 1}`, timeoutError: MissionError }
       );
-      const raw = (completion.choices[0]?.message?.content ?? "").replace(/```(?:markdown)?/gi, "").trim();
-      if (raw.length < 200) {
+      const cleaned = raw.replace(/```(?:markdown)?/gi, "").trim();
+      if (cleaned.length < 200) {
         lastErr = new MissionError("התוצר קצר מדי");
         continue;
       }
-      return raw;
+      return cleaned;
     } catch (e) {
       if (isTimeoutError(e)) throw e;
       if (e instanceof AiJsonError || e instanceof MissionError) {

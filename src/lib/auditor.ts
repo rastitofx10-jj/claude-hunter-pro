@@ -10,8 +10,8 @@
 // ============================================================
 
 import { db } from "./db";
-import { extractJson, safeJsonParse, str, strArr, withTimeout } from "./ai-json";
-import { getZai } from "./zai";
+import { extractJson, safeJsonParse, str, strArr } from "./ai-json";
+import { llmComplete } from "./zai";
 import { ghFetch, ghFetchRaw, ghSearchWithBackoff } from "./github";
 import { QUALIFYING_MODELS } from "./claude-models";
 import { resolveToken } from "./server-token";
@@ -73,20 +73,14 @@ const AUDITOR_ROLE = `אתה מבקר פנימי עוין (red-team) של יחי
 6. סלופ אמיתי = משפט גנרי שמתאים לכל פרויקט AI בלי פרט מזהה, או מספר/עובדה שלא קיימים בנתונים.`;
 
 async function llmJson(prompt: string): Promise<Record<string, unknown>> {
-  const zai = await getZai();
-  const completion = await withTimeout(
-    zai.chat.completions.create({
-      messages: [
-        { role: "assistant", content: AUDITOR_ROLE },
-        { role: "user", content: prompt },
-      ],
-      thinking: { type: "disabled" },
-    }),
-    110_000,
-    "ביקורת AI",
-    Error
+  // התור הגלובלי (zai.ts) — מקביליות 1 + retry 429; role:"system" אמיתי
+  const { content: raw } = await llmComplete(
+    [
+      { role: "system", content: AUDITOR_ROLE },
+      { role: "user", content: prompt },
+    ],
+    { timeoutMs: 110_000, timeoutLabel: "ביקורת AI" }
   );
-  const raw = completion.choices[0]?.message?.content ?? "";
   if (!raw.trim()) throw new Error("ה-AI החזיר תשובה ריקה");
   return extractJson(raw, Error);
 }
