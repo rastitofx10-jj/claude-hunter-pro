@@ -1,0 +1,15 @@
+import { PrismaClient } from "@prisma/client";
+const db = new PrismaClient();
+const m = await db.mission.findUnique({ where: { id: 10 } });
+console.log("MISSION #10 skillMd bytes:", m.skillMd.length, "| starts:", JSON.stringify(m.skillMd.slice(0, 120)));
+console.log("skillMd tail:", JSON.stringify(m.skillMd.slice(-150)));
+const h = await db.liveHunt.findUnique({ where: { id: 6 } });
+const stages = JSON.parse(h.stages || "[]");
+const hunt = stages.find((s) => s.key === "hunt")?.evidence ?? {};
+console.log("\nBLOCKED by validator:", (hunt.evolvedDropped ?? []).length);
+for (const d of (hunt.evolvedDropped ?? []).slice(0, 3)) console.log(`  [${d.why}] ${d.q.slice(0, 70)}`);
+const attack = stages.find((s) => s.key === "attack")?.evidence ?? {};
+console.log("\nGen6 nextQueries (for gen7):");
+for (const q of (attack.queryEvo?.nextQueries ?? []).slice(0, 8)) console.log("  -", q.slice(0, 90));
+await db.$disconnect();
+process.exit(0);
