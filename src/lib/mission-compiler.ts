@@ -27,6 +27,9 @@ export interface DnaRow {
   name: string;
   description: string | null;
   content: string | null;
+  /** אורך התוכן האמיתי — כשהתוכן עצמו נחתך במקור (ראה stageCompile ב-live-hunt:
+   * substr(content,1,4000) + length(content)) חוק העושר ממשיך לראות את האורך האמיתי. */
+  contentLen?: number;
 }
 
 export interface SelectedDna {
@@ -108,7 +111,9 @@ export function rankDnaForGoal(goal: string, rows: DnaRow[], topN = 8): ScoredDn
     }
     const curIsField = cur.sourceRepo.startsWith("field:");
     const rowIsField = row.sourceRepo.startsWith("field:");
-    const richer = (row.content?.length ?? 0) > (cur.content?.length ?? 0);
+    // חוק העושר לפי האורך האמיתי — עמיד גם כשהתוכן נחתך במקור (contentLen)
+    const lenOf = (r: DnaRow) => r.contentLen ?? r.content?.length ?? 0;
+    const richer = lenOf(row) > lenOf(cur);
     if (rowIsField && !curIsField) byName.set(key, row);
     else if (curIsField === rowIsField && richer) byName.set(key, row);
   }
@@ -150,7 +155,7 @@ export function rankDnaForGoal(goal: string, rows: DnaRow[], topN = 8): ScoredDn
     const chosen = new Set(top.map((s) => s.row.id));
     const filler = unique
       .filter((r) => !chosen.has(r.id))
-      .sort((a, b) => (b.content?.length ?? 0) - (a.content?.length ?? 0))
+      .sort((a, b) => (b.contentLen ?? b.content?.length ?? 0) - (a.contentLen ?? a.content?.length ?? 0))
       .slice(0, MIN_MATERIAL - top.length)
       .map((row) => ({ row, score: 0 }));
     top.push(...filler);
@@ -592,7 +597,9 @@ Produce the real deliverable for THIS phase now.`;
         ],
         { timeoutMs: TIMEOUT_MS, timeoutLabel: `ביצוע שלב ${input.phaseIndex + 1}`, timeoutError: MissionError }
       );
-      const cleaned = raw.replace(/```(?:markdown)?/gi, "").trim();
+      const cleaned = stripOuterFence(raw).trim();
+      // בעבר: replace גורף של ``` הרס כל בלוקי הקוד בתוך התוצר — בדיוק הבאג
+      // שתוקן ב-compileSkillMd (260 שורות למעלה); עכשיו מסיר רק גדר עוטפת.
       if (cleaned.length < 200) {
         lastErr = new MissionError("התוצר קצר מדי");
         continue;

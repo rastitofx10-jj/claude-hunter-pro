@@ -30,7 +30,11 @@ export async function apiFetch<T>(
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok || data?.error) {
-    throw new Error(data?.error || `שגיאה ${res.status}`);
+    // הגוף המלא של השגיאה נצמד ל-Error — המשאבה של הציד החי קוראת ממנו את
+    // state הציד הכושל (payload.hunt) ועוצרת במקום לרוץ בלולאה אינסופית.
+    // בעבר: ה-route צירף את המצב בגוף התשובה אבל ה-wrapper זרק אותו לפני שמישהו הספיק לקרוא.
+    const err = new Error(data?.error || `שגיאה ${res.status}`);
+    throw Object.assign(err, { payload: data as unknown, status: res.status });
   }
   return data as T;
 }

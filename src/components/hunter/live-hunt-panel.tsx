@@ -83,6 +83,11 @@ interface HuntResponse {
   error?: string;
 }
 
+/** שגיאה שנזרקה מ-apiFetch ונושאת את גוף התשובה (payload.hunt) — ראה api-client.ts */
+interface FetchErrorWithPayload extends Error {
+  payload?: HuntResponse;
+}
+
 const STATUS_ICON: Record<string, string> = {
   hunt: "🛰️",
   swarm: "🐝",
@@ -337,6 +342,9 @@ export function LiveHuntPanel() {
   const [hunt, setHunt] = useState<HuntState | null>(null);
   const pumpingRef = useRef(false);
   const [autoPilot, setAutoPilot] = useState(true);
+  // כותרות שלבים שהגיעו בתשובות start/next/retry — ממלאות את המסלול עוד לפני שרשימת
+  // ההיסטוריה נטענה (בעבר: מפתחות אנגלית גולמיים הופיעו ברגע הראשון אחרי "התחל")
+  const [respTitles, setRespTitles] = useState<Record<string, string>>({});
 
   const listQuery = useQuery({
     queryKey: ["live-hunt-list"],
@@ -345,9 +353,8 @@ export function LiveHuntPanel() {
 
   const applyResponse = useCallback((data: HuntResponse) => {
     if (data.hunt) setHunt(data.hunt);
-    if (data.error) {
-      toast({ title: "ציד חי — שגיאה", description: data.error, variant: "destructive" });
-    }
+    if (data.stageTitles) setRespTitles((prev) => ({ ...prev, ...data.stageTitles! }));
+    // data.error ב-2xx אינו קורה לעולם — apiFetch זורק חריגה לפני שמגיעים לכאן (הערה בלבד; הוסר בניקוי 2026-11)
   }, []);
 
   const startMutation = useMutation({
@@ -377,6 +384,11 @@ export function LiveHuntPanel() {
     },
     onError: (e: Error) => {
       pumpingRef.current = false;
+      // לב התיקון: השרת מצרף את מצב הציד הכושל בגוף התשובה (payload.hunt).
+      // בעבר: המשאבה לא ראתה אותו, המצב נשאר "running" והיא המשיכה להצית את
+      // השלב הכושל בלולאה אינסופית — שריפת מכסת GitHub/LLM ללא השגחה.
+      const failedHunt = (e as FetchErrorWithPayload).payload?.hunt;
+      if (failedHunt) setHunt(failedHunt);
       toast({ title: "שלב נכשל — אפשר לנסות שוב", description: e.message, variant: "destructive" });
     },
   });
@@ -387,8 +399,15 @@ export function LiveHuntPanel() {
         method: "POST",
         body: JSON.stringify({ action: "retry", id }),
       }),
-    onSuccess: (data) => applyResponse(data),
-    onError: (e: Error) => toast({ title: "הניסיון החוזר נכשל", description: e.message, variant: "destructive" }),
+    onSuccess: (data) => {
+      applyResponse(data);
+      void queryClient.invalidateQueries({ queryKey: ["live-hunt-list"] });
+    },
+    onError: (e: Error) => {
+      const failedHunt = (e as FetchErrorWithPayload).payload?.hunt;
+      if (failedHunt) setHunt(failedHunt);
+      toast({ title: "הניסיון החוזר נכשל", description: e.message, variant: "destructive" });
+    },
   });
 
   // המשאבה האוטומטית: כל עוד הציד רץ — מדליק את השלב הבא אחרי השהיה קצרה
@@ -417,8 +436,21 @@ export function LiveHuntPanel() {
   );
 
   const stageOrder: readonly string[] = hunt?.stageOrder ?? listQuery.data?.stageOrder ?? [];
-  const titles: Record<string, string> = listQuery.data?.stageTitles ?? {};
+  const titles: Record<string, string> = { ...(listQuery.data?.stageTitles ?? {}), ...respTitles };
   const items = listQuery.data?.items ?? [];
+
+  // (ממוקם אחרי ההצהרות של items/loadHunt — בעבר היה לפניהן וקרא משתנה ב-TDZ)
+  // בעבר: המשתמש ראה כפתור "התחל" פנוי שהחזיר 409 עד שלחץ ידנית על השורה בהיסטוריה.
+  useEffect(() => {
+    if (hunt) return; // המשתמש כבר בחר ציד לתצוגה
+    const active = items.find((i) => i.status === "running");
+    if (!active) return;
+    // דחייה ל-microtask — setState ישיר מתוך אפקט אסור (react-hooks/set-state-in-effect)
+    const t = setTimeout(() => {
+      void loadHunt(active.id);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [items, hunt, loadHunt]);
 
   const doneKeys = new Map<string, StageRecord>();
   for (const s of hunt?.stages ?? []) doneKeys.set(s.key, s);
@@ -507,16 +539,16 @@ export function LiveHuntPanel() {
           <CardContent className="p-4">
             <div className="mb-3 flex items-center justify-between">
               <p className="flex items-center gap-1.5 text-sm font-bold">
-                <Zap className="h-4 w-4 text-amber-500" /> שרשרת ההרג — 8 שלבים
+                <Zap className="h-4 w-4 text-amber-500" /> שרשרת ההרג — {stageOrder.length} שלבים
               </p>
               {hunt && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="tabular-nums">{doneKeys.size}/8</span>
+                  <span className="tabular-nums">{doneKeys.size}/{stageOrder.length}</span>
                   <span>הושלמו</span>
                 </div>
               )}
             </div>
-            <StageRail order={stageOrder} titles={titles} doneMap={doneKeys} currentKey={hunt?.stageKey ?? null} failed={failed} />
+            <StageRail order={stageOrder} titles={titles} doneMap={doneKeys} currentKey={running ? (hunt?.stageKey ?? null) : null} failed={failed} />
           </CardContent>
         </Card>
       )}
@@ -583,7 +615,9 @@ export function LiveHuntPanel() {
           {stageOrder.map((key) => {
             const rec = doneKeys.get(key) ?? null;
             const isCurrent = hunt?.stageKey === key && running;
-            const visual: StageVisual = failed && hunt?.stageKey === key ? "failed" : rec ? "done" : isCurrent ? "active" : "pending";
+            // שלב חוזר (execute) חייב להראות "פעיל" כשהוא באמצע ריצה — בעבר הרשומה
+            // מהפעם הקודמת ניצחה (rec ? done) והצינור הראה וי לא ירוק בזמן שהמשימה באוויר.
+            const visual: StageVisual = failed && hunt?.stageKey === key ? "failed" : isCurrent ? "active" : rec ? "done" : "pending";
             if (!rec && !isCurrent && !(failed && hunt?.stageKey === key)) return null; // רק שלבים רלוונטיים — לא 8 כרטיסים אפורים
             return <StageCard key={key} stageKey={key} title={titles[key] ?? key} visual={visual} rec={rec} />;
           })}

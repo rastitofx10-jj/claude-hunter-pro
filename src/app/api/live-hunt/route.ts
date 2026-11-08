@@ -90,8 +90,12 @@ export async function POST(req: NextRequest) {
     if (action === "start") {
       const { id } = await startLiveHunt();
       const row = await db.liveHunt.findUnique({ where: { id } });
+      // בעבר: row! — אם השורה נמחקה בין היצירה לקריאה, serializeLiveHunt(null) זרק 500 גנרי. עכשיו תשובה מדויקת.
+      if (!row) {
+        return NextResponse.json({ error: "הציד נמחק במהלך הפתיחה" }, { status: 500 });
+      }
       return NextResponse.json({
-        hunt: serializeLiveHunt(row!),
+        hunt: serializeLiveHunt(row),
         stageOrder: LIVE_HUNT_STAGE_ORDER,
         stageTitles: LIVE_HUNT_STAGE_TITLES,
       });
