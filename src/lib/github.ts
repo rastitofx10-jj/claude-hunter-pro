@@ -7,9 +7,16 @@ export const GH_API = "https://api.github.com";
 
 export class GhError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** true when the API explicitly said we hit a (primary/secondary) rate limit.
+   *  Set at the source of truth (here) so rate-limit handling never depends on
+   *  matching the *translated* message text — a past bug: the Hebrew message
+   *  lost the "rate limit" substring and the backoff in deep-sweep/auditor
+   *  never fired (queries failed permanently instead of waiting 8/16/32s). */
+  rateLimited?: boolean;
+  constructor(status: number, message: string, rateLimited = false) {
     super(message);
     this.status = status;
+    this.rateLimited = rateLimited;
     this.name = "GhError";
   }
 }
@@ -47,13 +54,18 @@ export async function ghFetch<T = unknown>(
     } catch {
       // keep default message
     }
-    if (res.status === 403 && /rate limit/i.test(msg)) {
-      msg = "מכסת GitHub API נגמרה. הוסף Personal Access Token בהגדרות כדי להמשיך.";
+    // Rate-limit detection happens HERE (source of truth) and is exposed as a
+    // flag — the message shown to the user stays Hebrew, the machine-readable
+    // signal never depends on message language again.
+    const isRateLimit =
+      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection|מכסת/i.test(msg);
+    if (isRateLimit) {
+      msg = "מכסת GitHub API נגמרה (rate limit). הוסף Personal Access Token בהגדרות כדי להמשיך.";
     }
     if (res.status === 401) {
       msg = "הטוקן שסיפקת לא תקין או שפג תוקפו.";
     }
-    throw new GhError(res.status, msg);
+    throw new GhError(res.status, msg, isRateLimit);
   }
   return (await res.json()) as T;
 }
@@ -81,13 +93,15 @@ export async function ghFetchRaw(
     } catch {
       // keep default message
     }
-    if (res.status === 403 && /rate limit/i.test(msg)) {
-      msg = "מכסת GitHub API נגמרה. הוסף Personal Access Token בהגדרות כדי להמשיך.";
+    const isRateLimit =
+      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection|מכסת/i.test(msg);
+    if (isRateLimit) {
+      msg = "מכסת GitHub API נגמרה (rate limit). הוסף Personal Access Token בהגדרות כדי להמשיך.";
     }
     if (res.status === 401) {
       msg = "הטוקן שסיפקת לא תקין או שפג תוקפו.";
     }
-    throw new GhError(res.status, msg);
+    throw new GhError(res.status, msg, isRateLimit);
   }
   return await res.text();
 }
@@ -135,6 +149,34 @@ export const TIERS: { min: number; key: TierKey; label: string; emoji: string }[
 
 export function tierOf(score: number): { key: TierKey; label: string; emoji: string } {
   return TIERS.find((t) => score >= t.min) ?? TIERS[TIERS.length - 1];
+}
+
+// ---------- shared search backoff (single source of truth) ----------
+
+const ghSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Search call with rate-limit recovery. Exists ONCE (used to be duplicated in
+ * deep-sweep and auditor — one copy had a dead backoff because it matched the
+ * English "rate limit" inside a message that was already translated to Hebrew).
+ * Policy: 403/429 marked as rate-limit by ghFetch (GhError.rateLimited) → wait
+ * 8s/16s/32s and retry; any other error (private repo, bad token…) is thrown
+ * immediately so we don't burn a minute on a query that can never succeed.
+ */
+export async function ghSearchWithBackoff<T>(path: string, token: string | null): Promise<T> {
+  const delays = [8_000, 16_000, 32_000];
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await ghFetch<T>(path, token);
+    } catch (e) {
+      lastErr = e;
+      const rl = e instanceof GhError && (e.status === 403 || e.status === 429) && (e.rateLimited === true || /rate limit|secondary|מכסת/i.test(e.message));
+      if (!rl || attempt === delays.length) throw e;
+      await ghSleep(delays[attempt]);
+    }
+  }
+  throw lastErr;
 }
 
 // ---------- scoring helpers ----------

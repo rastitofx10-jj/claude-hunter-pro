@@ -125,6 +125,9 @@ export async function POST(req: NextRequest) {
       context: context || null,
       status: saved.status,
       report: null,
+      // בעבר חסר בתשובת POST (ה-GET החזיר) — הערך מוכרז בטיפוס הלקוח אבל לא סופק,
+      // וההערה ב-GET מבטיחה "אותה צורה בדיוק". עכשיו אמיתי.
+      reportHistory: [],
       autopilot: null,
       autopilotAt: null,
       createdAt: saved.createdAt.toISOString(),

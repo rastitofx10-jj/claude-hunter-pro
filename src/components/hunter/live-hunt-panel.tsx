@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import {
   Swords,
   Play,
@@ -17,6 +18,7 @@ import {
   Zap,
   History,
   Brain,
+  Sparkles,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,7 +30,7 @@ import { toast } from "@/hooks/use-toast";
 import { useHunterStore } from "@/lib/hunter-store";
 import { apiFetch } from "@/lib/api-client";
 
-// ---------- types ----------
+// ---------- types (single source: the API route returns all of these) ----------
 
 interface StageRecord {
   key: string;
@@ -76,6 +78,8 @@ interface HuntListItem {
 interface HuntResponse {
   hunt?: HuntState;
   items?: HuntListItem[];
+  stageOrder?: readonly string[];
+  stageTitles?: Record<string, string>;
   error?: string;
 }
 
@@ -96,7 +100,7 @@ function fmtMs(ms: number): string {
   return `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
 }
 
-// ---------- מציג ראיות חכם — כל JSON לתצוגה אנושית בלי להישבר ----------
+// ---------- smart evidence renderer ----------
 
 function clip(s: string, n = 160): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
@@ -195,23 +199,75 @@ function EvidenceView({ evidence }: { evidence: Record<string, unknown> }) {
   );
 }
 
-// ---------- כרטיס שלב ----------
+// ---------- stage rail (the war-room heart) ----------
 
 type StageVisual = "done" | "active" | "failed" | "pending";
 
-function StageCard({
-  stageKey,
-  title,
-  visual,
-  rec,
-  isCurrent,
+function StageRail({
+  order,
+  titles,
+  doneMap,
+  currentKey,
+  failed,
 }: {
-  stageKey: string;
-  title: string;
-  visual: StageVisual;
-  rec: StageRecord | null;
-  isCurrent: boolean;
+  order: readonly string[];
+  titles: Record<string, string>;
+  doneMap: Map<string, StageRecord>;
+  currentKey: string | null;
+  failed: boolean;
 }) {
+  return (
+    <div className="overflow-x-auto pb-1" aria-label="צינור השלבים">
+      <ol className="flex min-w-max items-center gap-0 px-1">
+        {order.map((key, idx) => {
+          const rec = doneMap.get(key) ?? null;
+          const isCurrent = currentKey === key;
+          const visual: StageVisual = failed && isCurrent ? "failed" : rec ? "done" : isCurrent ? "active" : "pending";
+          const last = idx === order.length - 1;
+          return (
+            <li key={key} className="flex items-center">
+              <div className="flex w-24 flex-col items-center gap-1.5 text-center sm:w-28">
+                <div
+                  className={`relative flex h-11 w-11 items-center justify-center rounded-full border-2 transition-all ${
+                    visual === "done"
+                      ? "border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
+                      : visual === "active"
+                        ? "border-amber-500 bg-amber-500/15 text-amber-600 shadow-[0_0_20px_-4px] shadow-amber-400/50 dark:text-amber-300"
+                        : visual === "failed"
+                          ? "border-red-500 bg-red-500/15 text-red-600 dark:text-red-300"
+                          : "border-border text-muted-foreground/50"
+                  }`}
+                >
+                  <span className="text-lg leading-none">{STATUS_ICON[key] ?? "•"}</span>
+                  {visual === "done" && <CheckCircle2 className="absolute -bottom-1 -start-1 h-4 w-4 rounded-full bg-background text-emerald-500" />}
+                  {visual === "active" && <Loader2 className="absolute -bottom-1 -start-1 h-4 w-4 animate-spin rounded-full bg-background text-amber-500" />}
+                  {visual === "failed" && <XCircle className="absolute -bottom-1 -start-1 h-4 w-4 rounded-full bg-background text-red-500" />}
+                </div>
+                <p className={`text-[11px] font-semibold leading-tight ${visual === "pending" ? "text-muted-foreground/60" : "text-foreground"}`}>
+                  {titles[key] ?? key}
+                </p>
+                {rec && <span className="text-[10px] tabular-nums text-muted-foreground">{fmtMs(rec.ms)}</span>}
+                {visual === "active" && <span className="text-[10px] font-medium text-amber-600 dark:text-amber-300">מתבצע כעת</span>}
+              </div>
+              {!last && (
+                <div
+                  className={`mx-1 h-0.5 w-8 rounded sm:w-12 ${
+                    doneMap.has(key) ? "bg-emerald-500/70" : "bg-border"
+                  }`}
+                  aria-hidden
+                />
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+// ---------- stage card ----------
+
+function StageCard({ stageKey, title, visual, rec }: { stageKey: string; title: string; visual: StageVisual; rec: StageRecord | null }) {
   const [open, setOpen] = useState(false);
   return (
     <Card
@@ -236,7 +292,6 @@ function StageCard({
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold" dir="auto">
                 {title}
-                {isCurrent && <span className="ms-2 text-xs font-normal text-amber-600">← כעת</span>}
               </p>
               {rec && (
                 <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground" dir="auto">
@@ -273,23 +328,21 @@ function StageCard({
   );
 }
 
-// ---------- הפאנל ----------
+// ---------- the panel ----------
 
 export function LiveHuntPanel() {
   const queryClient = useQueryClient();
+  const token = useHunterStore((s) => s.token);
   const setActiveTab = useHunterStore((s) => s.setActiveTab);
   const [hunt, setHunt] = useState<HuntState | null>(null);
-  const [stageTitles, setStageTitles] = useState<Record<string, string>>({});
   const pumpingRef = useRef(false);
   const [autoPilot, setAutoPilot] = useState(true);
 
-  // רשימת הצידים הקודמים
   const listQuery = useQuery({
     queryKey: ["live-hunt-list"],
-    queryFn: async () => (await apiFetch<HuntResponse>("/api/live-hunt")) as HuntResponse,
+    queryFn: () => apiFetch<HuntResponse>("/api/live-hunt", token),
   });
 
-  // תוצאה חיה מהשרת → ל-state מקומי
   const applyResponse = useCallback((data: HuntResponse) => {
     if (data.hunt) setHunt(data.hunt);
     if (data.error) {
@@ -298,56 +351,47 @@ export function LiveHuntPanel() {
   }, []);
 
   const startMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/live-hunt", {
+    mutationFn: () =>
+      apiFetch<HuntResponse>("/api/live-hunt", token, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "start" }),
-      });
-      return (await res.json()) as HuntResponse;
-    },
+      }),
     onSuccess: (data) => {
       applyResponse(data);
       void queryClient.invalidateQueries({ queryKey: ["live-hunt-list"] });
     },
-    onError: () => {
-      toast({ title: "פתיחת הציד נכשלה", variant: "destructive" });
+    onError: (e: Error) => {
+      toast({ title: "פתיחת הציד נכשלה", description: e.message, variant: "destructive" });
     },
   });
 
   const stepMutation = useMutation({
-    mutationFn: async (id: number) => {
-      const res = await fetch("/api/live-hunt", {
+    mutationFn: (id: number) =>
+      apiFetch<HuntResponse>("/api/live-hunt", token, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "next", id }),
-      });
-      const json = (await res.json()) as HuntResponse;
-      return { ok: res.ok, json };
-    },
-    onSuccess: ({ json }) => {
-      applyResponse(json);
+      }),
+    onSuccess: (data) => {
+      applyResponse(data);
       pumpingRef.current = false;
     },
-    onError: () => {
+    onError: (e: Error) => {
       pumpingRef.current = false;
-      toast({ title: "שלב נכשל — אפשר לנסות שוב", variant: "destructive" });
+      toast({ title: "שלב נכשל — אפשר לנסות שוב", description: e.message, variant: "destructive" });
     },
   });
 
   const retryMutation = useMutation({
-    mutationFn: async (id: number) => {
-      const res = await fetch("/api/live-hunt", {
+    mutationFn: (id: number) =>
+      apiFetch<HuntResponse>("/api/live-hunt", token, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "retry", id }),
-      });
-      return (await res.json()) as HuntResponse;
-    },
+      }),
     onSuccess: (data) => applyResponse(data),
+    onError: (e: Error) => toast({ title: "הניסיון החוזר נכשל", description: e.message, variant: "destructive" }),
   });
 
-  // המשאבה האוטומטית: כל עוד רץ — מדליק את השלב הבא אחרי השהיה קצרה
+  // המשאבה האוטומטית: כל עוד הציד רץ — מדליק את השלב הבא אחרי השהיה קצרה
   useEffect(() => {
     if (!autoPilot) return;
     if (!hunt || hunt.status !== "running") return;
@@ -358,19 +402,23 @@ export function LiveHuntPanel() {
       stepMutation.mutate(hunt.id);
     }, 700);
     return () => clearTimeout(t);
-  }, [hunt, autoPilot, stepMutation.isPending]);
+  }, [hunt, autoPilot, stepMutation]);
 
-  const loadHunt = useCallback(async (id: number) => {
-    try {
-      const res = await apiFetch<HuntResponse>(`/api/live-hunt?id=${id}`);
-      applyResponse(res);
-    } catch {
-      toast({ title: "טעינת הציד נכשלה", variant: "destructive" });
-    }
-  }, [applyResponse]);
+  const loadHunt = useCallback(
+    async (id: number) => {
+      try {
+        const res = await apiFetch<HuntResponse>(`/api/live-hunt?id=${id}`, token);
+        applyResponse(res);
+      } catch (e) {
+        toast({ title: "טעינת הציד נכשלה", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      }
+    },
+    [applyResponse, token]
+  );
 
-  const stageOrder = hunt?.stageOrder ?? listQuery.data?.stageOrder ?? [];
-  const titles = Object.keys(stageTitles).length > 0 ? stageTitles : listQuery.data?.stageTitles ?? {};
+  const stageOrder: readonly string[] = hunt?.stageOrder ?? listQuery.data?.stageOrder ?? [];
+  const titles: Record<string, string> = listQuery.data?.stageTitles ?? {};
+  const items = listQuery.data?.items ?? [];
 
   const doneKeys = new Map<string, StageRecord>();
   for (const s of hunt?.stages ?? []) doneKeys.set(s.key, s);
@@ -378,32 +426,30 @@ export function LiveHuntPanel() {
   const failed = hunt?.status === "failed";
   const running = hunt?.status === "running";
   const finished = hunt?.status === "done";
-
   const bornDna = hunt && hunt.dnaAfter > hunt.dnaBefore ? hunt.dnaAfter - hunt.dnaBefore : 0;
+  const hasRailData = stageOrder.length > 0;
 
   return (
-    <div className="space-y-5">
-      {/* ---------- גיבור ---------- */}
-      <Card className="border-primary/30 bg-gradient-to-bl from-primary/10 via-transparent to-transparent">
+    <div className="space-y-5" dir="rtl">
+      {/* ---------- hero ---------- */}
+      <Card className="border-primary/30 bg-gradient-to-bl from-orange-500/10 via-transparent to-transparent">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-lg">
             <Swords className="h-5 w-5 text-primary" />
-            ציד חי — שרשרת הרג אוטונומית
+            ציד חי — חדר המלחמה
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm leading-relaxed text-muted-foreground">
-            לחיצה אחת. המערכת צדה לבד ב-GitHub עם הטוקן שלך, שופטת מועמדים בלהקת פרומפטים, כורה DNA
-            חי מהמטרות, מהדרת משימה מהגנים החדשים, מבצעת אותה אוטונומית שלב-אחר-שלב, מזקקת את
-            לקחי השדה לגן חדש בספרייה — ומסכמת בראיות מלאות. שלב אחד לכל פעימה, הכול נשמר בבסיס
-            הנתונים וניתן לחזור מכל נקודה.
+            לחיצה אחת. המערכת צדה לבד ב-GitHub, שופטת מועמדים בלהקת פרומפטים, כורה DNA חי מהמטרות, מהדרת משימה
+            מהגנים החדשים, מבצעת אותה אוטונומית, מזקקת את לקחי השדה לגן חדש — ומסכמת בראיות מלאות.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="lg"
               onClick={() => startMutation.mutate()}
               disabled={startMutation.isPending || running}
-              className="gap-2"
+              className="gap-2 bg-gradient-to-l from-orange-600 to-amber-500 text-white hover:from-orange-700 hover:to-amber-600"
             >
               {startMutation.isPending || running ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -433,7 +479,7 @@ export function LiveHuntPanel() {
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Badge variant="outline">ציד #{hunt.id}</Badge>
               {hunt.generation > 1 ? (
-                <Badge className="bg-amber-500/90 text-white gap-1">
+                <Badge className="gap-1 bg-amber-500/90 text-white">
                   <Dna className="h-3 w-3" /> דור {hunt.generation} — זריעה מציד #{hunt.seededFrom}
                 </Badge>
               ) : (
@@ -455,79 +501,97 @@ export function LiveHuntPanel() {
         </CardContent>
       </Card>
 
-      {/* ---------- סיכום מערכה ---------- */}
-      {finished && hunt && (
-        <Card className="border-emerald-400/50 bg-emerald-500/5">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-              מסקנת מערכה — ציד #{hunt.id} הושלם
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-lg border p-3">
-              <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Dna className="h-3 w-3" /> צמיחת ספרייה
+      {/* ---------- the stage rail ---------- */}
+      {hasRailData && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="flex items-center gap-1.5 text-sm font-bold">
+                <Zap className="h-4 w-4 text-amber-500" /> שרשרת ההרג — 8 שלבים
               </p>
-              <p className="mt-1 text-lg font-bold">
-                {hunt.dnaBefore} <span className="text-xs font-normal">→</span> {hunt.dnaAfter}
-              </p>
-              {bornDna > 0 && <Badge className="mt-1 bg-emerald-500 text-white">+{bornDna} גנים נולדו 🧬</Badge>}
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Brain className="h-3 w-3" /> קריאות LLM
-              </p>
-              <p className="mt-1 text-lg font-bold">{hunt.llmCalls}</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Clock className="h-3 w-3" /> זמן מצטבר
-              </p>
-              <p className="mt-1 text-lg font-bold">{fmtMs(hunt.elapsedMs)}</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Target className="h-3 w-3" /> משימה שנוצרה
-              </p>
-              <p className="mt-1 text-lg font-bold">#{hunt.missionId ?? "—"}</p>
-              {hunt.missionId && (
-                <Button variant="link" size="sm" className="mt-1 h-6 p-0 text-xs" onClick={() => setActiveTab("mission")}>
-                  פתח במבצעים ←
-                </Button>
+              {hunt && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="tabular-nums">{doneKeys.size}/8</span>
+                  <span>הושלמו</span>
+                </div>
               )}
             </div>
-            {hunt.goal && (
-              <div className="col-span-2 rounded-lg border p-3 sm:col-span-4">
-                <p className="text-[11px] text-muted-foreground">המטרה שנגזרה אוטומטית</p>
-                <p className="mt-1 text-sm leading-relaxed" dir="auto">
-                  {hunt.goal}
-                </p>
-              </div>
-            )}
+            <StageRail order={stageOrder} titles={titles} doneMap={doneKeys} currentKey={hunt?.stageKey ?? null} failed={failed} />
           </CardContent>
         </Card>
       )}
 
-      {/* ---------- צינור השלבים ---------- */}
-      {stageOrder.length > 0 && (
+      {/* ---------- campaign summary ---------- */}
+      {finished && hunt && (
+        <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.3 }}>
+          <Card className="border-emerald-400/50 bg-emerald-500/5">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Sparkles className="h-5 w-5 text-emerald-500" />
+                מסקנת מערכה — ציד #{hunt.id} הושלם
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-lg border p-3">
+                <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Dna className="h-3 w-3" /> צמיחת ספרייה
+                </p>
+                <p className="mt-1 text-lg font-bold tabular-nums">
+                  {hunt.dnaBefore} <span className="text-xs font-normal">→</span> {hunt.dnaAfter}
+                </p>
+                {bornDna > 0 && <Badge className="mt-1 bg-emerald-500 text-white">+{bornDna} גנים נולדו 🧬</Badge>}
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Brain className="h-3 w-3" /> קריאות LLM
+                </p>
+                <p className="mt-1 text-lg font-bold tabular-nums">{hunt.llmCalls}</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Clock className="h-3 w-3" /> זמן מצטבר
+                </p>
+                <p className="mt-1 text-lg font-bold tabular-nums">{fmtMs(hunt.elapsedMs)}</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Target className="h-3 w-3" /> משימה שנוצרה
+                </p>
+                <p className="mt-1 text-lg font-bold tabular-nums">#{hunt.missionId ?? "—"}</p>
+                {hunt.missionId && (
+                  <Button variant="link" size="sm" className="mt-1 h-6 p-0 text-xs" onClick={() => setActiveTab("mission")}>
+                    פתח במבצעים ←
+                  </Button>
+                )}
+              </div>
+              {hunt.goal && (
+                <div className="col-span-2 rounded-lg border p-3 sm:col-span-4">
+                  <p className="text-[11px] text-muted-foreground">המטרה שנגזרה אוטומטית</p>
+                  <p className="mt-1 text-sm leading-relaxed" dir="auto">
+                    {hunt.goal}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* ---------- stage cards (done stages, newest first visible) ---------- */}
+      {hasRailData && (
         <div className="space-y-2.5">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-            <Zap className="h-4 w-4" /> צינור ההרג — 8 שלבים
-          </h3>
           {stageOrder.map((key) => {
             const rec = doneKeys.get(key) ?? null;
             const isCurrent = hunt?.stageKey === key && running;
             const visual: StageVisual = failed && hunt?.stageKey === key ? "failed" : rec ? "done" : isCurrent ? "active" : "pending";
-            return (
-              <StageCard key={key} stageKey={key} title={titles[key] ?? key} visual={visual} rec={rec} isCurrent={isCurrent} />
-            );
+            if (!rec && !isCurrent && !(failed && hunt?.stageKey === key)) return null; // רק שלבים רלוונטיים — לא 8 כרטיסים אפורים
+            return <StageCard key={key} stageKey={key} title={titles[key] ?? key} visual={visual} rec={rec} />;
           })}
         </div>
       )}
 
-      {/* ---------- היסטוריית צידים ---------- */}
-      {(listQuery.data?.items?.length ?? 0) > 0 && (
+      {/* ---------- history ---------- */}
+      {items.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
@@ -537,7 +601,7 @@ export function LiveHuntPanel() {
           <CardContent>
             <ScrollArea className="max-h-72">
               <div className="space-y-1.5">
-                {listQuery.data?.items.map((item) => (
+                {items.map((item) => (
                   <button
                     key={item.id}
                     onClick={() => void loadHunt(item.id)}
@@ -556,9 +620,7 @@ export function LiveHuntPanel() {
                       {item.stagesCount} שלבים
                     </Badge>
                     {item.dnaAfter > item.dnaBefore && (
-                      <Badge className="bg-emerald-500 text-white text-[10px]">
-                        +{item.dnaAfter - item.dnaBefore} DNA
-                      </Badge>
+                      <Badge className="bg-emerald-500 text-white text-[10px]">+{item.dnaAfter - item.dnaBefore} DNA</Badge>
                     )}
                     {item.missionId && (
                       <Badge variant="secondary" className="text-[10px]">
@@ -568,7 +630,7 @@ export function LiveHuntPanel() {
                     <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" dir="auto">
                       {item.goal || item.error || "—"}
                     </span>
-                    <span className="text-[10px] text-muted-foreground/70">{fmtMs(item.elapsedMs)}</span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground/70">{fmtMs(item.elapsedMs)}</span>
                   </button>
                 ))}
               </div>

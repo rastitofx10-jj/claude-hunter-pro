@@ -17,7 +17,9 @@ export async function apiFetch<T>(
   token: string,
   init?: RequestInit
 ): Promise<T> {
-  const authHeaders = isServerToken(token) ? {} : { "x-gh-token": token.trim() };
+  // Record<string,string> מפורש — בעבר איחוד הסוגים עם {"x-gh-token"?: undefined}
+  // הפיל את ה-typecheck (TS2769) שהוסתר ע"י ignoreBuildErrors.
+  const authHeaders: Record<string, string> = isServerToken(token) ? {} : { "x-gh-token": token.trim() };
   const res = await fetch(url, {
     ...init,
     headers: {

@@ -18,6 +18,7 @@
 
 import { db } from "@/lib/db";
 import { safeJsonParse } from "./ai-json";
+import { tierOf } from "./github";
 import {
   buildQueryArsenal,
   runQueryArsenal,
@@ -28,6 +29,7 @@ import {
   type Candidate,
   type CandidateFlat,
   type QueryReport,
+  type SweepQuery,
 } from "./deep-sweep";
 import {
   triageBatch,
@@ -344,7 +346,9 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
         stars: c.stars,
         score: c.score,
         evidence: c.evidence,
-        tierLabel: c.tierLabel,
+        // בעבר: c.tierLabel — שדה שלא קיים על Candidate (רק על CandidateFlat),
+        // נכנס כ-undefined ונשמט מה-JSON. עכשיו מחושב מהציון כמו ב-flattenForSwarm.
+        tierLabel: tierOf(Math.min(100, c.score)).label,
         modelStrings: c.modelStrings.slice(0, 5),
       })),
     },
@@ -811,7 +815,9 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   ]);
 
   const bornDnaId = Number(growEv?.bornDnaId) || null;
-  const huntEv2 = huntEv as { novelCandidates?: unknown; evolvedQueries?: unknown[]; knownBefore?: unknown } | null;
+  // novelTop קיים בראיות (נכתב ב-stageHunt) אבל הטיפוס המקומי לא הכריז אותו —
+  // התיפוס היה משקר על צורת הנתונים; עכשיו מוכרז במפורש.
+  const huntEv2 = huntEv as { novelCandidates?: unknown; novelTop?: unknown[]; evolvedQueries?: unknown[]; knownBefore?: unknown } | null;
   const summary = `דור ${ctx.generation} · ${ctx.done.length} שלבים · ${missionCount} משימות בסך הכל · ${ctx.llmCallsSoFar} קריאות LLM`;
 
   return {
@@ -863,26 +869,41 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 // ---------- מנוע המדינה (state machine) ----------
 
+/**
+ * פתיחת ציד: נעילת תחילה סוגרת את חלון המירוץ בין הבדיקה ("אין ריצה פעילה")
+ * ליצירה — בלי זה שתי לחיצות "התחל" מקבילות יצרו שני צידים רצים שניהם.
+ * (בדיוק הדגם של startSweep/startingSweep — כאן הוחל גם על הציד החי.)
+ */
+let startingHunt = false;
+
 export async function startLiveHunt(): Promise<{ id: number }> {
-  // ריצה פעילה אחת בלבד — ריצה שלא עודכנה 15 דקות נחשבת מתה
-  const staleCutoff = new Date(Date.now() - 15 * 60_000);
-  await db.liveHunt.updateMany({
-    where: { status: "running", updatedAt: { lt: staleCutoff } },
-    data: { status: "failed", error: "הריצה נקטעה (השרת אותחל) — סימון אוטומטי" },
-  });
-  const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true } });
-  if (active) {
-    throw new LiveHuntError("ציד חי כבר רץ כרגע — חכה לסיומו", 409);
+  if (startingHunt) {
+    throw new LiveHuntError("פתיחת ציד כבר מתבצעת — רגע קטן", 409);
   }
-  const dnaBefore = await db.dnaArtifact.count();
-  // דור גנרציוני: כל ציד חדש הוא דור+1 מהציד המוצלח האחרון — הבן צד עם שאילתות האבולוציה של האב
-  const prevDone = await db.liveHunt.findFirst({ where: { status: "done" }, orderBy: { id: "desc" }, select: { id: true, generation: true } });
-  const generation = (prevDone?.generation ?? 0) + 1;
-  const seededFrom = prevDone?.id ?? null;
-  const hunt = await db.liveHunt.create({
-    data: { status: "running", stageKey: "hunt", dnaBefore, generation, seededFrom },
-  });
-  return { id: hunt.id };
+  startingHunt = true;
+  try {
+    // ריצה פעילה אחת בלבד — ריצה שלא עודכנה 15 דקות נחשבת מתה
+    const staleCutoff = new Date(Date.now() - 15 * 60_000);
+    await db.liveHunt.updateMany({
+      where: { status: "running", updatedAt: { lt: staleCutoff } },
+      data: { status: "failed", error: "הריצה נקטעה (השרת אותחל) — סימון אוטומטי" },
+    });
+    const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true } });
+    if (active) {
+      throw new LiveHuntError("ציד חי כבר רץ כרגע — חכה לסיומו", 409);
+    }
+    const dnaBefore = await db.dnaArtifact.count();
+    // דור גנרציוני: כל ציד חדש הוא דור+1 מהציד המוצלח האחרון — הבן צד עם שאילתות האבולוציה של האב
+    const prevDone = await db.liveHunt.findFirst({ where: { status: "done" }, orderBy: { id: "desc" }, select: { id: true, generation: true } });
+    const generation = (prevDone?.generation ?? 0) + 1;
+    const seededFrom = prevDone?.id ?? null;
+    const hunt = await db.liveHunt.create({
+      data: { status: "running", stageKey: "hunt", dnaBefore, generation, seededFrom },
+    });
+    return { id: hunt.id };
+  } finally {
+    startingHunt = false;
+  }
 }
 
 export interface LiveHuntState {

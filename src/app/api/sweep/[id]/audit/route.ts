@@ -15,7 +15,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: true, id: numId });
   } catch (e) {
     const status = (e as { status?: number }).status ?? 500;
-    const msg = e instanceof Error ? e.message : "שגירת הביקורת נכשלה";
-    return NextResponse.json({ error: msg }, { status });
+    if (status < 500) return NextResponse.json({ error: e instanceof Error ? e.message : "שגירת הביקורת נכשלה" }, { status });
+    console.error("sweep/[id]/audit POST failed", e);
+    return NextResponse.json({ error: "שגירת הביקורת נכשלה" }, { status: 500 });
   }
 }

@@ -110,7 +110,9 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     await updateRun(runId, { phase: "swarm", progress: 71 });
 
     const flat = flattenForSwarm(candidates);
-    const executedQueries = arsenal.map((q) => q.q);
+    // אבולוציית השאילתות זקוקה ל-{q,count,error} אמיתי — בעבר הועברו מחרוזות
+    // בלבד, הפרומפט קיבל "undefined תוצאות" ורשימת השאילתות המתות הייתה ריקה תמיד.
+    const executedQueries = reports.map((r) => ({ q: r.q, count: r.count, error: r.error ?? null }));
     const statsLine = `${arsenal.length} שאילתות · ${codeHits.length} קודים · ${repoHits.length} מאגרים · ${candidates.length} מועמדים · ${enriched} הועשרו`;
 
     let swarm: SwarmResult | null = null;

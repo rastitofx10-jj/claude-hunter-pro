@@ -144,6 +144,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
     const current = await db.mission.findUnique({ where: { id: numId }, select: { status: true } });
     if (!current) return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
+    // אותו סטטוס = no-op אידמפוטנטי. בעבר הוחזר 409 מובטח ("in_progress → in_progress")
+    // בכל לחיצה על "סמן בביצוע" על משימה שכבר בביצוע — לחצן ה-UI נתקע עם טוסט שגיאה.
+    if (current.status === status) {
+      return NextResponse.json({ id: numId, status });
+    }
     if (!ALLOWED_TRANSITIONS[current.status]?.has(status)) {
       return NextResponse.json(
         { error: `מעבר לא חוקי: ${current.status} → ${status}` },

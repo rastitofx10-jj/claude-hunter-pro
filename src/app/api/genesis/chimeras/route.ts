@@ -15,7 +15,9 @@ export async function GET() {
         id: r.id,
         // שמות השדות שה-UI מצפה להם (ChimeraResponse)
         chimeraName: r.name,
-        oneLiner: r.breakthrough ?? "",
+        // הערך האמיתי שנשמר ביצירה; breakthrough רק כגיבוי לשורות ישנות
+        // (בעבר: oneLiner זויף מתוך breakthrough — הכותרת שה-AI כתב אבדה).
+        oneLiner: r.oneLiner ?? r.breakthrough ?? "",
         skillMd: r.skillMd,
         principles: safeArr(r.principles),
         workOrders: safeArr(r.workOrders),

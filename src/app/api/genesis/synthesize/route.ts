@@ -13,7 +13,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as { repos?: string[]; productContext?: string };
     repos = (body.repos ?? []).map((r) => r.trim()).filter(Boolean).slice(0, 5);
-    productContext = (body.productContext ?? "").trim();
+    // תקרת קלט — בעבר בלי גבול (mission/route.ts כבר מגביל; כאן לא היה).
+    productContext = (body.productContext ?? "").trim().slice(0, 2000);
   } catch {
     return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
   }
@@ -56,6 +57,8 @@ export async function POST(req: NextRequest) {
     const saved = await db.chimera.create({
       data: {
         name: chimera.chimeraName,
+        // בעבר לא נשמר — וההיסטוריה זייפה אותו מתוך breakthrough
+        oneLiner: chimera.oneLiner || null,
         sources: chimera.sources.join(","),
         skillMd: chimera.skillMd,
         principles: JSON.stringify(chimera.principles),
@@ -66,7 +69,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ id: saved.id, ...chimera });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "יצירת הכימרה נכשלה";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    console.error("genesis/synthesize failed", e);
+    return NextResponse.json({ error: "יצירת הכימרה נכשלה" }, { status: 500 });
   }
 }

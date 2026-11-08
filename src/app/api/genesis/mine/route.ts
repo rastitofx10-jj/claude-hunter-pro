@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { GhError } from "@/lib/github";
 import { mineDna } from "@/lib/dna-miner";
-import { resolveToken } from "@/lib/server-token";
+import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +30,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const pkg = await mineDna(owner, repo, token);
+    // הכרייה הצליחה מול GitHub — טוקן תקין מהכותרת נשמר לשימוש השרת
+    // (בעבר: analyze/harvest/rate-limit לכדו; כאן לא — אי-עקביות).
+    await captureTokenFrom(req).catch(() => undefined);
     const warnings: string[] = [];
     if (pkg.treeTruncated) {
       warnings.push("עץ הקבצים של הריפו נחתך (מאגר ענק מאוד) — ייתכן שנמצאו רק חלק מקבצי היכולת");

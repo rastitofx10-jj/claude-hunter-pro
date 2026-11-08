@@ -107,7 +107,9 @@ interface MissionDetail extends CompiledPayload {
   context: string | null;
   status: string;
   report: { outcome: string; verdict: string; lessons: string[]; bornDnaId: number | null; reportedAt: string } | null;
-  reportHistory?: { outcome: string; reportedAt: string }[];
+  // רחב במכוון — השרת שולח verdict/notes/distillMethod לכל דיווח; טיפוס צר היה שובר
+  // את הצגת ההיסטוריה (round 4: טיפוס משקר פחות מקוד שמשקר יותר).
+  reportHistory?: Record<string, unknown>[];
   autopilot: MissionAutopilot | null;
   autopilotAt: string | null;
   createdAt: string;
@@ -152,6 +154,11 @@ function normalizeDetail(d: MissionDetail): MissionDetail {
     d.report && typeof d.report === "object"
       ? { ...d.report, lessons: Array.isArray(d.report.lessons) ? d.report.lessons : [] }
       : null;
+  // היסטוריית דיווחים — נרמול הגנתי כמו כל שאר השדות (round 4: ה-GET מחזיר,
+  // ה-POST מחזיר []; עכשיו גם מוצג ב-UI במקום להיות מת)
+  const reportHistory = Array.isArray(d.reportHistory)
+    ? d.reportHistory.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+    : [];
   return {
     ...d,
     phases: Array.isArray(d.phases)
@@ -167,6 +174,7 @@ function normalizeDetail(d: MissionDetail): MissionDetail {
     selectedDna: Array.isArray(d.selectedDna) ? d.selectedDna : [],
     autopilot,
     report,
+    reportHistory,
   };
 }
 
@@ -886,6 +894,42 @@ function MissionDetailCard({
               🧬 לקח זה הונצח כיכולת חדשה בספרייה (#{m.report.bornDnaId}) — זמין כבר בהידור המשימה הבאה
             </p>
           )}
+        </div>
+      )}
+
+      {/* היסטוריית דיווחים — בעבר הגיעה מהשרת ולא הוצגה אף פעם */}
+      {(m.reportHistory?.length ?? 0) > 1 && (
+        <div className="mt-3 rounded-lg border bg-muted/30 p-3">
+          <p className="mb-1.5 text-xs font-bold text-muted-foreground">היסטוריית דיווחים ({m.reportHistory!.length})</p>
+          <ol className="space-y-1.5 border-r-2 border-muted pr-3">
+            {m.reportHistory!.map((r, i) => {
+              const outcome = typeof r.outcome === "string" ? r.outcome : "?";
+              const verdict = typeof r.verdict === "string" ? r.verdict : "";
+              const reportedAt = typeof r.reportedAt === "string" ? new Date(r.reportedAt).toLocaleString("he-IL") : "";
+              const tone =
+                outcome === "success"
+                  ? "bg-emerald-600"
+                  : outcome === "partial"
+                    ? "bg-orange-500"
+                    : "bg-rose-600";
+              return (
+                <li key={i} className="flex items-start gap-2 text-xs">
+                  <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${tone}`} aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="font-medium">
+                      {outcome === "success" ? "הצלחה" : outcome === "partial" ? "חלקית" : "כישלון"}
+                    </span>
+                    {reportedAt && <span className="text-muted-foreground"> · {reportedAt}</span>}
+                    {verdict && (
+                      <span className="block text-muted-foreground" dir="auto">
+                        {verdict}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
         </div>
       )}
 

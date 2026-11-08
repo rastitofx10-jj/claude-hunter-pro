@@ -29,3 +29,17 @@ agent-ctx/
 .vscode/
 tsconfig.tsbuildinfo
 evidence-*.png
+
+# platform workspace dirs — user uploads (contains a live GitHub PAT!) and
+# generated deliverables must NEVER be committed; this repo is public.
+upload/
+download/
+tool-results/
+.zscripts/
+dev.log
+server.log
+scripts/gh_probe.py
+
+# platform-side PDF build helpers (not repo content)
+scripts/audit-*
+scripts/audit_*.py
