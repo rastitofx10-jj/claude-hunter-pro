@@ -17,7 +17,7 @@ import {
   type Candidate,
   type QueryReport,
 } from "./deep-sweep";
-import { runSwarm, type SwarmResult } from "./intel-swarm";
+import { runSwarm, SWARM_TRIAGE_COVERAGE, type SwarmResult } from "./intel-swarm";
 import { resolveToken } from "./server-token";
 import { parseAudit } from "./auditor";
 import type { NextRequest } from "next/server";
@@ -40,10 +40,6 @@ async function reapStaleRuns(): Promise<void> {
   } catch (e) {
     console.error("[sweep] stale reaper failed", e);
   }
-}
-
-export function isRunActive(id: number): boolean {
-  return activeRuns.has(id);
 }
 
 export async function hasActiveRun(): Promise<boolean> {
@@ -90,16 +86,26 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
 
     // ---------- שלב ג׳: כריית DNA ----------
     const dnaAddedTotal = { n: 0 };
-    let reposMined = 0;
+    let reposMined = 0; // לפי ההגדרה של הדוח: מאגרים שנוגבו בלי שגיאה
+    let reposWithFindings = 0;
+    let mineErrors = 0;
     const minedReports = await mineTopCandidates(candidates, token, 8, async (done, total, rep) => {
       if (!rep.error) {
         reposMined++;
         dnaAddedTotal.n += rep.newCount;
+        if (rep.artifacts > 0) reposWithFindings++;
+      } else {
+        mineErrors++;
       }
       const progress = 52 + Math.round((done / Math.max(1, total)) * 18);
       await updateRun(runId, { progress });
     });
-    void minedReports;
+    // כישלוני כרייה לא נזרקים עוד — בעבר "3 מאגרים נכרו" הסתיר 5 כישלונות
+    // ושורת ה-DB לא רשמה אותם כלל (הסתעפות מהציד החי שכן מדווח).
+    const mineErrorList = minedReports.reports
+      .filter((r) => r.error)
+      .slice(0, 6)
+      .map((r) => `${r.repo}: ${r.error}`);
 
     const [totalLibrary, fieldDna] = await Promise.all([
       db.dnaArtifact.count(),
@@ -153,6 +159,9 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       enriched,
       hardEvidence: candidates.filter((c) => c.evidence === "hard").length,
       reposMined,
+      reposWithFindings,
+      mineErrors,
+      mineErrorList,
       dnaAdded: dnaAddedTotal.n,
       totalLibrary,
       fieldDna,
@@ -162,10 +171,11 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       elapsedMs: Date.now() - startedAt,
     };
 
-    // מיזוג פסקי הדין של הלהקה אל תוך הממצאים
+    // מיזוג פסקי הדין של הלהקה אל תוך הממצאים — רק עד כיסוי הטריאז׳ה בפועל.
+    // בעבר נשמרו 60 כשרק 36 קיבלו verdict — השורות 37-60 הציגו "ממתין" לנצח.
     const triageMap = new Map((swarm?.triage ?? []).map((t) => [t.fullName, t]));
     const profMap = new Map((swarm?.profiles ?? []).map((p) => [p.fullName, p]));
-    const findings = flat.slice(0, 60).map((c) => ({
+    const findings = flat.slice(0, SWARM_TRIAGE_COVERAGE).map((c) => ({
       ...c,
       verdict: triageMap.get(c.fullName)?.verdict ?? null,
       confidence: triageMap.get(c.fullName)?.confidence ?? null,
@@ -243,7 +253,7 @@ export function parseSweepRow(row: {
     phase: row.phase,
     progress: row.progress,
     queries: safeJsonParse<QueryReport[]>(row.queries, []),
-    stats: safeJsonParse<Record<string, number>>(row.stats, {}),
+    stats: safeJsonParse<Record<string, number | string[]>>(row.stats, {}),
     findings: safeJsonParse<unknown[]>(row.findings, []),
     briefing: safeJsonParse<Record<string, unknown> | null>(row.briefing, null),
     audit: parseAudit(row.audit),

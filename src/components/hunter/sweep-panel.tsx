@@ -46,6 +46,10 @@ interface SweepStats {
   enriched?: number;
   hardEvidence?: number;
   reposMined?: number;
+  /** מאגרים שהניבו ארטיפקטים בפועל — בעבר "נכרו" כלל מאגרים שנוגבו ללא כלום */
+  reposWithFindings?: number;
+  mineErrors?: number;
+  mineErrorList?: string[];
   dnaAdded?: number;
   totalLibrary?: number;
   fieldDna?: number;
@@ -145,6 +149,9 @@ export function SweepPanel() {
   const listQuery = useQuery({
     queryKey: ["sweep-list"],
     queryFn: () => apiFetch<{ items: SweepListItem[]; active: SweepListItem | null }>("/api/sweep", token),
+    // רענון הרשימה כל עוד יש ריצה פעילה — בעבר היא ה היסטוריה (כולל "באוויר %")
+    // התעדכנה רק בהשקה או במיקוד חלון, ונעשתה דקות מיושנות במהלך הריצה.
+    refetchInterval: (q) => (q.state.data?.active ? 4000 : false),
   });
 
   const activeId = listQuery.data?.active?.id ?? null;
@@ -167,6 +174,9 @@ export function SweepPanel() {
     mutationFn: () => apiFetch<{ ok: boolean; id: number }>("/api/sweep", token, { method: "POST" }),
     onSuccess: (data) => {
       toast({ title: "הסריקה שוגרה 🛰️", description: `ריצה #${data.id} באוויר — עוקבים אחריה עכשיו` });
+      // עקיבה אוטומטית אחרי הריצה החדשה — בעבר viewId נדבק לריצה ישנה שנבחרה קודם
+      // והמשתמש לא ראה את הריצה שזה עתה שיגר עד לחיצה ידנית.
+      setViewId(data.id);
       void qc.invalidateQueries({ queryKey: ["sweep-list"] });
     },
     onError: (e: Error) => toast({ title: "השגירה נכשלה", description: e.message, variant: "destructive" }),
@@ -225,8 +235,8 @@ export function SweepPanel() {
             {listQuery.data?.active ? `סריקה #${listQuery.data.active.id} באוויר` : "שגר סריקת עומק"}
           </Button>
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <Badge variant="outline">~25 שאילתות GitHub</Badge>
-            <Badge variant="outline">8 פרומפטים</Badge>
+            <Badge variant="outline">26 שאילתות GitHub</Badge>
+            <Badge variant="outline">‎7-10 פרומפטים (לפי היקף האליטה)</Badge>
             <Badge variant="outline">עד ~8 דקות ברקע</Badge>
           </div>
         </CardContent>
@@ -324,6 +334,7 @@ export function SweepPanel() {
 
             {/* סטטיסטיקות */}
             {stats.queriesRun ? (
+              <>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
                 {[
                   { label: "שאילתות", value: stats.queriesRun ?? 0 },
@@ -340,6 +351,16 @@ export function SweepPanel() {
                   </div>
                 ))}
               </div>
+              {/* כנות כרייה: בעבר "N מאגרים נכרו" הסתיר מאגרים שנוגבו ללא כלום וכישלוני כרייה */}
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>כרייה: {stats.reposWithFindings ?? 0}/{stats.reposMined ?? 0} מאגרים הניבו גנים</span>
+                {stats.mineErrors ? (
+                  <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300" title={(stats.mineErrorList ?? []).join(" | ")}>
+                    {stats.mineErrors} כישלוני כרייה
+                  </span>
+                ) : null}
+              </div>
+              </>
             ) : null}
 
             {/* תדריך מנהלים */}
@@ -445,7 +466,7 @@ export function SweepPanel() {
                       </thead>
                       <tbody>
                         {audit.evidenceChecks.map((c) => (
-                          <tr key={c.fullName} className={`border-t ${!c.verified ? "bg-red-50/60 dark:bg-red-950/20" : ""}`}>
+                          <tr key={c.fullName} className={`border-t ${!c.verified && !c.error ? "bg-red-50/60 dark:bg-red-950/20" : c.error ? "bg-amber-50/60 dark:bg-amber-950/20" : ""}`}>
                             <td className="max-w-44 p-2">
                               <span dir="ltr" className="block truncate text-right font-mono text-xs">{c.fullName}</span>
                             </td>
@@ -455,10 +476,14 @@ export function SweepPanel() {
                                 <span dir="ltr" className="block truncate text-right text-[10px] text-emerald-600">📄 {c.proofFile}</span>
                               )}
                             </td>
-                            <td className="p-2 text-xs font-bold">{c.filesFound}</td>
+                            <td className="p-2 text-xs font-bold">{c.error ? "—" : c.filesFound}</td>
                             <td className="p-2 text-xs">
                               {c.verified ? (
                                 <span className="font-bold text-emerald-600">✓ אומתה</span>
+                              ) : c.error ? (
+                                // שגיאת API אינה הפרכה — בעבר הוצגה כ"נסתרה" באדום
+                                // וראיית אמת נפסלה על כישלון טכני של המאמת
+                                <span className="font-bold text-amber-600" title={c.error}>⚠️ לא נבדקה (שגיאת אימות)</span>
                               ) : (
                                 <span className="font-bold text-red-600">✗ נסתרה</span>
                               )}

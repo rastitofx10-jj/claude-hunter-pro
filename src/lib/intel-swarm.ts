@@ -364,6 +364,11 @@ export interface SwarmResult {
  * וכל מי שהעביר מחרוזות גרם ל-"undefined תוצאות" בפרומפט אבולוציית השאילתות
  * ולרשימת שאילתות-מתות ריקה תמידית (באג אמיתי שסוגר כאן ברמת הטיפוס).
  */
+/** כיסוי הטריאז׳ה — מספר הממצאים שמקבלים פסק-דין מהלהקה.
+ * מיוצא כדי שהשומר והממצאים הנשמרים יסכמו תמיד לאותו מספר — בעבר נשמרו
+ * 60 ממצאים כשרק 36 קיבלו verdict, והשורות 37-60 הציגו "ממתין" לנצח. */
+export const SWARM_TRIAGE_COVERAGE = 36;
+
 export async function runSwarm(
   candidates: CandidateFlat[],
   executedQueries: { q: string; count: number; error?: string | null }[],
@@ -375,7 +380,7 @@ export async function runSwarm(
   let calls = 0;
 
   // טריאז׳ה באצוות של 12
-  const batches = chunk(candidates.slice(0, 36), 12);
+  const batches = chunk(candidates.slice(0, SWARM_TRIAGE_COVERAGE), 12);
   const triage: TriageVerdict[] = [];
   const totalPrompts = batches.length * 2 + 4;
 

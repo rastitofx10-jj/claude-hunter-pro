@@ -26,7 +26,6 @@ export interface RepoCore {
   archived?: boolean;
   license?: string | null;
   defaultBranch?: string;
-  subscribers?: number;
 }
 
 export interface CodeMatch {

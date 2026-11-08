@@ -87,15 +87,15 @@ async function llmJson(prompt: string): Promise<Record<string, unknown>> {
 
 // ---------- שלב א׳: אימות ראיות חי ----------
 
-/** קרקע-אמת: משיכת קובץ גולמי וגריפת המחרוזת — עוקף אי-עקביות של אינדקס החיפוש */
+/** קרקע-אמת: משיכת קובץ גולמי וגריפת מחרוזות. בעבר קיבלה את המחרוזות של
+ * הטענה האחרונה בלבד — כשהטענות היו שני מודלים שונים, הקובץ נגרר עם המחרוזות
+ * של המודל השני ועלול היה להיכשל בשווא ("נסתרה" למרות שהראייה אמיתית). */
 async function grepRawFile(
   fullName: string,
   path: string,
-  claimedModelId: string,
+  needles: string[],
   token: string | null
 ): Promise<string | null> {
-  const model = QUALIFYING_MODELS.find((m) => m.id === claimedModelId);
-  const needles = (model?.searchStrings ?? [claimedModelId]).map((s) => s.toLowerCase());
   try {
     const content = await ghFetchRaw(
       `/repos/${fullName}/contents/${path.split("/").map(encodeURIComponent).join("/")}`,
@@ -134,9 +134,7 @@ export async function verifyEvidenceLive(
       const claims = (f.contentEvidence ?? []).slice(0, 2);
       let filesFound = 0;
       let verifiedAny = false;
-      let lastClaim = claimed;
       for (const claim of claims) {
-        lastClaim = claim;
         const resp = await ghSearchWithBackoff<{ total_count: number }>(
           `/search/code?q=${encodeURIComponent(`${claim} repo:${f.fullName}`)}&per_page=1`,
           token
@@ -148,11 +146,16 @@ export async function verifyEvidenceLive(
         await sleep(6_500);
       }
       check = { fullName: f.fullName, claimed: claims.join(" + "), filesFound, verified: verifiedAny };
-      // קרקע-אמת: אם האינדקס מחטיא (0 קבצים) — גריפה ישירה של הקובץ שנתגלה בסריקה
+      // קרקע-אמת: אם האינדקס מחטיא (0 קבצים) — גריפה ישירה של הקובץ שנתגלה בסריקה.
+      // הגריפה משתמשת באיחוד המחרוזות של כל הטענות — בעבר רק של הטענה האחרונה
+      // (חיפוש במחרוזות של מודל B על קובץ שהתגלה דרך מודל A → הפרכה שקרית).
       if (!check.verified) {
+        const unionNeedles = claims.flatMap((c) =>
+          (QUALIFYING_MODELS.find((m) => m.id === c)?.searchStrings ?? [c]).map((s) => s.toLowerCase())
+        );
         const paths = f.evidencePaths ?? [];
         for (const p of paths) {
-          const proof = await grepRawFile(f.fullName, p, lastClaim, token);
+          const proof = await grepRawFile(f.fullName, p, unionNeedles, token);
           if (proof) {
             check = { fullName: f.fullName, claimed: claims.join(" + "), filesFound: 1, verified: true, proofFile: proof };
             break;
@@ -196,11 +199,18 @@ export async function antiSlopAudit(
   checks: EvidenceCheck[],
   findings: FindingLike[]
 ): Promise<{ specificityScore: number; slopFlags: SlopFlag[]; refutedClaims: SlopFlag[]; verdict: string }> {
-  const refuted = checks.filter((c) => !c.verified);
+  // הפרדה חוקית: שגיאת API אינה הפרכה. בעבר שורת "נסתרה" נספרה גם כשהאימות
+  // נכשל טכנית (rate-limit/רשת) — והוזרמה ל-LLM כקרקע-אמת שהראייה שקרית,
+  // וגררה את ה-precision למטה בכישלון של המערכת, לא של הממצא.
+  const errored = checks.filter((c) => !!c.error);
+  const refuted = checks.filter((c) => !c.verified && !c.error);
   const briefSample = JSON.stringify(briefing ?? {}).slice(0, 4500);
   const refutedList = refuted.length
     ? refuted.map((r) => `— ${r.fullName}: נטען "${r.claimed}" אך 0 קבצים במאגר מכילים אותה`).join("\n")
     : "(אף ראיה לא נסתרה בשלב הדטרמיניסטי)";
+  const erroredList = errored.length
+    ? errored.map((r) => `— ${r.fullName}: טענה "${r.claimed}" — האימות נכשל טכנית (${r.error})`).join("\n")
+    : "";
   const topFindings = findings
     .slice(0, 10)
     .map((f) => `— ${f.fullName}: inv=${f.investment ?? "?"} חתימה: ${(f.signature ?? "").slice(0, 120)}`)
@@ -209,10 +219,13 @@ export async function antiSlopAudit(
   const prompt = `ביקורת anti-slop על תדריך מודיעין שייצרה המערכת.
 
 1) תוצאות אימות חי (דטרמיניסטי) של ראיות ה-elite — הקרקע-אמת שאין לערער עליה:
-${checks.map((c) => `— ${c.fullName}: נטען "${c.claimed}" → ${c.filesFound} קבצים נמצאו ${c.verified ? `✓ אומתה${c.proofFile ? ` (קובץ הוכחה: ${c.proofFile})` : ""}` : "✗ נסתרה"}`).join("\n")}
+${checks.map((c) => `— ${c.fullName}: נטען "${c.claimed}" → ${c.filesFound} קבצים נמצאו ${c.error ? "⚠️ לא נבדקה (שגיאת אימות — לא לפרש כהפרכה!)" : c.verified ? `✓ אומתה${c.proofFile ? ` (קובץ הוכחה: ${c.proofFile})` : ""}` : "✗ נסתרה"}`).join("\n")}
 
-2) ראיות שנסתרו:
+2) ראיות שנסתרו (0 קבצים — קרקע-אמת):
 ${refutedList}
+
+2ב) ראיות שלא הוסקה לגביהן מסקנה (שגיאת API — אין מידע, אין לפרש כהפרכה או כאימות):
+${erroredList || "(אין)"}
 
 3) ממצאי הצמרת כפי שדווחו:
 ${topFindings}
@@ -242,9 +255,9 @@ ${briefSample}
 
 const activeAudits = new Set<number>();
 
-export function isAuditActive(id: number): boolean {
-  return activeAudits.has(id);
-}
+/** קצירת ביקורות תקועות: ביקורת "running" שלא עודכנה מעבר לזה = השרת מת
+ * באמצע. בעבר: נעילה תקועה לנצח — הכפתור מושבת וכל ניסיון חוזר מחזיר 409 לתמיד. */
+const STALE_AUDIT_MS = 15 * 60_000;
 
 async function writeAudit(id: number, audit: AuditResult): Promise<void> {
   try {
@@ -269,8 +282,11 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
       specificityScore: 0, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
     });
     const checks = await verifyEvidenceLive(findings, token);
-    const verifiedCount = checks.filter((c) => c.verified).length;
-    const precision = checks.length ? Math.round((verifiedCount / checks.length) * 100) : 0;
+    // דיוק = אומתו מתוך הנבדקו-עד-תום בלבד — שגיאות API לא נספרות במכנה
+    // (בעבר נספרו והורידו את הדיוק על כישלון של המערכת, לא של הממצא)
+    const conclusive = checks.filter((c) => !c.error);
+    const verifiedCount = conclusive.filter((c) => c.verified).length;
+    const precision = conclusive.length ? Math.round((verifiedCount / conclusive.length) * 100) : 0;
 
     // שלב ב׳
     await writeAudit(runId, {
@@ -312,14 +328,8 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
 
 /** פתיחת ביקורת ברקע */
 export async function startAudit(req: NextRequest, runId: number): Promise<void> {
-  const row = await db.sweepRun.findUnique({ where: { id: runId }, select: { id: true } });
-  if (!row) {
-    const err = new Error("הסריקה לא נמצאה");
-    (err as Error & { status?: number }).status = 404;
-    throw err;
-  }
-  // נעילה סינכרונית לפני כל await — סוגר את חלון ה-TOCTOU
-  // (בעבר: ה-ID נרשם רק בתוך executeAudit אחרי כמה await — שני POST מקביליים הריצו ביקורת כפולה)
+  // הנעילה באמת לפני כל await — בעבר ה-findUnique הראשון קדם לבדיקת הנעילה
+  // והתקיים חלון של מילי-שניות שבו שני POST מקביליים עברו שניהם (ביקורת כפולה).
   if (activeAudits.has(runId)) {
     const err = new Error("ביקורת כבר רצה על הסריקה הזו");
     (err as Error & { status?: number }).status = 409;
@@ -327,12 +337,34 @@ export async function startAudit(req: NextRequest, runId: number): Promise<void>
   }
   activeAudits.add(runId);
   try {
-    const current = await db.sweepRun.findUnique({ where: { id: runId }, select: { audit: true } });
-    const running = safeJsonParse<{ status?: string }>(current?.audit ?? null, {});
-    if (running.status === "running") {
-      const err = new Error("ביקורת כבר רצה על הסריקה הזו");
-      (err as Error & { status?: number }).status = 409;
+    const row = await db.sweepRun.findUnique({ where: { id: runId }, select: { id: true, audit: true, updatedAt: true } });
+    if (!row) {
+      const err = new Error("הסריקה לא נמצאה");
+      (err as Error & { status?: number }).status = 404;
       throw err;
+    }
+    const running = safeJsonParse<{ status?: string }>(row.audit, {});
+    if (running.status === "running") {
+      // קצירה: running בלי עדכון > 15 דקות = השרת מת באמצע הביקורת —
+      // בעבר זו הייתה נעילה תקועה לנצח (409 לנצח, כפתור מושבת).
+      const ageMs = row.updatedAt ? Date.now() - new Date(row.updatedAt).getTime() : Infinity;
+      if (ageMs < STALE_AUDIT_MS) {
+        const err = new Error("ביקורת כבר רצה על הסריקה הזו");
+        (err as Error & { status?: number }).status = 409;
+        throw err;
+      }
+      await writeAudit(runId, {
+        status: "failed",
+        stage: "failed",
+        evidenceChecks: [],
+        precision: 0,
+        specificityScore: 0,
+        slopFlags: [],
+        refutedClaims: [],
+        verdict: "",
+        llmCalls: 0,
+        error: "הביקורת נקטעה (השרת אותחל) — סימון אוטומטי",
+      });
     }
     const token = await resolveToken(req);
     void executeAudit(runId, token);

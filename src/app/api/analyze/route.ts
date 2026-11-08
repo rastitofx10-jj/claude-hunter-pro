@@ -3,6 +3,7 @@ import {
   GhError,
   ghFetch,
   ghFetchRaw,
+  ghSearchWithBackoff,
   detectClaudeModels,
   QUALIFYING_MODELS,
   tierOf,
@@ -145,20 +146,28 @@ export async function GET(req: NextRequest) {
       { key: "requirements", guesses: ["requirements.txt"] },
       { key: "envExample", guesses: [".env.example"] },
     ];
-    for (const w of wanted) {
-      if (!w.path) {
-        const plan = guessPlan.find((g) => g.key === w.key);
-        if (plan) w.path = plan.guesses[0];
-      }
-    }
-
+    // (בעבר: כאן מולא w.path מ-guesses[0] בלבד — הלולאה שלמטה מיישמת את כל הניחושים)
     const contents: Record<string, string> = {};
     for (const w of wanted) {
-      if (!w.path) continue;
-      const raw = await fetchRaw(w.path);
-      if (raw != null) {
-        contents[w.key] = raw;
-        if (w.kind) pushClaudeFile(w.path, w.kind);
+      if (w.path) {
+        const raw = await fetchRaw(w.path);
+        if (raw != null) {
+          contents[w.key] = raw;
+          if (w.kind) pushClaudeFile(w.path, w.kind);
+        }
+        continue;
+      }
+      // העץ החטיא את הקובץ — בעבר נוסתה רק הניחוש הראשון (guesses[0]);
+      // CLAUDE.local.md ו-claude.md לא נוסו לעולם למרות שהוגדרו בתוכנית.
+      const plan = guessPlan.find((g) => g.key === w.key);
+      if (!plan) continue;
+      for (const g of plan.guesses) {
+        const raw = await fetchRaw(g);
+        if (raw != null) {
+          contents[w.key] = raw;
+          if (plan.kind) pushClaudeFile(g, plan.kind);
+          break;
+        }
       }
     }
 
@@ -224,7 +233,8 @@ export async function GET(req: NextRequest) {
         if (mcpServers.length > 0) evidence.push({ kind: "mcp", label: `שרתי MCP: ${mcpServers.join(", ")}`, weight: 6 });
       } catch { /* invalid */ }
     }
-    if (contents.envExample && /anthropic|claude/i.test(contents.envExample)) {
+    if (contents.envExample && /ANTHROPIC_API_KEY\s*=/.test(contents.envExample)) {
+      // הידוק: בעבר די היה ב-/anthropic|claude/i — שורת CLAUDE_CODE_PORT= זכתה ב-12 נקודות "חיבור API בתשלום"
       evidence.push({ kind: "env", label: "ANTHROPIC_API_KEY ב-.env.example — חיבור API בתשלום", weight: 12 });
     }
 
@@ -267,19 +277,28 @@ export async function GET(req: NextRequest) {
 
     if (token) {
       // רק מודלים מזכים (5.5+) — משפחת 4.x לא נסרקת ולא נחשבת כלל.
-      // כל הרישום (6 מודלים) — בעבר slice(0,4) השמיט Opus 6.5/7 לחלוטין.
+      // סדר ארוך-קודם + דילוג מזהים שנכללו: חיפוש מזוהה הוא תת-מחרוזת —
+      // "claude-opus-6" תפס גם מאגרים של 6-5 בלבד, ודיווח שקרי על Opus 6.
       const kws: [string, string, number][] = QUALIFYING_MODELS.map((m) => [
         m.searchStrings[0],
         m.label,
         m.weight,
-      ]);
-      for (const [kw, label, weight] of kws) {
+      ] as [string, string, number]).sort((a, b) => b[0].length - a[0].length);
+      const foundLong: string[] = []; // מזהים שנמצאו באמת — מזהה קצר יותר שהוא תת-מחרוזת שלהם לא ייחפש
+      for (let i = 0; i < kws.length; i++) {
+        const [kw, label, weight] = kws[i];
+        const lowerKw = kw.toLowerCase();
+        if (foundLong.some((f) => f.toLowerCase().includes(lowerKw))) continue; // מיוצג כבר ע"י מזהה ארוך יותר
         try {
-          const r = await ghFetch<{ total_count: number }>(
+          // backoff מובנה במקום טיפול-403 ידני + 1.5s קבוע גם אחרי השאילתה האחרונה
+          const r = await ghSearchWithBackoff<{ total_count: number }>(
             `/search/code?q=${encodeURIComponent(`repo:${full} "${kw}"`)}&per_page=1`,
             token
           );
-          if (r.total_count > 0) addModel(kw, label, weight, "code-search", r.total_count, true);
+          if ((r.total_count ?? 0) > 0) {
+            addModel(kw, label, weight, "code-search", r.total_count, true);
+            foundLong.push(kw);
+          }
         } catch (e) {
           if (e instanceof GhError && [403, 429].includes(e.status)) {
             warnings.push("חיפוש הקוד הושהה — מכסת החיפוש נגמרה זמנית");
@@ -287,8 +306,7 @@ export async function GET(req: NextRequest) {
           }
           // 422 = qualifier problem etc — continue silently
         }
-        // מרווח קצר בין שאילתות קוד — מכסת code-search אגרסיבית (10 לדקה)
-        await new Promise((r) => setTimeout(r, 1500));
+        if (i < kws.length - 1) await new Promise((res) => setTimeout(res, 1500));
       }
     } else {
       warnings.push("ללא טוקן לא מבוצע חיפוש קוד פנימי-מאגרי (רק סריקת קבצים מטא-נתונים)");
@@ -315,7 +333,11 @@ export async function GET(req: NextRequest) {
     // ---------- scoring ----------
     // ציון מודלים: מזכים בלבד. אין 5.5+ → אפס נקודות מודל.
     const modelScore = qualifyingList.length > 0 ? Math.min(45, qualifyingList[0].weight) : 0;
-    const paidScore = Math.min(30, evidence.reduce((s, e) => s + e.weight, 0));
+    // ראיות תשלום אמיתיות בלבד: תלות-SDK (dep), מפתח API (env), שרתי MCP, אזכורי עלות.
+    // בעבר: כל הראיות — כולל מבניות (CLAUDE.md/פקודות/סוכנים/README) — נספרו לעמודה
+    // "ראיות תשלום ו-API", ומאגר מבני טהור הגיע ל-30/30 בלי שום חיבור בתשלום.
+    const paidKinds = new Set(["dep", "env", "mcp", "cost"]);
+    const paidScore = Math.min(30, evidence.filter((e) => paidKinds.has(e.kind)).reduce((s, e) => s + e.weight, 0));
     const tractionScore = Math.min(
       25,
       satScore(meta.stargazers_count, 15, 10000) + satScore(meta.forks_count, 5, 1000) + satScore(contributors, 5, 30)
@@ -357,7 +379,14 @@ export async function GET(req: NextRequest) {
     if (qualifyingList.some((m) => m.weight >= 40)) insights.push("משתמש במודל דגל 5.5+ (Opus 5.5/Fable ומעלה) — הפרויקט מוכיח שהמשימות מצדיקות מודל יקר; כדאי לבחון אילו זרימות מנצלות את זה");
     if (depsFound.length > 0) insights.push(`ערימת SDK: ${depsFound.join(", ")} — נקודת פתיחה טובה להבנת האינטגרציה`);
     if (priceMentions.length > 0 || tokenMentions.length > 0) insights.push("יש אזכורי עלות/טוקנים ב-README — אינדיקציה לשימוש אמיתי בתשלום בהיקף משמעותי");
-    if (contributors > 5) insights.push(`${contributors} תורמים — פרויקט חי עם קהילה, לא ניסוי אישי`);
+    if (contributors > 5) {
+      // ה-API חותך ב-100 — בעבר מאגר עם 500 תורמים דווח כ"100 תורמים"
+      insights.push(
+        contributors >= 100
+          ? "100+ תורמים (חיתוך של ה-API) — פרויקט חי עם קהילה, לא ניסוי אישי"
+          : `${contributors} תורמים — פרויקט חי עם קהילה, לא ניסוי אישי`
+      );
+    }
 
     const repoCore: RepoCore = {
       id: meta.id,

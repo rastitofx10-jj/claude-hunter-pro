@@ -83,7 +83,8 @@ const fadeUp: Variants = {
 export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
   const token = useHunterStore((s) => s.token);
   const mounted = useHydrated();
-  const hasToken = mounted && (!!token || token === SERVER_TOKEN);
+  // (בעבר: !!token || token === SERVER_TOKEN — הפסקה השנייה תמיד-אמת כשהראשונה אמיתית)
+  const hasToken = mounted && !!token;
 
   const { data: missionData } = useQuery({
     queryKey: ["missions"],

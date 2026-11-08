@@ -14,7 +14,7 @@ export function RateChip() {
   const token = useHunterStore((s) => s.token);
   const mounted = useHydrated();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ["rate", token],
     queryFn: () => apiFetch<RateInfo>("/api/rate-limit", token),
     enabled: mounted,
@@ -34,7 +34,7 @@ export function RateChip() {
             <Gauge className={`h-4 w-4 ${low ? "text-red-500" : "text-emerald-600"}`} />
             {isLoading || !mounted
               ? "…"
-              : data?.error
+              : isError
                 ? "שגיאת טוקן"
                 : hasToken
                   ? `${remaining ?? "?"}/${limit ?? "?"}`

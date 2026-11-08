@@ -38,6 +38,7 @@ export function TokenBanner() {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [masked, setMasked] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const hasToken = mounted && !!token;
@@ -86,10 +87,8 @@ export function TokenBanner() {
   const save = async () => {
     const t = draft.trim();
     if (!t) return;
-    setToken(t);
-    setEditing(false);
-    setDraft("");
-    // שמירה גם בשרת — כך הניתוחים עובדים גם בלי הכותרת, ושורדים רענון
+    // השמירה האמיתית היא בשרת; הלקוח עובר לסנטינל בלבד — PAT גולמי לא נכנס
+    // ל-state ולא נשמר ב-localStorage (בעבר: setToken(t) שמר את הטוקן הגולמי בדפדפן לנצח).
     try {
       const res = await fetch("/api/settings/token", {
         method: "POST",
@@ -97,9 +96,17 @@ export function TokenBanner() {
         body: JSON.stringify({ token: t }),
       });
       const info = (await res.json().catch(() => null)) as ServerTokenInfo | null;
-      if (info?.exists && info.masked) setMasked(info.masked);
+      if (info?.exists && info.masked) {
+        setMasked(info.masked);
+        setToken(SERVER_TOKEN);
+        setEditing(false);
+        setDraft("");
+        setSaveError(null);
+      } else {
+        setSaveError("השמירה בשרת לא הצליחה — נסה שוב");
+      }
     } catch {
-      // best-effort — הטוקן יילכד אוטומטית בבקשה המאומתת הבאה
+      setSaveError("השמירה בשרת לא הצליחה — נסה שוב");
     }
   };
 
@@ -198,12 +205,18 @@ export function TokenBanner() {
           >
             אין טוקן? יצירה ב-GitHub (30 שניות, בלי הרשאות מיוחדות) <ExternalLink className="h-3 w-3" />
           </a>
-          <span>הטוקן נשמר בדפדפן שלך ובשרת המקומי, ומועבר רק ל-GitHub API.</span>
+          <span>הטוקן נשמר בשרת המקומי בלבד (לא בדפדפן), ומועבר רק ל-GitHub API.</span>
+          {saveError && (
+            <span role="alert" className="inline-flex items-center gap-1 font-medium text-red-600 dark:text-red-400">
+              <XCircle className="h-3.5 w-3.5" /> {saveError}
+            </span>
+          )}
           {hasToken && (
             <button
               onClick={() => {
                 setEditing(false);
                 setDraft("");
+                setSaveError(null);
               }}
               className="inline-flex items-center gap-1 hover:text-foreground"
             >
@@ -219,7 +232,8 @@ export function TokenBanner() {
   const core = data?.core;
   // טוקן אמיתי = מכסה 5,000. אורח = 60. אם המכסה ברמת אורח — הטוקן לא באמת עובד.
   const tokenLevelQuota = (core?.limit ?? 0) >= 1000;
-  const ok = !error && !!data && !data.error && tokenLevelQuota;
+  // data?.error מת לכאן — apiFetch זורק חריגה על גוף שגיאה; הערך לעולם לא מגיע כ-data
+  const ok = !error && !!data && tokenLevelQuota;
   const search = data?.search;
 
   return (

@@ -6,7 +6,7 @@
 // דיווח שדה ← זיקוק לקחים ← DNA חדש נולד — הספרייה מחכימה מכל משימה
 // ============================================================
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Target,
@@ -73,7 +73,7 @@ interface CompiledPayload {
   phases: MissionPhase[];
   promptSequence: MissionPrompt[];
   skillMd: string;
-  skillMdSource?: "ai" | "fallback";
+  skillMdSource?: "ai" | "fallback" | "unknown";
   risks: string[];
   successCriteria: string[];
   selectedDna: SelectedDna[];
@@ -91,6 +91,8 @@ interface MissionListItem {
 }
 interface MissionListResponse {
   items: MissionListItem[];
+  /** סך הכול ב-DB — בעבר הכותרת הציגה items.length (חסום 50) והשאר נעלם */
+  total?: number;
   stats: { totalDna: number; fieldDna: number };
 }
 interface MissionAutopilotFailure {
@@ -129,7 +131,10 @@ interface ReportResponse {
   distillMethod?: "ai" | "local";
   verdict: string;
   lessons: string[];
-  bornDna: { id: number | null; name: string; description: string } | null;
+  bornDna: { id: number | null; name?: string; description?: string; birthError?: string | null } | null;
+  /** הסטטוס בפועל שנכתב בשרת (לפי חוק קדימה-בלבד) — בעבר הלקוח חזה לבד וסטה */
+  finalStatus?: string;
+  historyCount?: number;
 }
 
 // ---------- constants ----------
@@ -276,16 +281,19 @@ export function MissionControlPanel() {
     onSuccess: (data, vars) => {
       setReportOpen(false);
       setNotes("");
+      // סנכרון מהשרת במקום חיזוי לקוחי — בעבר הלקוח חישב סטטוס לבד
+      // (דיווח failed על משימה done השאיר "done" בשרת אבל "failed" במסך,
+      // ו-reportHistory לא נוסף כלל).
       setDetail((d) =>
         d && d.id === vars.missionId
-          ? { ...d, status: outcome === "success" ? "done" : outcome, report: { outcome, verdict: data.verdict, lessons: data.lessons, bornDnaId: data.bornDna?.id ?? null, reportedAt: new Date().toISOString() } }
+          ? { ...d, status: data.finalStatus ?? (outcome === "success" ? "done" : outcome) }
           : d
       );
       void qc.invalidateQueries({ queryKey: ["missions"] });
       void qc.invalidateQueries({ queryKey: ["dna-library"] });
       toast({
-        title: data.bornDna ? "לקחים זוקקו · DNA חדש נולד 🧬" : data.distillMethod === "local" ? "הדיווח נשמר (זיקוק AI לא זמין)" : "לקחים זוקקו ✅",
-        description: data.bornDna ? `נולד: ${data.bornDna.name} — הספרייה מחכימה` : data.verdict,
+        title: data.bornDna ? (data.bornDna.id ? "לקחים זוקקו · DNA חדש נולד 🧬" : "לקחים זוקקו · לידת DNA נכשלה") : data.distillMethod === "local" ? "הדיווח נשמר (זיקוק AI לא זמין)" : "לקחים זוקקו ✅",
+        description: data.bornDna ? (data.bornDna.id ? `נולד: ${data.bornDna.name ?? ""} — הספרייה מחכימה` : `${data.bornDna.birthError ?? "שגיאת לידה"} — הדיווח נשמר`) : data.verdict,
       });
     },
     onError: (e: Error) => toast({ title: "זיקוק הדיווח נכשל", description: e.message, variant: "destructive" }),
@@ -296,8 +304,14 @@ export function MissionControlPanel() {
   // ניתוק/ריסטרט לא מאבד כלום, וההתקדמות נראית שלב-שלב.
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [autopilotProgress, setAutopilotProgress] = useState("");
-  // דגל ביטול: אינטראקציות אחר לולאה פתוחה לא מבצעות setState אחרי unmount
+  // דגל ביטול: כשהפאנל מתפרק באמצע ריצה (ניווט לשונית אחרת) הלולאה לא תבצע
+  // setState אחרי unmount. בעבר הדגל הוגדר ונבדק אך שום דבר לא הפעיל אותו אף פעם.
   const autopilotCancelRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      autopilotCancelRef.current = true;
+    };
+  }, []);
 
   const runAutopilot = async (id: number) => {
     if (autopilotRunning) return;
@@ -307,6 +321,7 @@ export function MissionControlPanel() {
     const currentToken = useHunterStore.getState().token;
     let okSteps = 0;
     let failSteps = 0;
+    let alreadyComplete = false;
     try {
       for (let guard = 0; guard < 12; guard++) {
         if (autopilotCancelRef.current) return; // בוטל — בלי toast ובלי setState
@@ -315,6 +330,11 @@ export function MissionControlPanel() {
         if (autopilotCancelRef.current) return;
         if (data.executed) okSteps++;
         if (data.failure) failSteps++;
+        if (guard === 0 && data.done && !data.executed && !data.failure) {
+          // המשימה כבר בוצעה במלואה — לא כישלון. בעבר הוצג טוסט הרסני "הריצה נכשלה".
+          alreadyComplete = true;
+          break;
+        }
         setAutopilotProgress(
           data.executed
             ? `הושלם שלב ${data.executed.phaseIndex + 1}/${data.totalPhases}: ${data.executed.title}`
@@ -329,9 +349,11 @@ export function MissionControlPanel() {
         if (!data.executed && !data.failure) break; // תקיעה — לא להיתקע בלולאה
       }
       toast({
-        title: okSteps > 0 ? "הטייס האוטומטי נחת 🚀" : "הריצה נכשלה",
-        description: `בוצעו ${okSteps} שלבים בהצלחה${failSteps > 0 ? ` · ${failSteps} כשלים` : ""} — התוצרים נשמרו`,
-        variant: okSteps > 0 ? undefined : "destructive",
+        title: alreadyComplete ? "המשימה כבר בוצעה במלואה" : okSteps > 0 ? "הטייס האוטומטי נחת 🚀" : "הריצה נכשלה",
+        description: alreadyComplete
+          ? "אין שלבים ממתינים — אפשר לדווח מהשדה"
+          : `בוצעו ${okSteps} שלבים בהצלחה${failSteps > 0 ? ` · ${failSteps} כשלים` : ""} — התוצרים נשמרו`,
+        variant: okSteps > 0 || alreadyComplete ? undefined : "destructive",
       });
     } catch (e) {
       // ניתוק באמצע לא מאבד את מה שנשמר — אפשר פשוט להמשיך מהשלב הבא
@@ -343,6 +365,9 @@ export function MissionControlPanel() {
     } finally {
       setAutopilotRunning(false);
       setAutopilotProgress("");
+      // סנכרון מלא מהשרת — בעבר הלקוח חזה סטטוס לבד והסתטה מהאמת
+      // (ריצה שנגמרה בכישלון מלא השאירה "בביצוע" במסך עד ריענון).
+      void loadDetail(id).catch(() => undefined);
       void qc.invalidateQueries({ queryKey: ["missions"] });
     }
   };
@@ -469,7 +494,13 @@ export function MissionControlPanel() {
               onCopy={copyText}
               onStatus={(s) => statusM.mutate({ id: detail.id, status: s })}
               onReport={() => setReportOpen(true)}
-              onDelete={() => deleteM.mutate(detail.id)}
+              onDelete={() => {
+                // אישור לפני מחיקה — בעבר לחיצה אחת מחקה לצמיתות את המשימה,
+                // התוצרים והיסטוריית הדיווחים (ועכשיו גם את ה-DNA שנולד ממנה).
+                if (window.confirm("למחוק את המשימה?\nהפעולה תמחק גם את ה-DNA שנולד ממנה ואת היסטוריית הדיווחים — לא ניתן לשחזר.")) {
+                  deleteM.mutate(detail.id);
+                }
+              }}
               onAutopilot={() => void runAutopilot(detail.id)}
               busy={statusM.isPending || deleteM.isPending}
               autopilotRunning={autopilotRunning}
@@ -481,7 +512,7 @@ export function MissionControlPanel() {
         {/* עמודת ההיסטוריה */}
         <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="משימות קודמות">
           <p className="mb-3 flex items-center gap-2 text-sm font-bold">
-            <ListChecks className="h-4 w-4 text-violet-600" /> משימות ({items.length})
+            <ListChecks className="h-4 w-4 text-violet-600" /> משימות ({listData?.total ?? items.length})
           </p>
           {listLoading ? (
             <div className="space-y-2">
@@ -653,6 +684,11 @@ function MissionDetailCard({
             {m.skillMdSource === "fallback" && (
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="יצירת ה-SKILL.md ב-AI נכשלה — נעשה שימוש בגיבוי המקומי">
                 SKILL.md: גיבוי מקומי
+              </span>
+            )}
+            {m.skillMdSource === "unknown" && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title={'שורה שהודרה לפני עידן סימון המקור — בעבר הוצגה כ־AI בטעון'}>
+                SKILL.md: מקור לא מסומן
               </span>
             )}
           </div>

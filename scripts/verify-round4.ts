@@ -25,6 +25,9 @@ import {
   isTimeoutError,
   markTimeoutError,
 } from "../src/lib/ai-json";
+import { advanceStatus, STATUS_RANK } from "../src/lib/mission-status";
+import { parseAutopilotState } from "../src/lib/autopilot";
+import { scoreCandidateInPlace, type Candidate } from "../src/lib/deep-sweep";
 
 // ---------- tiny harness ----------
 let passed = 0;
@@ -159,6 +162,48 @@ ok(!isTimeoutError(new Error("x")), "plain error → isTimeoutError false");
   }
 }
 
+// ---------- A. UNIT — round 6 ----------
+section("A. UNIT — round 6: status law, transient failures, score recompute");
+
+// חוק הסטטוס החד-כיווני — מקור יחיד (mission-status)
+ok(advanceStatus("done", "in_progress") === "done", "advanceStatus: done לא נרמס חזרה ל-in_progress");
+ok(advanceStatus("partial", "done") === "done", "advanceStatus: partial → done מותר");
+ok(advanceStatus("compiled", "in_progress") === "in_progress", "advanceStatus: compiled → in_progress מותר");
+ok(advanceStatus("in_progress", "partial") === "partial", "advanceStatus: in_progress → partial מותר");
+ok((STATUS_RANK["done"] ?? -1) > (STATUS_RANK["in_progress"] ?? -1), "STATUS_RANK: done מדורג מעל in_progress");
+
+// טייס אוטומטי: כישלון חולף (transient) נשמר עם מונה ניסיונות; מחרוזת היסטורית = צמית
+{
+  const st = parseAutopilotState(JSON.stringify({
+    steps: [{ phaseIndex: 0, title: "א", deliverable: "d", executedAt: "2026-01-01T00:00:00Z" }],
+    failures: [{ phaseIndex: 1, error: "פסק זמן", transient: true, attempts: 1 }],
+  }));
+  ok(st.failures.length === 1 && st.failures[0].transient === true && st.failures[0].attempts === 1,
+    "parseAutopilotState: transient/attempts נשמרים (ניסיון חוזר לכישלון חולף)");
+  const legacy = parseAutopilotState(JSON.stringify({ steps: [], failures: ["שלב 2 (כותרת): בלה"] }));
+  ok(legacy.failures.length === 1 && legacy.failures[0].transient === false && (legacy.failures[0].attempts ?? 0) >= 2,
+    "parseAutopilotState: מחרוזת היסטורית = כישלון צמית (ללא ניסיון חוזר)");
+  const perm = parseAutopilotState(JSON.stringify({ steps: [], failures: [{ phaseIndex: 2, error: "JSON", transient: true, attempts: 2 }] }));
+  ok((perm.failures[0].attempts ?? 0) >= 2, "attempts=2 = צמית — אין ניסיון שלישי");
+}
+
+// חישוב מחדש של ציון אחרי העשרת כוכבים — הבאג שעיוות את הדירוג אחרי enrichment
+{
+  const mk = (stars: number): Candidate => ({
+    fullName: "o/r", stars, description: "claude opus 6.5 agent",
+    pushedAt: null, topics: ["ai"], contentEvidence: ["claude-opus-6-5"],
+    textEvidence: [], evidencePaths: [], modelStrings: [], capabilityHits: 2,
+    evidence: "none", score: 0, via: ["code"], defaultBranch: null,
+  } as Candidate);
+  const before = mk(0);
+  scoreCandidateInPlace(before);
+  const after = mk(10_000);
+  scoreCandidateInPlace(after);
+  ok(after.score > before.score + 10,
+    `scoreCandidateInPlace: ציון עולה אחרי העשרה (0★=${before.score} → 10K★=${after.score}) — ה"דירוג מחדש" בעבר מיין לפי הציון הישן`);
+  ok(after.evidence === "hard", "scoreCandidateInPlace: contentEvidence → hard");
+}
+
 // ---------- B. API ----------
 section("B. API — smoke tests against :3000");
 
@@ -222,6 +267,40 @@ if (!serverUp) {
     body: JSON.stringify({ mode: "repos", query: "x" }),
   });
   ok(csrf.status === 403, "cross-origin mutation blocked by middleware (403)");
+
+  // ---------- round 6 live ----------
+  ok(Array.isArray((await j("/api/mission")).body?.items), "mission list OK (pre-round-6)");
+  {
+    const ml = (await j("/api/mission")).body as { total?: number; items?: unknown[] } | null;
+    ok(typeof ml?.total === "number" && ml.total >= (ml.items?.length ?? 0),
+      `mission list מחזיר total אמיתי (total=${ml?.total}, items=${ml.items?.length ?? 0})`);
+  }
+  {
+    // apiFetch מצרף את גוף השגיאה ל-Exception (payload) — המשאבה של הציד החי תלויה בזה
+    const { apiFetch } = await import("../src/lib/api-client");
+    let payloadSeen = false;
+    let msg = "";
+    try {
+      await apiFetch<{ error?: string }>(`${BASE}/api/dna-library/999999`, "");
+    } catch (e) {
+      payloadSeen = !!(e as { payload?: unknown }).payload && typeof (e as { payload?: { error?: string } }).payload?.error === "string";
+      msg = (e as Error).message;
+    }
+    ok(payloadSeen, `apiFetch זורק Error עם payload (הודעה: ${msg.slice(0, 40)})`);
+  }
+  {
+    // capture רק אחרי אימות GitHub: טוקן זבל בכותרת → 401, והטוקן השמור לא מוחלף בזבל
+    const garbage = "ghp_" + "zz".repeat(20); // עובר looksLikeToken, נכשל מול GitHub
+    const before = (await j("/api/settings/token")).body as { masked?: string | null } | null;
+    const res = await fetch(`${BASE}/api/rate-limit`, {
+      headers: { "Content-Type": "application/json", "x-gh-token": garbage },
+      signal: AbortSignal.timeout(20000),
+    });
+    const after = (await j("/api/settings/token")).body as { masked?: string | null } | null;
+    ok(res.status === 401, `טוקן זבל בכותרת → 401 מ-GitHub (קיבלנו ${res.status})`);
+    ok(before?.masked === after?.masked && !!after?.masked,
+      `capture רץ רק אחרי הצלחת GitHub — הטוקן השמור לא הוחלף בזבל (${after?.masked ?? "?"})`);
+  }
 }
 
 // ---------- summary ----------
