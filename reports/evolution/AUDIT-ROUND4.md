@@ -124,3 +124,44 @@ bunx prisma db push
 bun run dev                 # or: bun run build && bun run start
 bun run verify              # 52-check suite (unit + API smoke)
 ```
+
+## 6. Post-delivery hotfix (2026-11-09): invisible content under 1024px
+
+**Symptom (user report, in Hebrew):** "the display shows nothing — it came out really
+broken." Reproduced: on ANY viewport narrower than the `lg` breakpoint (phones, tablets,
+and desktop windows at 125–150% OS scaling), the page rendered the top bar and the nav
+chips, and the entire content area was invisible.
+
+**Root cause (`src/app/page.tsx`):** the content row was `flex` (row) at every
+breakpoint. Its children were the mobile nav wrapper `w-full lg:hidden` (flex-basis
+100%) and `<main className="min-w-0 flex-1">` (basis 0%). Basis sum = exactly the
+container width, so there was no free space for `flex-grow` to distribute: **`<main>`
+computed to 0px wide** — content existed in the DOM (1,959px tall) but was squeezed to
+zero width. Every tab was affected, because all panels render inside `<main>`.
+
+Secondary defect in the same block: the mobile nav's `sticky top-[57px]` sat on a child
+whose wrapper was exactly its own height — a sticky element has zero stick range inside
+an equal-sized parent, so the chip bar never actually stuck during scroll.
+
+**Fix (commit `6ad9725`):**
+1. `flex-col` below `lg` (nav stacked above content, `main` stretches full width),
+   `lg:flex-row` restores the sidebar+content row on desktop.
+2. `sticky`/`z-30` moved onto the mobile-nav wrapper itself.
+
+**Verification matrix (agent-browser + VLM, both `next dev` and the standalone
+production server):**
+
+| Check | Result |
+|---|---|
+| `main` computed width at 390 / 900 / 1023 / 1440px | 390 / 900 / 1023 / full ✓ (was **0** below lg) |
+| All 8 tabs at 390px — visible content, no horizontal overflow outside scroll rails | 8/8 ✓ |
+| Light & dark theme (toggle + `prefers-color-scheme`) | ✓ |
+| Ctrl+K command palette opens, Escape closes | ✓ |
+| Console / page errors (dev + production) | 0 |
+| `typecheck` · `lint` · `verify` | 0 errors · 0 errors · 52/52 |
+| Production build + standalone start (README path) | exit 0, all 24 routes |
+
+**Process lesson recorded:** the round-4 UI review checked desktop 1440px and
+mobile-width *element presence*, but never measured `<main>`'s computed width below
+`lg`. Visual verification now asserts non-zero content width at every breakpoint, not
+just "no console errors".
