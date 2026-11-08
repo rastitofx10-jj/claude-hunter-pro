@@ -3,6 +3,8 @@ import { generateBattleSynthesis, IntelError } from "@/lib/ai-intel";
 import type { WatchItem } from "@/lib/hunter-types";
 
 export const dynamic = "force-dynamic";
+// worst-case: 2 attempts × 110s through the serial LLM queue — בעבר לא הוגדר בכלל
+export const maxDuration = 120;
 
 // POST /api/synthesis — סינתזת קרב חוצת-ריפואים מרשימת המעקב
 export async function POST(req: NextRequest) {
@@ -13,8 +15,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
   }
 
+  // ולידציה מלאה לפני הפרומפט: בעבר שדות לא-מספריים זרמו לפרומפט כ"ציון undefined/100"
   const items = (body.items ?? []).filter(
-    (i) => i && typeof i.fullName === "string" && i.fullName.includes("/")
+    (i) =>
+      i &&
+      typeof i.fullName === "string" &&
+      i.fullName.includes("/") &&
+      (i.score === undefined || typeof i.score === "number") &&
+      (i.stars === undefined || typeof i.stars === "number")
   );
   if (items.length < 2) {
     return NextResponse.json(

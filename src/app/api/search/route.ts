@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { GhError, ghFetch, computeListScore, isBlockedModelString, THRESHOLD_RULE_TEXT } from "@/lib/github";
+import { batchRepoMeta } from "@/lib/harvester";
 import type { SearchBody, ScoredRepo, RepoCore, CodeMatch } from "@/lib/hunter-types";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
+
+/** אינטרזו ל-URL — בעבר הוכנס גולמי מהלקוח (אינדקס עלול להזריק qualifiers) */
+const SORT_ENUM = new Set(["stars", "forks", "updated", "best"]);
+const LANG_RE = /^[\w.+#-]{1,24}$/; // שמות שפות של GitHub: C++, C#, Objective-C
 
 interface GhRepoItem {
   id: number;
@@ -87,9 +92,15 @@ export async function POST(req: NextRequest) {
   const parts: string[] = [];
   const q = (body.query ?? "").trim();
   if (q) parts.push(q);
-  for (const t of body.topics ?? []) if (t.trim()) parts.push(`topic:${t.trim()}`);
+  // topic: אינו נתמך בחיפוש קוד (422 מובטח) — בעבר הוזרק בשני המצבים
+  // ושבר את ה-UX של שילוב נפוץ: נושא + מצב קוד.
+  if (mode === "repos") {
+    for (const t of body.topics ?? []) if (t.trim()) parts.push(`topic:${t.trim()}`);
+  }
   if (body.model?.trim()) parts.push(`"${body.model.trim()}"`);
-  if (body.language?.trim()) parts.push(`language:${body.language.trim()}`);
+  // שפה: ולידציה + הרכבה בטוחה — בעבר טקסט חופשי מהלקוח הוזרק ישר ל-URL
+  const lang = body.language?.trim() ?? "";
+  if (lang && LANG_RE.test(lang)) parts.push(`language:${lang}`);
 
   if (mode === "repos") {
     if (body.minStars && body.minStars > 0) parts.push(`stars:>=${body.minStars}`);
@@ -113,7 +124,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "נדרש תנאי חיפוש אחד לפחות" }, { status: 400 });
   }
 
-  const sortQ = mode === "repos" && body.sort && body.sort !== "best" ? `&sort=${body.sort}&order=desc` : "";
+  // ולידציה במקום אמון עץ-בעץ — בעבר sort גולמי מהלקוח הוזרק ל-URL
+  const sort = body.sort && SORT_ENUM.has(body.sort) ? body.sort : "best";
+  const sortQ = mode === "repos" && sort !== "best" ? `&sort=${encodeURIComponent(sort)}&order=desc` : "";
 
   try {
     if (mode === "repos") {
@@ -138,16 +151,23 @@ export async function POST(req: NextRequest) {
       if (body.ownerType && body.ownerType !== "any") {
         items = items.filter((i) => i.owner?.type === (body.ownerType === "user" ? "User" : "Organization"));
       }
-      // save history (best effort)
+      // היסטוריה חכמה: דף חדש באותו חיפוש לא יוצר שורה חדשה — בעבר דפדוף בין
+      // 5 עמודים יצר 5 שורות זהות וההיסטוריה לא התכנסה אף פעם.
+      const filtersKey = JSON.stringify({ ...body, page: undefined });
       try {
-        await db.searchHistory.create({
-          data: {
-            mode,
-            query: querySent,
-            filters: JSON.stringify(body),
-            resultCount: items.length,
-          },
-        });
+        const last = await db.searchHistory.findFirst({ orderBy: { id: "desc" }, select: { mode: true, query: true, filters: true } });
+        const lastKey = last ? JSON.stringify({
+          mode: last.mode,
+          query: last.query,
+          // שורות ישנות נכתבו עם page בתוך ה-filters — מנרמל לפני ההשוואה
+          filters: last.filters ? JSON.stringify({ ...JSON.parse(last.filters), page: undefined }) : "",
+        }) : "";
+        const thisKey = JSON.stringify({ mode, query: querySent, filters: filtersKey });
+        if (lastKey !== thisKey) {
+          await db.searchHistory.create({
+            data: { mode, query: querySent, filters: filtersKey, resultCount: items.length },
+          });
+        }
       } catch {
         // history is non critical
       }
@@ -187,6 +207,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // העשרת כוכבים לפי חיפוש-קוד: אובייקט ה-repository בתשובת REST אינו כולל
+    // stargazers_count ("minimal") — בעבר כל כרטיס מצב קוד הציג ⭐0, מדד ההשקעה
+    // קיבל 0 עלות-משיכה ומיון כוכבים היה חסר משמעות. עכשיו: 1-2 קריאות GraphQL
+    // (עלות 1 נקודה, אותו מנגנון שהוכח ב-harvester) מחזירות כוכבים אמיתיים.
+    const needStars = Array.from(groups.values()).filter((g) => (g.repo.stars ?? 0) === 0).map((g) => g.repo.fullName);
+    if (needStars.length > 0) {
+      const metaMap = await batchRepoMeta(needStars, token);
+      for (const g of groups.values()) {
+        const m = metaMap.get(g.repo.fullName);
+        if (m && m.stars > 0) g.repo.stars = m.stars;
+      }
+    }
+
     // ⛔ חוק החסימה המלאה גם במצב קוד: מאגרים שמציגים רק 4.x — מוסתרים
     let blockedHidden = 0;
     let items: ScoredRepo[] = [];
@@ -202,21 +235,27 @@ export async function POST(req: NextRequest) {
     if (body.ownerType && body.ownerType !== "any") {
       items = items.filter((i) => i.owner?.type === (body.ownerType === "user" ? "User" : "Organization"));
     }
-    if (body.sort === "stars") items.sort((a, b) => b.stars - a.stars);
-    else if (body.sort === "updated") items.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
-    else if (body.sort === "forks") items.sort((a, b) => b.forks - a.forks);
-    else if (body.sort === "best" || !body.sort) items.sort((a, b) => b.score - a.score);
+    if (sort === "stars") items.sort((a, b) => b.stars - a.stars);
+    else if (sort === "updated") items.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
+    else if (sort === "forks") items.sort((a, b) => b.forks - a.forks);
+    else items.sort((a, b) => b.score - a.score);
     items = items.slice(0, 30);
 
+    // היסטוריה חכמה (זהה למצב מאגרים) — דף/ריצה חוזרת לא מכפילה שורות
+    const codeFiltersKey = JSON.stringify({ ...body, page: undefined });
     try {
-      await db.searchHistory.create({
-        data: {
-          mode,
-          query: querySent,
-          filters: JSON.stringify(body),
-          resultCount: items.length,
-        },
-      });
+      const last = await db.searchHistory.findFirst({ orderBy: { id: "desc" }, select: { mode: true, query: true, filters: true } });
+      const lastKey = last ? JSON.stringify({
+        mode: last.mode,
+        query: last.query,
+        filters: last.filters ? JSON.stringify({ ...JSON.parse(last.filters), page: undefined }) : "",
+      }) : "";
+      const thisKey = JSON.stringify({ mode, query: querySent, filters: codeFiltersKey });
+      if (lastKey !== thisKey) {
+        await db.searchHistory.create({
+          data: { mode, query: querySent, filters: codeFiltersKey, resultCount: items.length },
+        });
+      }
     } catch {
       // non critical
     }
@@ -224,7 +263,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       mode,
       totalMatches: data.total_count,
-      repoCount: groups.size,
+      // מה שהמשתמש באמת קיבל — בעבר נספרו גם מאגרים חסומים/מסוננים שהוסתרו ממנו
+      repoCount: items.length,
       items,
       // ⚠️ code mode = עמוד אחד תמיד: GitHub code search מוגבל ל-100 תוצאות
       // לשאילתה ללא עימוד אמיתי — ה-UI לא מציג עימוד במצב קוד כשהשדה הזה false
