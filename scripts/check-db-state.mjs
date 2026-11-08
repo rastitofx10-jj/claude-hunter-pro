@@ -1,0 +1,11 @@
+import { PrismaClient } from "@prisma/client";
+const db = new PrismaClient();
+const dna = await db.dnaArtifact.count();
+const chi = await db.chimera.count();
+const mis = await db.mission.count();
+const hunt = await db.liveHunt.count();
+const sweeps = await db.sweepRun.count();
+const git = await db.setting.findUnique({ where: { key: "github_pat" } });
+console.log(JSON.stringify({ dna, chimera: chi, mission: mis, liveHunt: hunt, sweeps, githubPatLen: git ? git.value.length : 0 }));
+await db.$disconnect();
+process.exit(0);
