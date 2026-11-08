@@ -79,7 +79,7 @@ model Mission {
   id              Int      @id @default(autoincrement())
   goal            String   // המטרה בשפה טבעית
   context         String?  // הקשר נוסף מהמשתמש
-  status          String   @default("compiled") // compiled | in_progress | done | failed
+  status          String   @default("compiled") // compiled | in_progress | partial | done | failed (partial נוסף בסבב 6 — בעבר ההערה השמיטה אותו וסתרה את הקוד)
   missionName     String   // שם קוד למשימה
   plan            String   // JSON: מערך שלבים (phases) עם צעדים
   dnaRefs         String?  // JSON: מזהי DnaArtifact שנבחרו + נימוקים
@@ -109,6 +109,9 @@ model SweepRun {
   error     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+
+  // סטטוס נשאל בכל start/step/reap — בעבר סריקה מלאה ללא אינדקס
+  @@index([status])
 }
 
 // ============================================================
@@ -120,7 +123,7 @@ model SweepRun {
 model LiveHunt {
   id        Int       @id @default(autoincrement())
   status    String    @default("running") // running | done | failed
-  stageKey  String    @default("hunt") // hunt | swarm | mine | compile | execute | grow | verdict
+  stageKey  String    @default("hunt") // hunt | swarm | attack | mine | compile | execute | grow | verdict (attack נוסף להערה — בעבר ההערה השמיטה אותו)
   stages    String    @default("[]") // JSON: רשומות שלבים שהושלמו [{key,title,summary,ms,evidence}]
   goal      String    @default("") // המטרה שנגזרה אוטומטית מהממצאים (מתמלאת בשלב ההידור)
   missionId Int? // המשימה שנוצרה בשלב ההידור
@@ -133,4 +136,7 @@ model LiveHunt {
   error     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+
+  // סטטוס נשאל בכל start/step/previousKnownRepos — בעבר סריקה מלאה ללא אינדקס
+  @@index([status])
 }

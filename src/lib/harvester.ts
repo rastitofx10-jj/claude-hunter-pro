@@ -15,7 +15,7 @@
 //   לכל ריפו שנכרה
 // ============================================================
 
-import { ghFetch, ghSearchWithBackoff, ghGraphql, mapLimit, GhError } from "./github";
+import { ghFetch, ghSearchWithBackoff, ghGraphql, mapLimit, GhError, isCapabilityPath } from "./github";
 import { QUALIFYING_MODELS } from "./claude-models";
 import { mineDna } from "./dna-miner";
 import { db } from "./db";
@@ -80,17 +80,6 @@ interface Candidate {
   skillRichness: number;
   alreadyMined: boolean;
   meta?: RepoMeta;
-}
-
-function isCapabilityPath(path: string): boolean {
-  const p = path.toLowerCase();
-  return (
-    p.includes("skill.md") ||
-    p.includes(".claude/commands/") ||
-    p.includes(".claude/agents/") ||
-    p === "claude.md" ||
-    p === "agents.md"
-  );
 }
 
 /**

@@ -108,6 +108,21 @@ export async function ghFetchRaw(
 
 // ---------- input parsing ----------
 
+/**
+ * נתיב קובץ יכולת (SKILL.md / .claude/commands / agents) — מקור יחיד.
+ * בעבר הוגדר זהה-מילה-במילה בשני קבצים (deep-sweep + harvester) והתפצל בכל תיקון.
+ */
+export function isCapabilityPath(path: string): boolean {
+  const p = path.toLowerCase();
+  return (
+    p.includes("skill.md") ||
+    p.includes(".claude/commands/") ||
+    p.includes(".claude/agents/") ||
+    p === "claude.md" ||
+    p === "agents.md"
+  );
+}
+
 export function parseRepoInput(raw: string): { owner: string; repo: string } | null {
   if (!raw) return null;
   let s = raw.trim().replace(/\.git$/i, "");
@@ -137,7 +152,8 @@ import { detectClaudeModels, type ClaudeModelDef } from "./claude-models";
 
 // ---------- tier system ----------
 
-export type TierKey = "elite" | "gold" | "silver" | "bronze" | "seed";
+import type { TierKey } from "./hunter-types"; // מקור יחיד — בעבר הוגדר זהה בשני קבצים
+export type { TierKey }; // re-export לצרכני github.ts הקיימים
 
 export const TIERS: { min: number; key: TierKey; label: string; emoji: string }[] = [
   { min: 80, key: "elite", label: "אליטה", emoji: "💎" },

@@ -6,7 +6,7 @@
 // פועל בצד שרת בלבד.
 // ============================================================
 
-import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey } from "./github";
+import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey, isCapabilityPath } from "./github";
 import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
 import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
@@ -127,17 +127,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 //  the local copy had a dead backoff: it matched "rate limit" inside a message
 //  that ghFetch had already translated to Hebrew, so rate-limited queries were
 //  thrown permanently instead of waiting 8s/16s/32s and retrying.)
-
-function isCapabilityPath(path: string): boolean {
-  const p = path.toLowerCase();
-  return (
-    p.includes("skill.md") ||
-    p.includes(".claude/commands/") ||
-    p.includes(".claude/agents/") ||
-    p === "claude.md" ||
-    p === "agents.md"
-  );
-}
 
 /**
  * שלב א׳ — ירי כל השאילתות בקצב בטוח למכסת החיפוש (30/דקה),
