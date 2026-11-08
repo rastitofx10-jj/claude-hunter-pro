@@ -93,7 +93,6 @@ export interface Candidate {
   capabilityHits: number;
   /** דיוק ראיית המודל: hard (מחרוזת מודל בתוכן קוד — מאומת) | soft (אזכור בתיאור/נתיב) | none */
   evidence: "hard" | "soft" | "none";
-  alreadyMined: boolean;
   score: number;
   /** מקורות הגילוי */
   via: string[];
@@ -210,17 +209,6 @@ export async function runQueryArsenal(
   return { reports, codeHits, repoHits };
 }
 
-/** ציון ראיות למחרוזת מודל: משקל לפי הרישום */
-function modelStringWeight(s: string): number {
-  const lower = s.toLowerCase();
-  for (const m of QUALIFYING_MODELS) {
-    if (m.searchStrings.some((x) => x.toLowerCase() === lower)) return m.weight;
-  }
-  const det = detectClaudeModels(lower);
-  if (det.qualifying.length > 0) return det.qualifying[0].weight;
-  return 0;
-}
-
 /** שלב ב׳ — איחוד גילויים למועמדים מדורגים לפי ראיות, עם הפרדת מקורות מחמירה:
  *  — contentEvidence: GitHub code search התאים את המחרוזת בתוכן קובץ אמיתי (מאומת)
  *  — textEvidence: המחרוזת מופיעה רק בתיאור/topics/נתיב (לא הוכחה של קוד)
@@ -246,7 +234,6 @@ export function consolidateCandidates(
         modelStrings: [],
         capabilityHits: 0,
         evidence: "none",
-        alreadyMined: false,
         score: 0,
         via: [],
       };
@@ -294,32 +281,41 @@ export function consolidateCandidates(
   const candidates = Array.from(map.values());
   for (const c of candidates) {
     c.modelStrings = Array.from(new Set([...c.contentEvidence, ...c.textEvidence]));
-    const listScore = computeListScore({
-      fullName: c.fullName,
-      description: c.description,
-      stars: c.stars,
-      forks: 0,
-      topics: c.topics,
-      pushedAt: c.pushedAt ?? undefined,
-    });
-    const evidenceWeight = (id: string, hard: boolean) => {
-      const m = QUALIFYING_MODELS.find((x) => x.id === id);
-      const w = m ? m.weight / 10 : 12 / 10;
-      return hard ? w : w * 0.4; // ראיה רכה שווה פחות מחצי
-    };
-    const modelEvidence =
-      c.contentEvidence.reduce((s, id) => s + evidenceWeight(id, true), 0) +
-      c.textEvidence.reduce((s, id) => s + evidenceWeight(id, false), 0);
-    c.evidence = c.contentEvidence.length > 0 ? "hard" : c.via.includes("code") || c.textEvidence.length > 0 ? "soft" : "none";
-    c.score = Math.round(
-      modelEvidence * 6 + c.capabilityHits * 4 + listScore.score + Math.log10(c.stars + 1) * 4
-    );
+    scoreCandidateInPlace(c);
   }
 
   // ראייה קשה קודמת תמיד, אחר כך ציון
   const evRank = { hard: 0, soft: 1, none: 2 } as const;
   candidates.sort((a, b) => evRank[a.evidence] - evRank[b.evidence] || b.score - a.score);
   return candidates;
+}
+
+/** חישוב הציון של מועמד — מקור יחיד.
+ * בעבר הציון חושב פעם אחת ב-consolidate בלבד; enrichCandidates שינה את
+ * stars אחר-כך ו"הדירוג מחדש אחרי העשרה" מיין לפי ציון ישן שחושב עם stars=0 —
+ * מאגר 10K-כוכבים שהתגלה בחיפוש קוד דורג כ-0-כוכבים, וזה עיוות את ה-top-60,
+ * האליטה ובחירת הכרייה. */
+export function scoreCandidateInPlace(c: Candidate): void {
+  const listScore = computeListScore({
+    fullName: c.fullName,
+    description: c.description,
+    stars: c.stars,
+    forks: 0,
+    topics: c.topics,
+    pushedAt: c.pushedAt ?? undefined,
+  });
+  const evidenceWeight = (id: string, hard: boolean) => {
+    const m = QUALIFYING_MODELS.find((x) => x.id === id);
+    const w = m ? m.weight / 10 : 12 / 10;
+    return hard ? w : w * 0.4; // ראיה רכה שווה פחות מחצי
+  };
+  const modelEvidence =
+    c.contentEvidence.reduce((s, id) => s + evidenceWeight(id, true), 0) +
+    c.textEvidence.reduce((s, id) => s + evidenceWeight(id, false), 0);
+  c.evidence = c.contentEvidence.length > 0 ? "hard" : c.via.includes("code") || c.textEvidence.length > 0 ? "soft" : "none";
+  c.score = Math.round(
+    modelEvidence * 6 + c.capabilityHits * 4 + listScore.score + Math.log10(c.stars + 1) * 4
+  );
 }
 
 /** העשרה — מטא-דאטה אמיתית למועמדים המובילים.
@@ -333,18 +329,24 @@ export async function enrichCandidates(
   const targets = candidates.slice(0, topN);
   // רק מי שחסר לו כוכבים (נמצא רק דרך חיפוש-קוד — חיפוש המאגרים כבר הביא כוכבים)
   const needMeta = targets.filter((c) => c.stars === 0).map((c) => c.fullName);
+  // "הועשרו" = קיבל מטא-דאטה מ-GraphQL בפועל. בעבר נספרו גם מי שכבר היה לו stars
+  // מחיפוש המאגרים (לא נקרא בכלל עליהם) — והמספר הוזרם היישר לפרומפט התדריך.
+  let enriched = 0;
   if (needMeta.length > 0) {
     const metaMap = await batchRepoMeta(needMeta, token);
     for (const c of targets) {
       const m = metaMap.get(c.fullName);
       if (m) {
+        enriched++;
         if (m.stars > 0) c.stars = m.stars;
         c.defaultBranch = m.defaultBranch; // חוסך קריאת /repos לכל ריפו שייכרה
       }
     }
   }
-  const enriched = targets.filter((c) => c.stars > 0).length;
-  // דירוג מחדש אחרי העשרה
+  // חישוב מחדש של הציונים שהשתנו — בעבר המיון "אחרי העשרה" השתמש בציונים
+  // שחושבו עם stars=0 (ראה scoreCandidateInPlace): 10K-כוכבים שהתגלה בקוד
+  // דורג כ-0-כוכבים בכל הדירוגים במורד הזרם.
+  for (const c of targets) scoreCandidateInPlace(c);
   const evRank = { hard: 0, soft: 1, none: 2 } as const;
   candidates.sort((a, b) => evRank[a.evidence] - evRank[b.evidence] || b.score - a.score);
   return enriched;
@@ -471,7 +473,6 @@ export async function mineTopCandidates(
     // זיכרון הוא אופטימיזציה — כשל שמירה לא מפיל את השלב
   }
 
-  void emptySkipped;
   return { reports, emptySkipped };
 }
 
