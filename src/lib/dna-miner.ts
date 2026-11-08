@@ -33,9 +33,19 @@ interface GhTree {
 
 const MAX_FILE_BYTES = 12_000; // חיתוך תוכן לקובץ — מספיק ל-AI, חוסך מכסה
 
+/**
+ * נתיבי בדיקות/פיקסטורות אינם קבצי-יכולת. ראיה מהשטח: Gen 6 כרה את
+ * mcp_config_test.go (קובץ בדיקות Go) כ-"mcp-config" (גן #155) ואת
+ * e2e/fixtures/.../SKILL.md (פיקסטורת e2e) כ-"skill" (גן #108) — שניהם נכנסו
+ * לספרייה עם תיוג שקרי. מעכשיו: נתיבי test/spec/fixture נפסלים לכרייה.
+ */
+const TEST_PATH_RE =
+  /(^|\/)(tests?|__tests__|spec|specs|fixtures)(\/|$)|[._-]test\.[a-z]+$|\.spec\.[a-z]+$/i;
+
 /** סיווג נתיב לסוג DNA */
 function classify(path: string): MinedArtifact["kind"] | null {
   const p = path.toLowerCase();
+  if (TEST_PATH_RE.test(p)) return null;
   if (p === "claude.md") return "claude-md";
   if (p === "agents.md") return "agents-md";
   // SKILL.md בדיוק (בכל עומק תיקייה) — בעבר p.includes("skill") סיווג בטעות

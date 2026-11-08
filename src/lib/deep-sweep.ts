@@ -386,12 +386,30 @@ export interface MinedRepoReport {
 }
 
 /** שלב ג׳ — כריית top-N מאגרים טריים לתוך הספרייה */
+const MINE_ATTEMPTS_KEY = "mineAttempts";
+
+async function loadMineAttempts(): Promise<Record<string, number>> {
+  try {
+    const row = await db.setting.findUnique({ where: { key: MINE_ATTEMPTS_KEY } });
+    const parsed = row?.value ? JSON.parse(row.value) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export interface MinedBatchResult {
+  reports: MinedRepoReport[];
+  /** כמה ריפו דולגו כי כבר הוכחו ריקים בכריות קודמות (שקיפות מלאה ב-evidence) */
+  emptySkipped: number;
+}
+
 export async function mineTopCandidates(
   candidates: Candidate[],
   token: string | null,
   maxRepos = 8,
   onProgress?: (done: number, total: number, report: MinedRepoReport) => Promise<void> | void
-): Promise<MinedRepoReport[]> {
+): Promise<MinedBatchResult> {
   const minedNames = new Set(
     (
       await db.dnaArtifact.findMany({
@@ -400,9 +418,18 @@ export async function mineTopCandidates(
       })
     ).map((x) => x.sourceRepo)
   );
+  // זיכרון כריות ריקות: ריפו שנכרה פעמיים והניב 0 ארטיפקטים לא נכרה שוב.
+  // (בעבר: simonw/llm-anthropic נכרה ב-Gen5 וב-Gen6 והחזיר 0 שתי הפעמים —
+  //  בזבוז מכסה + רושם מטעה של "3 מאגרים נכרו")
+  const mineAttempts = await loadMineAttempts();
+  let emptySkipped = 0;
   const fresh = candidates
     .filter((c) => {
       if (minedNames.has(c.fullName)) return false;
+      if ((mineAttempts[c.fullName] ?? 0) >= 2) {
+        emptySkipped++;
+        return false;
+      }
       // חוק הסף — כרייה רק לריפו שמוכיחים ראייה למודל מזכה או יכולות .claude אמתיות,
       // או שמקורם ארגון האליטה עצמו. מועמד סטרילי (אין ראייה, אין יכולות) לא מתגנב לספרייה.
       // (בעבר: ריפו עם 4.x בלבד וכוכבים נכרה לספריית ה-DNA)
@@ -448,7 +475,24 @@ export async function mineTopCandidates(
       }
     }
   }
-  return reports;
+
+  // עדכון זיכרון הכריות הריקות — שקיפות מלאה: המספר נרשם ב-evidence של השלב
+  for (const rep of reports) {
+    if (!rep.error && rep.artifacts === 0) mineAttempts[rep.repo] = (mineAttempts[rep.repo] ?? 0) + 1;
+    else if (rep.artifacts > 0) delete mineAttempts[rep.repo];
+  }
+  try {
+    await db.setting.upsert({
+      where: { key: MINE_ATTEMPTS_KEY },
+      update: { value: JSON.stringify(mineAttempts) },
+      create: { key: MINE_ATTEMPTS_KEY, value: JSON.stringify(mineAttempts) },
+    });
+  } catch {
+    // זיכרון הוא אופטימיזציה — כשל שמירה לא מפיל את השלב
+  }
+
+  void emptySkipped;
+  return { reports, emptySkipped };
 }
 
 // ---------- דוח שטוח ללהקת הפרומפטים ----------

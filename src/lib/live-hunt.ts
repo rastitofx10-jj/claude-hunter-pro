@@ -28,7 +28,6 @@ import {
   type Candidate,
   type CandidateFlat,
   type QueryReport,
-  type MinedRepoReport,
 } from "./deep-sweep";
 import {
   triageBatch,
@@ -510,14 +509,14 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     };
   }
 
-  const mined: MinedRepoReport[] = await mineTopCandidates(top, token, 3);
+  const { reports: mined, emptySkipped } = await mineTopCandidates(top, token, 3);
   const reposMined = mined.filter((m) => !m.error).length;
   const dnaAdded = mined.reduce((acc, m) => acc + (m.newCount ?? 0), 0);
   const stubsSkipped = mined.reduce((acc, m) => acc + (m.skippedStubs ?? 0), 0);
 
   const summary = `${reposMined} מאגרים נכרו · ${dnaAdded} גנים חדשים בספרייה${stubsSkipped ? ` · ${stubsSkipped} גני-סתם נפסלו` : ""}${
-    mined.some((m) => m.error) ? ` · ${mined.filter((m) => m.error).length} כישלונות` : ""
-  }`;
+    emptySkipped ? ` · ${emptySkipped} ריקים-מוכחים דולגו` : ""
+  }${mined.some((m) => m.error) ? ` · ${mined.filter((m) => m.error).length} כישלונות` : ""}`;
 
   return {
     summary,
@@ -526,6 +525,8 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       reposMined,
       dnaAdded,
       stubsSkipped,
+      // שקיפות: ריפו שכבר הוכחו ריקים (2 כריות ללא תוצאות) לא נכרים שוב
+      emptySkipped,
     },
   };
 }
@@ -781,6 +782,8 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       missionId,
       outcome,
       distillMethod,
+      // מדידה אמיתית למונה ה-LLM: זיקוק AI = 1, זיקוק מקומי = 0 (בעבר: +1 גם כשה-AI נכשל)
+      llmCalls: distillMethod === "ai" ? 1 : 0,
       verdict: distilled.verdict,
       lessons: distilled.lessons,
       bornDnaId,
@@ -843,7 +846,10 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
         dnaAfter,
         missionCount,
         // מקור אמת יחיד: המונה המצטבר בשורת הציד (בעבר: נוסחה מקומית שסתרה את המונה)
+        // שיטת מדידה: swarm/attack/grow מדודים מהראיות; compile=2, execute=1/שלב —
+        // ניסיונות חוזר פנימיים של המהדר אינם נספרים → המונה הוא חסם תחתון, לא מספר מדויק
         llmCalls: ctx.llmCallsSoFar,
+        llmCallsBasis: "lower-bound: מדוד ל-swarm/attack/grow; נוסחה ל-compile/execute; ניסיונות חוזר לא נספרים",
       },
     },
   };
@@ -1011,9 +1017,12 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     };
 
     // execute חוזר — מחליף את הרשומה הקיימת במקום להצטבר
-    const newDone = result.stay
-      ? [...doneStages.filter((s) => s.key !== stageKey), rec]
-      : [...doneStages, rec];
+    // (בעבר: הריצה האחרונה של execute לא סיננה את הקודמת — נשארו שתי רשומות
+    //  execute ב-JSON, ומספר השלבים במסקנת המערכה דווח נפוח ב-1)
+    const newDone =
+      result.stay || stageKey === "execute"
+        ? [...doneStages.filter((s) => s.key !== stageKey), rec]
+        : [...doneStages, rec];
 
     let nextStageKey: string;
     if (result.stay) {
@@ -1032,11 +1041,13 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     const llmDelta =
       stageKey === "swarm" || stageKey === "attack"
         ? Number(result.evidence.llmCalls) || 0
-        : ["compile", "execute", "grow"].includes(stageKey)
-          ? stageKey === "compile"
-            ? 2
-            : 1
-          : 0;
+        : stageKey === "grow"
+          ? Number(result.evidence.llmCalls) || 0 // 1 אם זיקוק AI, 0 אם נפל למקומי — לפי הראיה בפועל (בעבר: +1 גם כשנפל)
+          : ["compile", "execute"].includes(stageKey)
+            ? stageKey === "compile"
+              ? 2 // compilePlan + compileSkillMd — ניסיונות חוזר פנימיים אינם נספרים (חסם תחתון)
+              : 1
+            : 0;
 
     const updated = await db.liveHunt.update({
       where: { id },

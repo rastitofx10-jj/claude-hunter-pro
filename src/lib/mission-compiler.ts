@@ -286,6 +286,24 @@ function normalizeFrontmatterFence(raw: string): string {
   return block.startsWith("---") ? block + "\n" + rest : `---\n${block}\n---\n\n${rest}`;
 }
 
+/**
+ * נרמול תוכן DNA שנולד משדה. ראיה מהשטח: הגנים #94, #95 נולדו עם "yaml name:..."
+ * ו-#138 עם "```markdown name:..." — גדרות שדלפו לגוף והפכו את ה-SKILL.md לפגום.
+ * (בעבר: born-DNA נשמר כמו שהמודל החזיר, בלי שום ולידציה של צורה)
+ */
+export function normalizeBornSkillMd(raw: string): string {
+  const t = stripOuterFence((raw ?? "").trim()).replace(/^yaml[ \t]*\n(?=(name|description):)/, "");
+  if (/^---/.test(t)) return t; // frontmatter תקין
+  // אם הראש הוא YAML ללא מפריד --- — עוטפים עד לכותרת ה-markdown הראשונה
+  const headEnd = t.search(/\n#\s|^#\s/);
+  const head = (headEnd > 0 ? t.slice(0, headEnd) : t).trim();
+  if (/^name:/m.test(head) && /^description:/m.test(head)) {
+    const body = headEnd > 0 ? t.slice(headEnd).trim() : "";
+    return `---\n${head}\n---\n\n${body}`.trim() + "\n";
+  }
+  return t;
+}
+
 async function compileSkillMd(goal: string, plan: PlanOnly): Promise<{ md: string; source: "ai" | "fallback" }> {
   const phaseSummary = plan.phases
     .map((p, i) => `${i + 1}. ${p.title} — ${p.objective}\n   Steps: ${p.steps.join(" | ")}`)
@@ -500,7 +518,7 @@ export async function distillFieldReport(input: {
       if (nd && typeof nd === "object") {
         const o = nd as Record<string, unknown>;
         const name = str(o.name);
-        const content = str(o.content);
+        const content = normalizeBornSkillMd(str(o.content));
         if (name && content) {
           newDna = { name, description: str(o.description, "יכולת שנולדה מדיווח שדה"), content };
         }
