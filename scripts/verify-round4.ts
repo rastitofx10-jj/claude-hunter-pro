@@ -115,7 +115,7 @@ try {
 }
 ok(threw, "no JSON → AiJsonError");
 ok(safeJsonParse("[broken", []) instanceof Array && safeJsonParse("[broken", []).length === 0, "safeJsonParse fallback");
-ok(sanitizeSlug("בונה מסכים Fast!!") === "" || /^[a-z0-9-_]*$/.test(sanitizeSlug("בונה מסכים Fast!!")), "sanitizeSlug strips non-ascii");
+ok(sanitizeSlug("בונה מסכים Fast!!", "fallback") === "fallback" || /^[a-z0-9-_]*$/.test(sanitizeSlug("בונה מסכים Fast!!", "fallback")), "sanitizeSlug strips non-ascii");
 ok(sanitizeSlug("My Cool Skill", "fallback") === "my-cool-skill", "sanitizeSlug kebab-case");
 ok(stripFences("```json\n{\"a\":1}\n```") === "{\"a\":1}", "stripFences removes outer fence");
 ok(stripOuterFence("```\n# h\n```bash\nls\n```\n```") .includes("```bash"), "stripOuterFence keeps internal fences");
