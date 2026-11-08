@@ -6,8 +6,8 @@
 // כל פרומפט מחזיר JSON קפדני עם שרשרת תיקון. צד שרת בלבד.
 // ============================================================
 
-import { extractJson, isTimeoutError, str, strArr, withTimeout } from "./ai-json";
-import { getZai } from "./zai";
+import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
+import { llmComplete } from "./zai";
 import type { CandidateFlat } from "./deep-sweep";
 
 export class SwarmError extends Error {
@@ -30,23 +30,19 @@ const SWARM_ROLE = `אתה קצין מודיעין בכיר ביחידת ציי�
 const RETRY_HINT = `\n\n⚠️ תיקון: התשובה הקודמת לא הייתה JSON תקין. החזר את אותו תוכן ב-JSON מהודק — בלי מרכאות כפולות בערכים, בלי פסיקים תלויים, גוף ה-JSON בלבד.`;
 
 async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
-  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: SWARM_ROLE },
-            { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        "קריאת ה-AI",
-        SwarmError
+      // התור הגלובלי ב-zai.ts מסדר את כל קריאות ה-AI בתהליך (מקביליות 1)
+      // — שתי מנועות שרצות יחד (כימרה בזמן סריקה) כבר לא מפילות 429
+      // זו של זו. role:"system" — הוראות המערכת מקבלות עדיפות אמיתית.
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: SWARM_ROLE },
+          { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "קריאת ה-AI", timeoutError: SwarmError }
       );
-      const raw = completion.choices[0]?.message?.content ?? "";
       if (!raw.trim()) {
         lastErr = new SwarmError("ה-AI החזיר תשובה ריקה");
         continue;

@@ -8,8 +8,8 @@
 // ============================================================
 
 import type { MinedArtifact } from "./dna-miner";
-import { extractJson, isTimeoutError, sanitizeSlug, str, strArr, withTimeout } from "./ai-json";
-import { getZai } from "./zai";
+import { extractJson, isTimeoutError, sanitizeSlug, str, strArr } from "./ai-json";
+import { llmComplete } from "./zai";
 
 export class GenesisError extends Error {
   constructor(message: string) {
@@ -114,23 +114,19 @@ ${digest}
 }
 החזר 3-5 פקודות עבודה, ממוינות לפי ערך למוצר.`;
 
-  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: GENESIS_ROLE },
-            { role: "user", content: attempt === 0 ? prompt : prompt + "\n\n⚠️ התגובה הקודמת לא הייתה JSON תקין — תקן מרכאות כפולות ופסיקים תלויים והחזר JSON בלבד." },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        "יצירת הכימרה",
-        GenesisError
+      // התור הגלובלי (zai.ts) — מקביליות 1 + retry 429. הכימרה היא קריאת
+      // ה-AI הכבדה במערכת (digest DNA גדול) — בלי תור, כל קריאה מקבילה
+      // אחרת הייתה מפילה אותה ב-429.
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: GENESIS_ROLE },
+          { role: "user", content: attempt === 0 ? prompt : prompt + "\n\n⚠️ התגובה הקודמת לא הייתה JSON תקין — תקן מרכאות כפולות ופסיקים תלויים והחזר JSON בלבד." },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "יצירת הכימרה", timeoutError: GenesisError }
       );
-      const raw = completion.choices[0]?.message?.content ?? "";
       if (!raw.trim()) {
         lastErr = new GenesisError("ה-AI החזיר תשובה ריקה");
         continue;

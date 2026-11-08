@@ -20,6 +20,13 @@ export function isTimeoutError(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as Record<string, unknown>)[TIMEOUT_FLAG] === true;
 }
 
+/** מסמן שגיאה כפסק-זמן — משמש את התור ב-zai.ts כדי שהקריאות בשכבות
+ *  העל יזהו פסק-זמן (isTimeoutError) וימנעו retry מיותר */
+export function markTimeoutError<T extends Error>(err: T): T {
+  (err as unknown as Record<string, unknown>)[TIMEOUT_FLAG] = true;
+  return err;
+}
+
 export function withTimeout<T>(
   p: Promise<T>,
   ms: number,

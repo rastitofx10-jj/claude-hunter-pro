@@ -151,6 +151,71 @@ export function tierOf(score: number): { key: TierKey; label: string; emoji: str
   return TIERS.find((t) => score >= t.min) ?? TIERS[TIERS.length - 1];
 }
 
+// ---------- GraphQL + shared concurrency pool ----------
+
+/**
+ * GraphQL call — one round-trip replaces dozens of REST calls.
+ * Live-verified: the REST code-search "repository" object does NOT include
+ * stargazers_count/pushed_at, which forced the old per-repo /repos/ enrichment
+ * (25-30 calls per harvest/sweep). With aliases we now batch up to 50 repos
+ * (stars + pushedAt + defaultBranchRef) in ONE request at a cost of 1 point
+ * from the same 5000/hour pool.
+ */
+export async function ghGraphql<T = unknown>(
+  query: string,
+  token?: string | null
+): Promise<T> {
+  const res = await fetch(`${GH_API}/graphql`, {
+    method: "POST",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) {
+    let msg = `GitHub API error ${res.status}`;
+    try {
+      const j = (await res.json()) as { message?: string; errors?: { message?: string }[] };
+      msg = j?.message ?? j?.errors?.[0]?.message ?? msg;
+    } catch {
+      // keep default
+    }
+    const isRateLimit =
+      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection|מכסת/i.test(msg);
+    if (isRateLimit) msg = "מכסת GitHub API נגמרה (rate limit). הוסף Personal Access Token בהגדרות כדי להמשיך.";
+    if (res.status === 401) msg = "הטוקן שסיפקת לא תקין או שפג תוקפו.";
+    throw new GhError(res.status, msg, isRateLimit);
+  }
+  const body = (await res.json()) as { data?: T; errors?: { message?: string }[] };
+  // GraphQL can return 200 with an errors array (e.g. bad alias, too deep) —
+  // surface the first error instead of silently returning partial data.
+  if (body.errors?.length) {
+    throw new GhError(200, body.errors[0]?.message ?? "GraphQL error", false);
+  }
+  return body.data as T;
+}
+
+/** Bounded concurrency for parallel fetch bursts — raw content downloads,
+ *  enrichment, anything that could trip GitHub's secondary rate limits when
+ *  fired as one big Promise.all. Process-wide reuse. */
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 // ---------- shared search backoff (single source of truth) ----------
 
 const ghSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

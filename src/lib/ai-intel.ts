@@ -4,8 +4,8 @@
 // פועל בצד שרת בלבד (z-ai-web-dev-sdk אסור בצד לקוח).
 // ============================================================
 
-import { extractJson, isTimeoutError, str, strArr, withTimeout } from "./ai-json";
-import { getZai } from "./zai";
+import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
+import { llmComplete } from "./zai";
 import type {
   AnalyzeResponse,
   BattleSynthesis,
@@ -104,23 +104,17 @@ const RETRY_HINT = `\n\n⚠️ תיקון חוזר: התגובה הקודמת ש
 - החזר את גוף ה-JSON בלבד, שום טקסט אחר.`;
 
 async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
-  const zai = await getZai();
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const completion = await withTimeout(
-        zai.chat.completions.create({
-          messages: [
-            { role: "assistant", content: SYSTEM_ROLE },
-            { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
-          ],
-          thinking: { type: "disabled" },
-        }),
-        TIMEOUT_MS,
-        "קריאת ה-AI",
-        IntelError
+      // התור הגלובלי ב-zai.ts (מקביליות 1 + retry 429) — ראה תיעוד שם
+      const { content: raw } = await llmComplete(
+        [
+          { role: "system", content: SYSTEM_ROLE },
+          { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
+        ],
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "קריאת ה-AI", timeoutError: IntelError }
       );
-      const raw = completion.choices[0]?.message?.content ?? "";
       if (!raw.trim()) {
         lastErr = new IntelError("ה-AI החזיר תשובה ריקה — נסה שוב");
         continue;

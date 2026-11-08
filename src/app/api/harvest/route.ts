@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { harvest } from "@/lib/harvester";
+import { GhError } from "@/lib/github";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +34,14 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     // (בעבר: e.message גולמי דלף ללקוח)
     console.error("[harvest]", e);
-    return NextResponse.json({ error: "הקציר האוטונומי נכשל — יתכן שמכסת GitHub/AI מוגבלת כרגע" }, { status: 500 });
+    // מכסת GitHub שנגמרה — 429 מדויק במקום 500 גנרי שמטעה ("נסה שוב" לא עוזר)
+    if (e instanceof GhError && e.rateLimited === true) {
+      return NextResponse.json(
+        { error: "מכסת GitHub API נגמרה — הקציר נעצר. נסה שוב בעוד דקה." },
+        { status: 429 }
+      );
+    }
+    return NextResponse.json({ error: "הקציר האוטונומי נכשל — פרטים בלוג השרת" }, { status: 500 });
   } finally {
     harvestRunning = false;
   }
