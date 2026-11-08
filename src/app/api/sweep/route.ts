@@ -23,7 +23,8 @@ export async function GET() {
     });
     const active = items.find((i) => i.status === "running") ?? null;
     return NextResponse.json({ items, active });
-  } catch {
+  } catch (e) {
+    console.error("sweep GET failed", e);
     return NextResponse.json({ error: "טעינת הסריקות נכשלה" }, { status: 500 });
   }
 }
@@ -35,7 +36,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, id });
   } catch (e) {
     const status = (e as { status?: number }).status ?? 500;
-    const msg = e instanceof Error ? e.message : "שגירת הסריקה נכשלה";
-    return NextResponse.json({ error: msg }, { status });
+    if (status < 500) return NextResponse.json({ error: e instanceof Error ? e.message : "שגירת הסריקה נכשלה" }, { status });
+    console.error("sweep POST failed", e);
+    return NextResponse.json({ error: "שגירת הסריקה נכשלה" }, { status: 500 });
   }
 }

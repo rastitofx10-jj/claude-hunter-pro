@@ -6,7 +6,7 @@
 // פועל בצד שרת בלבד.
 // ============================================================
 
-import { ghFetch, GhError, computeListScore, tierOf, type TierKey } from "./github";
+import { ghFetch, ghSearchWithBackoff, computeListScore, tierOf, type TierKey } from "./github";
 import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
 import { harvestRepo } from "./harvester";
 import { db } from "./db";
@@ -40,15 +40,16 @@ export function buildQueryArsenal(): SweepQuery[] {
   );
 
   // 3. חיפושי מאגרים — השוק הרחב של פרויקטי Claude פעילים
-  const monthAgo = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
+  // (120 יום — בעבר נקרא בטעות monthAgo; שם המשתנה הטעה את כולם)
+  const freshSince = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
   queries.push(
-    { q: `claude opus 5.5 stars:>5 pushed:>${monthAgo}`, kind: "repo", origin: "market" },
-    { q: `claude fable stars:>3 pushed:>${monthAgo}`, kind: "repo", origin: "market" },
-    { q: `claude code agent stars:>100 pushed:>${monthAgo}`, kind: "repo", origin: "market" },
+    { q: `claude opus 5.5 stars:>5 pushed:>${freshSince}`, kind: "repo", origin: "market" },
+    { q: `claude fable stars:>3 pushed:>${freshSince}`, kind: "repo", origin: "market" },
+    { q: `claude code agent stars:>100 pushed:>${freshSince}`, kind: "repo", origin: "market" },
     { q: `topic:claude-code stars:>30`, kind: "repo", origin: "topic" },
     { q: `topic:claude-agents stars:>10`, kind: "repo", origin: "topic" },
     { q: `topic:mcp topic:claude stars:>10`, kind: "repo", origin: "topic" },
-    { q: `anthropic premium api integration stars:>20 pushed:>${monthAgo}`, kind: "repo", origin: "market" },
+    { q: `anthropic premium api integration stars:>20 pushed:>${freshSince}`, kind: "repo", origin: "market" },
   );
 
   return queries;
@@ -121,27 +122,10 @@ interface GhSearchResp<T> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * קריאת חיפוש עם התאוששות ממכסה: GitHub מתיר 30 חיפושים/דקה (ולקוד 10/דקה).
- * 403/429 של מכסה ← המתנה אקספוננציאלית (8s/16s/32s) וניסיון חוזר.
- * 403 שאינו מכסה (ריפו פרטי, אין הרשאה) ← נזרק מיד — בעבר כל 403 צבר 8+16+32 שניות על שאילתה שלא תתוקן.
- */
-async function searchWithBackoff<T>(path: string, token: string | null): Promise<T> {
-  const delays = [8_000, 16_000, 32_000];
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    try {
-      return await ghFetch<T>(path, token);
-    } catch (e) {
-      lastErr = e;
-      const msg = e instanceof Error ? e.message.toLowerCase() : "";
-      const isRateLimit = e instanceof GhError && (e.status === 403 || e.status === 429) && /rate limit|secondary/.test(msg);
-      if (!isRateLimit || attempt === delays.length) throw e;
-      await sleep(delays[attempt]);
-    }
-  }
-  throw lastErr;
-}
+// (searchWithBackoff moved to github.ts as ghSearchWithBackoff — one source of truth;
+//  the local copy had a dead backoff: it matched "rate limit" inside a message
+//  that ghFetch had already translated to Hebrew, so rate-limited queries were
+//  thrown permanently instead of waiting 8s/16s/32s and retrying.)
 
 function isCapabilityPath(path: string): boolean {
   const p = path.toLowerCase();
@@ -181,7 +165,7 @@ export async function runQueryArsenal(
     let report: QueryReport = { q: query.q, kind: query.kind, origin: query.origin, count: 0 };
     try {
       if (query.kind === "code") {
-        const resp = await searchWithBackoff<GhSearchResp<GhCodeItem>>(
+        const resp = await ghSearchWithBackoff<GhSearchResp<GhCodeItem>>(
           `/search/code?q=${encodeURIComponent(query.q)}&per_page=100&page=1`,
           token
         );
@@ -195,7 +179,7 @@ export async function runQueryArsenal(
           codeHits.push({ path: item.path, repo: r.full_name, capability: isCapabilityPath(item.path), viaQuery: query.q });
         }
       } else {
-        const resp = await searchWithBackoff<GhSearchResp<GhRepoItem>>(
+        const resp = await ghSearchWithBackoff<GhSearchResp<GhRepoItem>>(
           `/search/repositories?q=${encodeURIComponent(query.q)}&per_page=50&page=1`,
           token
         );

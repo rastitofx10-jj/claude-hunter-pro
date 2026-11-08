@@ -10,8 +10,12 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
+    // take מפורש — בעבר: findMany בלי גבול עם content מלא; הקציר האוטומטי מגדיל
+    // את הספרייה כל הזמן והייצוא תפח בלי מגבלה (בדיוק האנטי-דפוסן ש-mission/route.ts
+    // כבר תיקן בסבב קודם).
+    const EXPORT_TAKE = 600;
     const [artifacts, chimeras, fieldCount] = await Promise.all([
-      db.dnaArtifact.findMany({ orderBy: [{ sourceRepo: "asc" }, { path: "asc" }] }),
+      db.dnaArtifact.findMany({ orderBy: [{ sourceRepo: "asc" }, { path: "asc" }], take: EXPORT_TAKE }),
       db.chimera.findMany({ orderBy: { id: "desc" }, take: 10 }),
       db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
     ]);
@@ -69,7 +73,7 @@ export async function GET() {
       content,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "ייצוא הקודקס נכשל";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    console.error("export/pack failed", e);
+    return NextResponse.json({ error: "ייצוא הקודקס נכשל" }, { status: 500 });
   }
 }

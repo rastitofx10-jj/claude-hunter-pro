@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { isPrismaNotFound } from "@/lib/ai-json";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,12 @@ interface WatchBody {
   evidence?: string | null;
   notes?: string | null;
 }
+
+// הגבלות קלט — בעבר ללא תקרית: מחרוזות ארוכות ללא גבול נכנסו ל-DB וזו היתה
+// נקודת שחיתות פוטנציאלית (payload גדול מהלקוח לצמיתות ב-DB).
+const MAX_TEXT = 1000;
+const cap = (v: string | null | undefined, max = MAX_TEXT): string | null =>
+  typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
 
 export async function GET() {
   try {
@@ -32,30 +39,41 @@ export async function POST(req: NextRequest) {
     if (!b.fullName || !b.owner || !b.name || !b.url) {
       return NextResponse.json({ error: "חסרים שדות חובה (fullName/owner/name/url)" }, { status: 400 });
     }
-    // עדכון סלקטיבי: שדה שלא נשלח על ידי הלקוח לא נדרס ב-DB.
-    // (בעבר: saveNote שלח רק notes → מחק בשקט models/evidence; saveFromScored שלח
-    // models: null → מחק את המודלים שזוהו. עכשיו כל שדה שאינו קיים בגוף נשמר כפי שהוא.)
+    // אימות בסיסי של ה-URL — הוא מוצג כ-<a href> ב-UI; בעבר התקבל כל ערך.
+    if (!/^https:\/\/github\.com\//.test(b.url)) {
+      return NextResponse.json({ error: "url חייב להיות קישור github.com (https)" }, { status: 400 });
+    }
+    const safe: WatchBody = {
+      ...b,
+      fullName: b.fullName.slice(0, 200),
+      owner: b.owner.slice(0, 120),
+      name: b.name.slice(0, 200),
+      url: b.url.slice(0, 500),
+    };
+    // עדכון סלקטיבי אמיתי: שדה שלא נשלח — לא נדרס. וגם: ערך null מפורש לא מוחק
+    // נתונים קיימים — בעבר הלקוח שלח models: null (מסלול חיפוש) ומחק בשקט מודלים
+    // שנשמרו מהניתוח. רק ערך אמיתי (לא ריק/לא null) מעדכן.
     const item = await db.savedRepo.upsert({
-      where: { fullName: b.fullName },
+      where: { fullName: safe.fullName },
       update: {
-        ...(b.stars !== undefined ? { stars: b.stars ?? 0 } : {}),
-        ...(b.score !== undefined ? { score: b.score ?? 0 } : {}),
-        ...(b.description !== undefined ? { description: b.description ?? null } : {}),
-        ...(b.models !== undefined ? { models: b.models ?? null } : {}),
-        ...(b.evidence !== undefined ? { evidence: b.evidence ?? null } : {}),
-        ...(b.notes !== undefined ? { notes: b.notes ?? null } : {}),
+        ...(safe.stars !== undefined ? { stars: safe.stars ?? 0 } : {}),
+        ...(safe.score !== undefined ? { score: safe.score ?? 0 } : {}),
+        ...(cap(safe.description) !== null ? { description: cap(safe.description) } : {}),
+        ...(cap(safe.models, 300) !== null ? { models: cap(safe.models, 300) } : {}),
+        ...(cap(safe.evidence) !== null ? { evidence: cap(safe.evidence) } : {}),
+        ...(cap(safe.notes) !== null ? { notes: cap(safe.notes) } : {}),
       },
       create: {
-        fullName: b.fullName,
-        owner: b.owner,
-        name: b.name,
-        url: b.url,
-        description: b.description ?? null,
-        stars: b.stars ?? 0,
-        score: b.score ?? 0,
-        models: b.models ?? null,
-        evidence: b.evidence ?? null,
-        notes: b.notes ?? null,
+        fullName: safe.fullName,
+        owner: safe.owner,
+        name: safe.name,
+        url: safe.url,
+        description: cap(safe.description),
+        stars: safe.stars ?? 0,
+        score: safe.score ?? 0,
+        models: cap(safe.models, 300),
+        evidence: cap(safe.evidence),
+        notes: cap(safe.notes),
       },
     });
     return NextResponse.json({ item });
@@ -73,7 +91,13 @@ export async function DELETE(req: NextRequest) {
     }
     await db.savedRepo.delete({ where: { id } });
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "המחיקה נכשלה (יתכן שהפריט לא קיים)" }, { status: 400 });
+  } catch (e) {
+    // P2025 = הרשומה לא נמצאה → 404 אמיתי. כל דבר אחר = 500 עם לוג — בעבר כל שגיאה
+    // הוחזרה כ-400 שקרי ובלי לוג.
+    if (isPrismaNotFound(e)) {
+      return NextResponse.json({ error: "הפריט לא נמצא" }, { status: 404 });
+    }
+    console.error("watchlist DELETE failed", e);
+    return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 500 });
   }
 }

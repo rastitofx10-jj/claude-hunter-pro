@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { isPrismaNotFound } from "@/lib/ai-json";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,12 @@ export async function DELETE(req: NextRequest) {
     }
     await db.searchHistory.delete({ where: { id: num } });
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 400 });
+  } catch (e) {
+    // P2025 → 404; כל דבר אחר → 500 עם לוג (בעבר: catch-all 400 שקרי).
+    if (isPrismaNotFound(e)) {
+      return NextResponse.json({ error: "הרשומה לא נמצאה" }, { status: 404 });
+    }
+    console.error("history DELETE failed", e);
+    return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 500 });
   }
 }

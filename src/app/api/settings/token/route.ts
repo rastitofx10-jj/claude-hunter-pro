@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ghFetch } from "@/lib/github";
+import { ghFetch, GhError } from "@/lib/github";
 import { clearStoredToken, looksLikeToken, persistToken, storedTokenInfo } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
@@ -29,8 +29,13 @@ export async function POST(req: NextRequest) {
   try {
     await ghFetch("/rate_limit", token);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "האימות מול GitHub נכשל";
-    return NextResponse.json({ error: `הטוקן נדחה: ${msg}` }, { status: 401 });
+    // 401/403 = הטוקן באמת נדחה. כל דבר אחר (רשת/שעה עמוסה/חוֹ"ל) אינו אשמת
+    // הטוקן — בעבר כל כשל מופה ל-401 "הטוקן נדחה" והטעה את המשתמש.
+    if (e instanceof GhError && (e.status === 401 || e.status === 403)) {
+      return NextResponse.json({ error: `הטוקן נדחה: ${e.message}` }, { status: 401 });
+    }
+    console.error("settings/token POST verification failed", e);
+    return NextResponse.json({ error: "האימות מול GitHub נכשל (שגיאת רשת — לא בעיית טוקן)" }, { status: 502 });
   }
   const ok = await persistToken(token);
   if (!ok) return NextResponse.json({ error: "השמירה בשרת נכשלה" }, { status: 500 });

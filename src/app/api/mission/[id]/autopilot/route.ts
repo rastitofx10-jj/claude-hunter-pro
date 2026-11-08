@@ -74,7 +74,8 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     if (e instanceof AutopilotError) {
       return NextResponse.json({ error: e.message }, { status: e.status });
     }
-    const msg = e instanceof Error ? e.message : "הריצה האוטונומית נכשלה";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // סניטציה — בעבר e.message גולמי (Prisma/רשת) דלף ללקוח
+    console.error("[mission:autopilot] failed", e);
+    return NextResponse.json({ error: "הריצה האוטונומית נכשלה" }, { status: 500 });
   }
 }

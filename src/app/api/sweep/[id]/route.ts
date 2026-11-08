@@ -16,7 +16,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     const row = await db.sweepRun.findUnique({ where: { id: numId } });
     if (!row) return NextResponse.json({ error: "הסריקה לא נמצאה" }, { status: 404 });
     return NextResponse.json(parseSweepRow(row));
-  } catch {
+  } catch (e) {
+    console.error("sweep/[id] GET failed", e);
     return NextResponse.json({ error: "טעינת הסריקה נכשלה" }, { status: 500 });
   }
 }
@@ -35,6 +36,7 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     if (isPrismaNotFound(e)) {
       return NextResponse.json({ error: "הסריקה לא נמצאה" }, { status: 404 });
     }
-    return NextResponse.json({ error: "המחיקה נכשלה — ייתכן שהסריקה רצה כרגע" }, { status: 500 });
+    console.error("sweep/[id] DELETE failed", e);
+    return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 500 });
   }
 }

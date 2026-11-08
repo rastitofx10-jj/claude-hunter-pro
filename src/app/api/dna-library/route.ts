@@ -56,22 +56,37 @@ export async function GET(req: NextRequest) {
       const items = await listLight();
       return NextResponse.json({ items, full: false });
     }
+    // take מפורש — בעבר full=1 החזיר את כל הספרייה בלי גבול
     const rows = await db.dnaArtifact.findMany({
       orderBy: [{ sourceRepo: "asc" }, { kind: "asc" }, { name: "asc" }],
+      take: 400,
     });
     return NextResponse.json({ items: rows, full: true });
-  } catch {
+  } catch (e) {
+    console.error("dna-library GET failed", e);
     return NextResponse.json({ error: "טעינת ספריית ה-DNA נכשלה" }, { status: 500 });
   }
 }
 
-/** מחיקה: ?repo=owner/name לריפו בודד, או הכל בלי פרמטר */
+/**
+ * מחיקה: ?repo=owner/name לריפו בודד, או ?all=1 לכל הספרייה.
+ * בעבר: מחיקה בלי פרמטר = מחיקת הכל, וגם ?repo= ריק דלף לשם — שגיאת קלד
+ * בלתי-הפיכה (אסון נתונים מחכה לקרות). עכשיו: כל פעולה חייבת להיות מפורשת.
+ */
 export async function DELETE(req: NextRequest) {
-  const repo = req.nextUrl.searchParams.get("repo");
+  const repo = (req.nextUrl.searchParams.get("repo") ?? "").trim();
+  const all = req.nextUrl.searchParams.get("all") === "1";
+  if (!repo && !all) {
+    return NextResponse.json(
+      { error: "נדרש ?repo=owner/name או ?all=1 מפורש — מחיקה בלי הוראה ברורה נחסמת" },
+      { status: 400 }
+    );
+  }
   try {
     await db.dnaArtifact.deleteMany(repo ? { where: { sourceRepo: repo } } : undefined);
-    return NextResponse.json({ ok: true });
-  } catch {
+    return NextResponse.json({ ok: true, scope: repo || "all" });
+  } catch (e) {
+    console.error("dna-library DELETE failed", e);
     return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 500 });
   }
 }

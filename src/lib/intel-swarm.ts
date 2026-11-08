@@ -364,10 +364,13 @@ export interface SwarmResult {
 /**
  * ריצה מלאה: 8 פרומפטים (2 טריאז׳ה + 2 פרופילים + דפוסים + תקיפה + שאילתות + תדריך).
  * סלחנית לכשלים חלקיים: פרומפט שנכשל לא מפיל את המבצע — נרשם ב-failures.
+ * executedQueries חייב להיות אובייקטים {q,count,error} — בעבר החתימה הצהירה string[]
+ * וכל מי שהעביר מחרוזות גרם ל-"undefined תוצאות" בפרומפט אבולוציית השאילתות
+ * ולרשימת שאילתות-מתות ריקה תמידית (באג אמיתי שסוגר כאן ברמת הטיפוס).
  */
 export async function runSwarm(
   candidates: CandidateFlat[],
-  executedQueries: string[],
+  executedQueries: { q: string; count: number; error?: string | null }[],
   dnaAdded: number,
   statsLine: string,
   onProgress?: (done: number, total: number) => Promise<void> | void

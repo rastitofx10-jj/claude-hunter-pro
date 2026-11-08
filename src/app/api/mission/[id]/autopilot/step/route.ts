@@ -13,7 +13,8 @@ export const maxDuration = 120;
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const numId = Number(id);
-  if (!Number.isInteger(numId)) {
+  // >0 כמו בכל האחים — בעבר מזהים שליליים דלפו פנימה
+  if (!Number.isInteger(numId) || numId <= 0) {
     return NextResponse.json({ error: "מזהה לא תקין" }, { status: 400 });
   }
   try {
@@ -31,7 +32,8 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     if (e instanceof AutopilotError) {
       return NextResponse.json({ error: e.message }, { status: e.status });
     }
-    const msg = e instanceof Error ? e.message : "ביצוע השלב נכשל";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // סניטציה — בעבר e.message גולמי דלף ללקוח
+    console.error("[mission:autopilot:step] failed", e);
+    return NextResponse.json({ error: "ביצוע השלב נכשל" }, { status: 500 });
   }
 }

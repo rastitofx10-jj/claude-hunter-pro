@@ -1,7 +1,15 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-type TabKey = "search" | "watchlist" | "sweep" | "history" | "genesis" | "mission" | "live";
+export type TabKey =
+  | "home"
+  | "search"
+  | "watchlist"
+  | "sweep"
+  | "history"
+  | "genesis"
+  | "mission"
+  | "live";
 
 interface HunterState {
   token: string;
@@ -14,7 +22,7 @@ export const useHunterStore = create<HunterState>()(
   persist(
     (set) => ({
       token: "",
-      activeTab: "search",
+      activeTab: "home",
       setToken: (token) => set({ token }),
       setActiveTab: (activeTab) => set({ activeTab }),
     }),

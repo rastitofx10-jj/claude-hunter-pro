@@ -162,8 +162,13 @@ export function GenesisPanel() {
   });
 
   const clearRepo = useMutation({
+    // ?all=1 מפורש למחיקת הכל — בעבר מחיקה בלי פרמטר נחשבה "הכל", ו-?repo= ריק דלף לשם
     mutationFn: (repo: string | null) =>
-      apiFetch(`/api/dna-library${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`, token, { method: "DELETE" }),
+      apiFetch(
+        `/api/dna-library${repo ? `?repo=${encodeURIComponent(repo)}` : "?all=1"}`,
+        token,
+        { method: "DELETE" }
+      ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["dna-library"] }),
     onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
   });

@@ -12,7 +12,7 @@
 import { db } from "./db";
 import { extractJson, safeJsonParse, str, strArr, withTimeout } from "./ai-json";
 import { getZai } from "./zai";
-import { ghFetch, ghFetchRaw, GhError } from "./github";
+import { ghFetch, ghFetchRaw, ghSearchWithBackoff } from "./github";
 import { QUALIFYING_MODELS } from "./claude-models";
 import { resolveToken } from "./server-token";
 import type { NextRequest } from "next/server";
@@ -93,23 +93,6 @@ async function llmJson(prompt: string): Promise<Record<string, unknown>> {
 
 // ---------- שלב א׳: אימות ראיות חי ----------
 
-async function searchWithBackoff<T>(path: string, token: string | null): Promise<T> {
-  const delays = [8_000, 16_000, 32_000];
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    try {
-      return await ghFetch<T>(path, token);
-    } catch (e) {
-      lastErr = e;
-      const msg = e instanceof Error ? e.message.toLowerCase() : "";
-      const rl = e instanceof GhError && (e.status === 403 || e.status === 429) && /rate limit|secondary/.test(msg);
-      if (!rl || attempt === delays.length) throw e;
-      await sleep(delays[attempt]);
-    }
-  }
-  throw lastErr;
-}
-
 /** קרקע-אמת: משיכת קובץ גולמי וגריפת המחרוזת — עוקף אי-עקביות של אינדקס החיפוש */
 async function grepRawFile(
   fullName: string,
@@ -160,7 +143,7 @@ export async function verifyEvidenceLive(
       let lastClaim = claimed;
       for (const claim of claims) {
         lastClaim = claim;
-        const resp = await searchWithBackoff<{ total_count: number }>(
+        const resp = await ghSearchWithBackoff<{ total_count: number }>(
           `/search/code?q=${encodeURIComponent(`${claim} repo:${f.fullName}`)}&per_page=1`,
           token
         );

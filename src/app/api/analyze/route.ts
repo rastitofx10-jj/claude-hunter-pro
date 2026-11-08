@@ -7,7 +7,6 @@ import {
   QUALIFYING_MODELS,
   tierOf,
   satScore,
-  THRESHOLD_RULE_TEXT,
 } from "@/lib/github";
 import type { AnalyzeResponse, EvidenceItem, ModelHit, RepoCore, ClaudeFileInfo } from "@/lib/hunter-types";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
@@ -86,7 +85,9 @@ export async function GET(req: NextRequest) {
         claudeFiles.push({
           path: p,
           kind,
-          url: `https://github.com/${full}/blob/${meta.default_branch}/${p}`,
+          // קידוד נתיב — בעבר הוכנס גולמי; רווחים/#/? בשמות קבצים שברו את הקישור
+          // (אותו תיקון שכבר קיים ב-dna-miner.ts, כאן הוחל גם על הניתוח)
+          url: `https://github.com/${full}/blob/${meta.default_branch}/${p.split("/").map(encodeURIComponent).join("/")}`,
         });
       }
     };

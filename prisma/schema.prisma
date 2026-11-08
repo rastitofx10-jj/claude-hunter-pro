@@ -63,6 +63,8 @@ model DnaArtifact {
 model Chimera {
   id          Int      @id @default(autoincrement())
   name        String
+  // תקציר במשפט אחד — בעבר לא נשמר בכלל וההיסטוריה זייפה אותו מ-breakthrough
+  oneLiner    String?
   sources     String   // רשימת ריפואי מקור, מופרדת בפסיקים
   skillMd     String   // SKILL.md מלא מוכן להזרקה
   principles  String?  // JSON מערך עקרונות
