@@ -54,12 +54,23 @@ export async function persistToken(token: string): Promise<boolean> {
 /**
  * לכידה שקופה: אם הבקשה נשאה טוקן תקין-מבנה — שומר אותו לשימוש השרת.
  * נקרא רק אחרי הצלחת קריאת GitHub (כלומר הטוקן גם באמת עובד).
+ * באג היסטורי שתוקן כאן: resolveToken מחזיר את כותרת הבקשה עצמה כשיש כותרת —
+ * לכן "current !== header" היה תמיד שקר, persistToken לארץ לעולם, וכל
+ * הערות ה-"לכידה" בחמשת ה-routes היו על פונקציה מתה. עכשיו: ההשוואה מול
+ * הערך השמור ב-DB בלבד (env אינו ניתן לעדכון בזמן ריצה — הכותרת תמיד גוברת עליו).
  */
 export async function captureTokenFrom(req: NextRequest): Promise<void> {
   const header = req.headers.get("x-gh-token");
   if (header && looksLikeToken(header)) {
-    const current = await resolveToken(req).catch(() => null);
-    if (current !== header.trim()) await persistToken(header);
+    const t = header.trim();
+    let stored: string | null = null;
+    try {
+      const row = await db.setting.findUnique({ where: { key: TOKEN_KEY } });
+      stored = row?.value ?? null;
+    } catch {
+      stored = null;
+    }
+    if (stored !== t) await persistToken(t);
   }
 }
 

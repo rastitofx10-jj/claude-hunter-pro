@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { KeyRound, ExternalLink, CheckCircle2, XCircle, Loader2, Trash2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -13,14 +14,28 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useHunterStore } from "@/lib/hunter-store";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, SERVER_TOKEN } from "@/lib/api-client";
 import type { RateInfo } from "@/lib/hunter-types";
+
+interface ServerTokenInfo {
+  exists: boolean;
+  masked: string | null;
+  updatedAt: string | null;
+}
 
 export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
   const { token, setToken } = useHunterStore();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [test, setTest] = useState<{ loading: boolean; ok?: boolean; info?: RateInfo }>({ loading: false });
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // מסוכם מהשרת — הלקוח מחזיק רק סנטינל; בעבר הוצגו 8 תווים ראשונים של ה-PAT הגולמי מה-store
+  const { data: serverInfo } = useQuery({
+    queryKey: ["server-token"],
+    queryFn: () => apiFetch<ServerTokenInfo>("/api/settings/token", ""),
+    staleTime: 30_000,
+    retry: 1,
+  });
 
   // איפוס מצב מקומי בסגירה — בעבר draft/test נשארו בין פתיחות דיאלוג
   // (ב-onOpenChange ולא ב-effect — אין rerender מדורג)
@@ -29,6 +44,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
     if (!next) {
       setDraft("");
       setTest({ loading: false });
+      setSaveError(null);
     }
   };
 
@@ -72,7 +88,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                 יצירת טוקן ב-GitHub (30 שניות) <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <p className="text-xs text-muted-foreground">
-                אין צורך בהרשאות מיוחדות למאגרים ציבוריים. הטוקן נשמר בדפדפן שלך ובשרת המקומי, ומועבר רק ל-GitHub.
+                אין צורך בהרשאות מיוחדות למאגרים ציבוריים. הטוקן נשמר בשרת המקומי בלבד — לא בדפדפן — ומועבר רק ל-GitHub.
               </p>
             </div>
           </DialogDescription>
@@ -97,7 +113,27 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                 const t = draft.trim();
                 if (!t) return;
                 const ok = await runTest(t);
-                if (ok) setToken(t);
+                if (!ok) return;
+                // בדיקה עברה = הטוקן עובד מול GitHub. שמירה מפורשת בשרת
+                // (ה-bug ב-captureTokenFrom תוקן, אך כאן זה מפורש וחד-משמעי).
+                // הלקוח עובר לסנטינל בלבד — PAT גולמי לעולם לא נכנס ל-state/localStorage.
+                try {
+                  const res = await fetch("/api/settings/token", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ token: t }),
+                  });
+                  const info = (await res.json().catch(() => null)) as ServerTokenInfo | null;
+                  if (info?.exists) {
+                    setToken(SERVER_TOKEN);
+                    setSaveError(null);
+                    setDraft("");
+                  } else {
+                    setSaveError("אימות עבר אך השמירה בשרת נכשלה — נסה שוב");
+                  }
+                } catch {
+                  setSaveError("אימות עבר אך השמירה בשרת נכשלה — נסה שוב");
+                }
               }}
               disabled={test.loading || !draft.trim()}
               className="gap-1.5"
@@ -110,7 +146,13 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                 size="sm"
                 variant="destructive"
                 className="gap-1.5"
-                onClick={() => {
+                onClick={async () => {
+                  // מחיקה כפולה: שרת + לקוח — בעבר הכפתור מחק רק מה-store והשרת המשיך להחזיק
+                  try {
+                    await fetch("/api/settings/token", { method: "DELETE" });
+                  } catch {
+                    // best-effort
+                  }
                   setToken("");
                   setDraft("");
                   setTest({ loading: false });
@@ -154,7 +196,16 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
 
           {token && (
             <p className="text-xs text-muted-foreground">
-              טוקן פעיל שמור בדפדפן: <span dir="ltr" className="font-mono">{token.slice(0, 8)}…</span>
+              {serverInfo?.masked ? (
+                <>טוקן פעיל, נשמר בשרת: <span dir="ltr" className="font-mono">{serverInfo.masked}</span></>
+              ) : (
+                "טוקן פעיל — נשמר בשרת"
+              )}
+            </p>
+          )}
+          {saveError && (
+            <p role="alert" className="text-xs font-medium text-red-600 dark:text-red-400">
+              {saveError}
             </p>
           )}
         </div>
