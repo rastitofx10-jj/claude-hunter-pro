@@ -180,7 +180,10 @@ export default function ClaudeHunterPage() {
             {QUICK_REPOS.map((r) => (
               <button
                 key={r.fullName}
-                onClick={() => quickAnalyze(r.fullName)}
+                onClick={() => {
+                  setQuickInput(r.fullName);
+                  quickAnalyze(r.fullName);
+                }}
                 className="rounded-full border px-2.5 py-1 font-mono transition-colors hover:border-orange-400 hover:text-orange-600"
               >
                 {r.label}

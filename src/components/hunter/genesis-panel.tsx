@@ -338,7 +338,10 @@ export function GenesisPanel() {
             {quickTargets.map((r) => (
               <button
                 key={r}
-                onClick={() => mine.mutate(r)}
+                onClick={() => {
+                  setMineInput(r);
+                  mine.mutate(r);
+                }}
                 disabled={mine.isPending}
                 className="rounded-full border px-2.5 py-1 font-mono transition-colors hover:border-violet-400 hover:text-violet-600 disabled:opacity-50"
               >

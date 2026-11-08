@@ -1,16 +1,28 @@
 "use client";
 
+/**
+ * Sentinel: "הטוקן נמצא בשרת" — הלקוח לא מחזיק אותו.
+ * כשה-token הוא ה-sentinel (או ריק) אנחנו לא שולחים כותרת x-gh-token,
+ * והשרת פותר את הטוקן לבד מה-DB (server-token.resolveToken).
+ */
+export const SERVER_TOKEN = "@server";
+
+export function isServerToken(t: string | null | undefined): boolean {
+  return !t || !t.trim() || t.trim() === SERVER_TOKEN;
+}
+
 // Small fetch wrapper: attaches GitHub token header + JSON error handling
 export async function apiFetch<T>(
   url: string,
   token: string,
   init?: RequestInit
 ): Promise<T> {
+  const authHeaders = isServerToken(token) ? {} : { "x-gh-token": token.trim() };
   const res = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      "x-gh-token": token || "",
+      ...authHeaders,
       ...(init?.headers || {}),
     },
   });

@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useHunterStore } from "@/lib/hunter-store";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, SERVER_TOKEN } from "@/lib/api-client";
 import { useHydrated } from "@/hooks/use-hydrated";
 import type { RateInfo } from "@/lib/hunter-types";
 
@@ -24,16 +24,40 @@ import type { RateInfo } from "@/lib/hunter-types";
  * בלי טוקן — נפתח אוטומטית עם פוקוס בשדה: מדביקים → אנטר → מסיימים.
  * עם טוקן תקין — מתכווץ לפס ירוק דק עם מכסה מחיה.
  */
+interface ServerTokenInfo {
+  exists: boolean;
+  masked: string | null;
+  updatedAt: string | null;
+}
+
 export function TokenBanner() {
   const token = useHunterStore((s) => s.token);
   const setToken = useHunterStore((s) => s.setToken);
   const mounted = useHydrated();
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
+  const [masked, setMasked] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const hasToken = mounted && !!token;
   const open = !mounted || !hasToken || editing;
+
+  // אימוץ טוקן שנשמר בשרת: סשן דפדפן חדש לא מאבד את הטוקן — השרת מחזיק אותו
+  const { data: serverInfo } = useQuery({
+    queryKey: ["server-token"],
+    queryFn: () => apiFetch<ServerTokenInfo>("/api/settings/token", ""),
+    enabled: mounted && !hasToken,
+    staleTime: 30_000,
+    retry: 1,
+  });
+  useEffect(() => {
+    if (serverInfo?.exists) {
+      setToken(SERVER_TOKEN);
+    }
+  }, [serverInfo?.exists, setToken]);
+
+  // מוצג: מסוכם מהשמירה המקומית האחרונה, או מהשרת (אימוץ)
+  const shownMasked = masked ?? (serverInfo?.exists ? serverInfo.masked : null);
 
   const {
     data,
@@ -66,11 +90,13 @@ export function TokenBanner() {
     setDraft("");
     // שמירה גם בשרת — כך הניתוחים עובדים גם בלי הכותרת, ושורדים רענון
     try {
-      await fetch("/api/settings/token", {
+      const res = await fetch("/api/settings/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: t }),
       });
+      const info = (await res.json().catch(() => null)) as ServerTokenInfo | null;
+      if (info?.exists && info.masked) setMasked(info.masked);
     } catch {
       // best-effort — הטוקן יילכד אוטומטית בבקשה המאומתת הבאה
     }
@@ -214,6 +240,11 @@ export function TokenBanner() {
         ) : ok ? (
           <>
             <b>טוקן GitHub פעיל</b>
+            {shownMasked && (
+              <span dir="ltr" className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[11px] text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
+                {shownMasked}
+              </span>
+            )}
             {core && (
               <span dir="ltr" className="font-mono text-xs">
                 core {core.remaining}/{core.limit}
