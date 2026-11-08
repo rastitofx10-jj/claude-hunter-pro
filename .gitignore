@@ -39,3 +39,7 @@ tool-results/
 dev.log
 server.log
 scripts/gh_probe.py
+
+# platform-side PDF build helpers (not repo content)
+scripts/audit-*
+scripts/audit_*.py
