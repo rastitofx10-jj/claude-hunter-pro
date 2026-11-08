@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   KeyRound,
   ExternalLink,
@@ -33,6 +33,7 @@ interface ServerTokenInfo {
 export function TokenBanner() {
   const token = useHunterStore((s) => s.token);
   const setToken = useHunterStore((s) => s.setToken);
+  const queryClient = useQueryClient();
   const mounted = useHydrated();
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
@@ -104,10 +105,15 @@ export function TokenBanner() {
 
   const remove = async () => {
     setToken("");
+    setMasked(null);
     try {
       await fetch("/api/settings/token", { method: "DELETE" });
     } catch {
       // ignore
+    } finally {
+      // איפוס המטמון כדי שהטוקן שהוסר לא יאומץ מחדש מ-cache
+      queryClient.invalidateQueries({ queryKey: ["server-token"] });
+      queryClient.invalidateQueries({ queryKey: ["rate"] });
     }
   };
 
