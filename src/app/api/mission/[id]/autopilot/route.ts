@@ -8,20 +8,20 @@ export const maxDuration = 300;
 const MAX_PHASES_PER_RUN = 4;
 
 /**
- * ריצה מלאה (תאימות לאחור): מריצה שלב-אחר-שלב דרך אותו מנוע בדיוק
- * (runNextAutopilotPhase) עם חסם שלבים לריצה בודדת.
- * ההעדפה בממשק היא ריצת-צעד של הלקוח — כאן נשארת ריצה רציפה לשימוש ידני/אוטומציה.
+ * Full run (backward compatible): runs stage-by-stage through the exact same engine
+ * (runNextAutopilotPhase) with a cap on stages per single run.
+ * The preferred interface is client-driven stepping — a continuous run remains here for manual/automation use.
  */
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const numId = Number(id);
   if (!Number.isInteger(numId) || numId <= 0) {
-    return NextResponse.json({ error: "מזהה לא תקין" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid identifier" }, { status: 400 });
   }
 
   try {
-    // שלבים שכבר בוצעו מריצות קודמות — חייבים להיכלל ב-remaining,
-    // אחרת משימה בת 6 שלבים עם 2 בוצעים דיווחה remaining: 2 גם כשנשארו 4
+    // Stages already executed in previous runs — must be included in remaining,
+    // otherwise a 6-stage mission with 2 done reported remaining: 2 even when 4 were left
     const pre = await db.mission.findUnique({ where: { id: numId }, select: { autopilot: true } });
     const preState = parseAutopilotState(pre?.autopilot ?? null);
     const preDone = preState.steps.length + preState.failures.length;
@@ -31,13 +31,13 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     let totalPhases = 0;
     let firstRun = true;
 
-    // לולאה על אותו מנוע צעד-צעד — עד שאין עוד שלבים
+    // Loop over the same step-by-step engine — until there are no more stages
     for (;;) {
       if (steps.length + failures.length >= MAX_PHASES_PER_RUN) break;
       const r = await runNextAutopilotPhase(numId);
       totalPhases = r.totalPhases;
       if (firstRun && r.done && r.executed === null && r.failure === null) {
-        // המשימה כבר בוצעה במלואה — לא שגיאה, פשוט אין מה להריץ
+        // The mission was already fully executed — not an error, there is simply nothing to run
         return NextResponse.json({
           ok: true,
           steps: r.state.steps,
@@ -51,13 +51,13 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       if (r.executed) steps.push(r.executed);
       if (r.failure) failures.push(r.failure);
       if (r.allDone || r.done) break;
-      if (!r.executed && !r.failure) break; // תקיעה — לא להיתקע בלולאה
+      if (!r.executed && !r.failure) break; // stuck — do not get stuck in the loop
     }
 
     if (steps.length === 0 && preDone === 0) {
-      const detail = failures.map((f) => `שלב ${f.phaseIndex + 1}: ${f.error}`).join(" · ");
+      const detail = failures.map((f) => `Stage ${f.phaseIndex + 1}: ${f.error}`).join(" · ");
       return NextResponse.json(
-        { error: `כל השלבים נכשלו${detail ? `: ${detail}` : ""}` },
+        { error: `All stages failed${detail ? `: ${detail}` : ""}` },
         { status: 500 }
       );
     }
@@ -67,15 +67,15 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       steps,
       failures,
       totalPhases,
-      // remaining = שלבים שעדיין לא בוצעו גם מריצות קודמות וגם מזו
+      // remaining = stages not yet executed, both from previous runs and from this one
       remaining: Math.max(0, totalPhases - (preDone + steps.length + failures.length)),
     });
   } catch (e) {
     if (e instanceof AutopilotError) {
       return NextResponse.json({ error: e.message }, { status: e.status });
     }
-    // סניטציה — בעבר e.message גולמי (Prisma/רשת) דלף ללקוח
+    // Sanitization — previously a raw e.message (Prisma/network) leaked to the client
     console.error("[mission:autopilot] failed", e);
-    return NextResponse.json({ error: "הריצה האוטונומית נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "The autonomous run failed" }, { status: 500 });
   }
 }

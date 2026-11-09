@@ -1,12 +1,15 @@
 // ============================================================
-// מודול הביקורת האדברסרית — המערכת בודקת את עצמה באכזריות.
-// שלב א׳ (דטרמיניסטי, חי): לכל ממצא elite מוביל — חיפוש קוד במאגר עצמו
-//   עם מחרוזת הראיה הנטענת. 0 קבצים = ראיה נסתרת. זה חושף בדיוק את
-//   הכוזבות מסוג "אזכור בתיאור שקודם לתיאור בקוד".
-// שלב ב׳ (LLM anti-slop): פרומפט ביקורתי שמקבל את התדריך + תוצאות שלב א׳
-//   ונדרש לאתר טענות שאינן נתמכות, סלופ גנרי, ומספרים מומצאים.
-// תוצאה נשמרת בשורת הסריקה עצמה — לא ניתן להתנצל, אפשר רק לתקן.
-// צד שרת בלבד.
+// Adversarial audit module — the system audits itself ruthlessly.
+// Stage A (deterministic, live): for every leading elite finding — a code search
+//   in the repo itself with the claimed evidence string. 0 files = hidden
+//   evidence. This exposes exactly the falsehoods of the type
+//   "mentioned in the description, absent from the code".
+// Stage B (LLM anti-slop): a critical prompt that receives the briefing +
+//   Stage A results and must locate unsupported claims, generic slop,
+//   and invented numbers.
+// The result is saved on the sweep-run row itself — no excuses possible,
+//   only fixes.
+// Server-side only.
 // ============================================================
 
 import { db } from "./db";
@@ -19,14 +22,14 @@ import type { NextRequest } from "next/server";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// ---------- טיפוסים ----------
+// ---------- types ----------
 
 export interface EvidenceCheck {
   fullName: string;
   claimed: string;
   filesFound: number;
   verified: boolean;
-  /** קרקע-אמת: הקובץ המדויק שבו נמצאה המחרוזת */
+  /** Ground truth: the exact file in which the string was found */
   proofFile?: string;
   error?: string;
 }
@@ -40,7 +43,7 @@ export interface AuditResult {
   status: "running" | "done" | "failed";
   stage: string;
   evidenceChecks: EvidenceCheck[];
-  precision: number; // אחוז ראיות שאומתו מתוך נבדקו
+  precision: number; // percentage of verified evidence out of those conclusively checked
   specificityScore: number; // 0-100 anti-slop
   slopFlags: SlopFlag[];
   refutedClaims: SlopFlag[];
@@ -63,33 +66,34 @@ interface FindingLike {
 
 const AUDIT_TOP_N = 10;
 
-const AUDITOR_ROLE = `אתה מבקר פנימי עוין (red-team) של יחידת מודיעין. תפקידך לחשוף סלופ, המצאות ונפוחות — אבל רק כאלה שבאמת קיימים.
-כללי ברזל:
-1. מנוע JSON בלבד — בלי code fences, בלי טקסט מחוץ ל-JSON.
-2. עברית. אסורה מרכאה כפולה (") בתוך ערכי מחרוזת — גרש (') או ציטוט עברי (״).
-3. חשדנות מבוססת-ראיות: הפרכה חייבת לצטט את הטענה המדויקת ולהצביע על הנתון הסותר מהנתונים שלפניך. אם אין סתירה אמיתית — החזר מערך ריק. אסור בתכלית להמציא הפרכות, מחרוזות שלא הופיעו (כמו undefined), או סתירות כשהכל מאומת.
-4. הבחנה חוקית: ציון השקעה (inv) ו-moneyLevel הן הערכות מקצועיות מסומנות של המערכת — לא עובדות. אין לדגל אותן כהמצאה. המצאה = עובדה קונקרטית (מספר כוכבים, תאריך, שם קובץ, ציטוט, גודל) שאינה מופיעה בנתונים.
-5. טרמינולוגיה מוגדרת של המערכת אינה סלופ: ראיה קשה = מחרוזת מודל 5.5+ שאומתה בתוכן קובץ אמיתי, לרוב עם נתיב מצורף. אין לדגל את המונח עצמו.
-6. סלופ אמיתי = משפט גנרי שמתאים לכל פרויקט AI בלי פרט מזהה, או מספר/עובדה שלא קיימים בנתונים.`;
+const AUDITOR_ROLE = `You are a hostile internal (red-team) reviewer in an intelligence unit. Your job is to expose slop, fabrications, and bloat — but only where they truly exist.
+Iron rules:
+1. JSON engine only — no code fences, no text outside the JSON.
+2. English. Double quotes (") are forbidden inside string values — use a single quote (').
+3. Evidence-based suspicion: a refutation must quote the exact claim and point at the contradicting datum from the data in front of you. If there is no real contradiction — return an empty array. It is absolutely forbidden to invent refutations, strings that never appeared (such as undefined), or contradictions when everything is verified.
+4. A lawful distinction: the investment score (inv) and moneyLevel are marked professional estimates produced by the system — not facts. Do not flag them as fabrications. A fabrication = a concrete fact (star count, date, file name, quote, size) that does not appear in the data.
+5. Defined system terminology is not slop: hard evidence = a 5.5+ model string verified inside real file content, usually with an attached path. Do not flag the term itself.
+6. Real slop = a generic sentence that fits any AI project without an identifying detail, or a number/fact that does not exist in the data.`;
 
 async function llmJson(prompt: string): Promise<Record<string, unknown>> {
-  // התור הגלובלי (zai.ts) — מקביליות 1 + retry 429; role:"system" אמיתי
+  // The global queue (zai.ts) — concurrency 1 + 429 retry; a real "system" role
   const { content: raw } = await llmComplete(
     [
       { role: "system", content: AUDITOR_ROLE },
       { role: "user", content: prompt },
     ],
-    { timeoutMs: 110_000, timeoutLabel: "ביקורת AI" }
+    { timeoutMs: 110_000, timeoutLabel: "AI audit" }
   );
-  if (!raw.trim()) throw new Error("ה-AI החזיר תשובה ריקה");
+  if (!raw.trim()) throw new Error("The AI returned an empty response");
   return extractJson(raw, Error);
 }
 
-// ---------- שלב א׳: אימות ראיות חי ----------
+// ---------- Stage A: live evidence verification ----------
 
-/** קרקע-אמת: משיכת קובץ גולמי וגריפת מחרוזות. בעבר קיבלה את המחרוזות של
- * הטענה האחרונה בלבד — כשהטענות היו שני מודלים שונים, הקובץ נגרר עם המחרוזות
- * של המודל השני ועלול היה להיכשל בשווא ("נסתרה" למרות שהראייה אמיתית). */
+/** Ground truth: fetch the raw file and grep for the strings. It used to receive only the
+ * strings of the last claim — when the claims were two different models, the file was
+ * grepped with the second model's strings and could fail falsely
+ * ("refuted" even though the evidence was real). */
 async function grepRawFile(
   fullName: string,
   path: string,
@@ -111,7 +115,7 @@ async function grepRawFile(
   return null;
 }
 
-/** אימות חי: האם מחרוזת הראיה באמת בקבצי המאגר? (הגדרה: code search מתאים תוכן קובץ) */
+/** Live verification: is the evidence string actually in the repo's files? (Definition: code search matches file content) */
 export async function verifyEvidenceLive(
   findings: FindingLike[],
   token: string | null,
@@ -123,14 +127,14 @@ export async function verifyEvidenceLive(
     const f = targets[i] as FindingLike & { evidencePaths?: string[] };
     const claimed = (f.contentEvidence && f.contentEvidence.length > 0 ? f.contentEvidence[0] : null) ?? null;
     if (!claimed) {
-      const check: EvidenceCheck = { fullName: f.fullName, claimed: "(אין ראיית תוכן)", filesFound: 0, verified: false };
+      const check: EvidenceCheck = { fullName: f.fullName, claimed: "(no content evidence)", filesFound: 0, verified: false };
       checks.push(check);
       await onProgress?.(i + 1, targets.length, check);
       continue;
     }
     let check: EvidenceCheck;
     try {
-      // מאמתים עד 2 מחרוזות נטענות לכל מאגר — לא רק את הראשונה
+      // We verify up to 2 claimed strings per repo — not just the first one
       const claims = (f.contentEvidence ?? []).slice(0, 2);
       let filesFound = 0;
       let verifiedAny = false;
@@ -141,14 +145,16 @@ export async function verifyEvidenceLive(
         );
         filesFound += resp.total_count ?? 0;
         if ((resp.total_count ?? 0) > 0) verifiedAny = true;
-        // מכסת code search = 10/דקה — 6.5s בין שאילתות אימות (בעבר 2.1s שרפו את המכסה
-        // והפילו 403 על שאילתות ההמשך — ראיות אליטה נפסלו בשווא)
+        // Code search quota = 10/minute — 6.5s between verification queries (the previous 2.1s
+        // burned the quota and caused 403s on the follow-up queries — elite evidence was
+        // falsely rejected)
         await sleep(6_500);
       }
       check = { fullName: f.fullName, claimed: claims.join(" + "), filesFound, verified: verifiedAny };
-      // קרקע-אמת: אם האינדקס מחטיא (0 קבצים) — גריפה ישירה של הקובץ שנתגלה בסריקה.
-      // הגריפה משתמשת באיחוד המחרוזות של כל הטענות — בעבר רק של הטענה האחרונה
-      // (חיפוש במחרוזות של מודל B על קובץ שהתגלה דרך מודל A → הפרכה שקרית).
+      // Ground truth: if the index misses (0 files) — a direct grep of the file discovered
+      // during the scan. The grep uses the union of all claims' strings — previously only
+      // the last claim's (searching model B's strings in a file discovered via model A → a
+      // false refutation).
       if (!check.verified) {
         const unionNeedles = claims.flatMap((c) =>
           (QUALIFYING_MODELS.find((m) => m.id === c)?.searchStrings ?? [c]).map((s) => s.toLowerCase())
@@ -168,17 +174,17 @@ export async function verifyEvidenceLive(
         claimed,
         filesFound: 0,
         verified: false,
-        error: e instanceof Error ? e.message : "שגיאת אימות",
+        error: e instanceof Error ? e.message : "Verification error",
       };
     }
     checks.push(check);
     await onProgress?.(i + 1, targets.length, check);
-    await sleep(6_500); // קצב מכסת code search (10 לדקה)
+    await sleep(6_500); // code search quota pacing (10 per minute)
   }
   return checks;
 }
 
-// ---------- שלב ב׳: anti-slop ----------
+// ---------- Stage B: anti-slop ----------
 
 function parseFlags(v: unknown, max = 8): SlopFlag[] {
   if (!Array.isArray(v)) return [];
@@ -199,47 +205,48 @@ export async function antiSlopAudit(
   checks: EvidenceCheck[],
   findings: FindingLike[]
 ): Promise<{ specificityScore: number; slopFlags: SlopFlag[]; refutedClaims: SlopFlag[]; verdict: string }> {
-  // הפרדה חוקית: שגיאת API אינה הפרכה. בעבר שורת "נסתרה" נספרה גם כשהאימות
-  // נכשל טכנית (rate-limit/רשת) — והוזרמה ל-LLM כקרקע-אמת שהראייה שקרית,
-  // וגררה את ה-precision למטה בכישלון של המערכת, לא של הממצא.
+  // A lawful separation: an API error is not a refutation. Previously a "refuted" row was
+  // counted even when verification failed technically (rate limit/network) — and it was
+  // fed to the LLM as ground truth that the evidence was false, dragging precision down
+  // for a failure of the system, not of the finding.
   const errored = checks.filter((c) => !!c.error);
   const refuted = checks.filter((c) => !c.verified && !c.error);
   const briefSample = JSON.stringify(briefing ?? {}).slice(0, 4500);
   const refutedList = refuted.length
-    ? refuted.map((r) => `— ${r.fullName}: נטען "${r.claimed}" אך 0 קבצים במאגר מכילים אותה`).join("\n")
-    : "(אף ראיה לא נסתרה בשלב הדטרמיניסטי)";
+    ? refuted.map((r) => `— ${r.fullName}: claimed "${r.claimed}" but 0 files in the repo contain it`).join("\n")
+    : "(no evidence was refuted in the deterministic stage)";
   const erroredList = errored.length
-    ? errored.map((r) => `— ${r.fullName}: טענה "${r.claimed}" — האימות נכשל טכנית (${r.error})`).join("\n")
+    ? errored.map((r) => `— ${r.fullName}: claim "${r.claimed}" — verification failed technically (${r.error})`).join("\n")
     : "";
   const topFindings = findings
     .slice(0, 10)
-    .map((f) => `— ${f.fullName}: inv=${f.investment ?? "?"} חתימה: ${(f.signature ?? "").slice(0, 120)}`)
+    .map((f) => `— ${f.fullName}: inv=${f.investment ?? "?"} signature: ${(f.signature ?? "").slice(0, 120)}`)
     .join("\n");
 
-  const prompt = `ביקורת anti-slop על תדריך מודיעין שייצרה המערכת.
+  const prompt = `Anti-slop audit of an intelligence briefing generated by the system.
 
-1) תוצאות אימות חי (דטרמיניסטי) של ראיות ה-elite — הקרקע-אמת שאין לערער עליה:
-${checks.map((c) => `— ${c.fullName}: נטען "${c.claimed}" → ${c.filesFound} קבצים נמצאו ${c.error ? "⚠️ לא נבדקה (שגיאת אימות — לא לפרש כהפרכה!)" : c.verified ? `✓ אומתה${c.proofFile ? ` (קובץ הוכחה: ${c.proofFile})` : ""}` : "✗ נסתרה"}`).join("\n")}
+1) Live verification results (deterministic) for the elite evidence — the ground truth that cannot be disputed:
+${checks.map((c) => `— ${c.fullName}: claimed "${c.claimed}" → ${c.filesFound} files found ${c.error ? "⚠️ not checked (verification error — do not interpret as a refutation!)" : c.verified ? `✓ verified${c.proofFile ? ` (proof file: ${c.proofFile})` : ""}` : "✗ refuted"}`).join("\n")}
 
-2) ראיות שנסתרו (0 קבצים — קרקע-אמת):
+2) Refuted evidence (0 files — ground truth):
 ${refutedList}
 
-2ב) ראיות שלא הוסקה לגביהן מסקנה (שגיאת API — אין מידע, אין לפרש כהפרכה או כאימות):
-${erroredList || "(אין)"}
+2b) Evidence with no conclusion drawn (API error — no information; do not interpret as either refutation or verification):
+${erroredList || "(none)"}
 
-3) ממצאי הצמרת כפי שדווחו:
+3) The top findings as reported:
 ${topFindings}
 
-4) התדריך שנבדק (קטע):
+4) The briefing under audit (excerpt):
 ${briefSample}
 
-בדוק בקנאות אך ביושר:
-א. טענות בתדריך שסותרות את האימות החי — רק אם יש סתירה מילולית בין טענה מצוטטת לנתון מצוטט.
-ב. מספרים/עובדות קונקרטיות שלא מופיעים בנתונים (המצאה) — לא הערכות מסומנות כמו inv.
-ג. סלופ גנרי — משפט שמתאים לכל דוח בלי פרט מזהה.
-אם אין בעיות אמיתיות בקטגוריה — החזר מערך ריק. אסור להמציא.
-החזר JSON בדיוק:
-{"specificityScore": 0-100, "slopFlags": [{"claim": "...", "why": "..."}], "refutedClaims": [{"claim": "...", "why": "..."}], "verdict": "2-3 משפטים: כמה הדוח אמין ומה חייב תיקון"}`;
+Audit zealously but honestly:
+a. Claims in the briefing that contradict the live verification — only if there is a literal contradiction between a quoted claim and a quoted datum.
+b. Concrete numbers/facts that do not appear in the data (fabrications) — not estimates marked as such, like inv.
+c. Generic slop — a sentence that fits any report without an identifying detail.
+If there are no real problems in a category — return an empty array. Do not invent.
+Return exactly this JSON:
+{"specificityScore": 0-100, "slopFlags": [{"claim": "...", "why": "..."}], "refutedClaims": [{"claim": "...", "why": "..."}], "verdict": "2-3 sentences: how trustworthy the report is and what must be fixed"}`;
 
   const j = await llmJson(prompt);
   const score = Number(j.specificityScore ?? j.score ?? 50);
@@ -247,23 +254,24 @@ ${briefSample}
     specificityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 50,
     slopFlags: parseFlags(j.slopFlags),
     refutedClaims: parseFlags(j.refutedClaims),
-    verdict: str(j.verdict, "לא התקבל פסק ביקורת"),
+    verdict: str(j.verdict, "No audit verdict received"),
   };
 }
 
-// ---------- ריצת ביקורת מלאה ----------
+// ---------- running a full audit ----------
 
 const activeAudits = new Set<number>();
 
-/** קצירת ביקורות תקועות: ביקורת "running" שלא עודכנה מעבר לזה = השרת מת
- * באמצע. בעבר: נעילה תקועה לנצח — הכפתור מושבת וכל ניסיון חוזר מחזיר 409 לתמיד. */
+/** Reaping stuck audits: a "running" audit that has not been updated beyond this = the
+ * server died mid-run. Previously: a lock stuck forever — the button disabled and every
+ * retry returned 409 forever. */
 const STALE_AUDIT_MS = 15 * 60_000;
 
 async function writeAudit(id: number, audit: AuditResult): Promise<void> {
   try {
     await db.sweepRun.update({ where: { id }, data: { audit: JSON.stringify(audit) } });
   } catch {
-    // הריצה נמחקה
+    // the run was deleted
   }
 }
 
@@ -271,24 +279,25 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
   activeAudits.add(runId);
   try {
     const row = await db.sweepRun.findUnique({ where: { id: runId } });
-    if (!row) throw new Error("הסריקה לא נמצאה");
+    if (!row) throw new Error("Sweep run not found");
     const findings = safeJsonParse<FindingLike[]>(row.findings, []);
-    if (findings.length === 0) throw new Error("אין ממצאים לביקורת — הריצה לא השלימה");
+    if (findings.length === 0) throw new Error("No findings to audit — the run did not complete");
     const briefing = safeJsonParse<Record<string, unknown> | null>(row.briefing, null);
 
-    // שלב א׳
+    // Stage A
     await writeAudit(runId, {
       status: "running", stage: "evidence", evidenceChecks: [], precision: 0,
       specificityScore: 0, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
     });
     const checks = await verifyEvidenceLive(findings, token);
-    // דיוק = אומתו מתוך הנבדקו-עד-תום בלבד — שגיאות API לא נספרות במכנה
-    // (בעבר נספרו והורידו את הדיוק על כישלון של המערכת, לא של הממצא)
+    // Precision = verified out of only the conclusively checked — API errors are not
+    // counted in the denominator (previously they were, lowering precision for a failure
+    // of the system, not of the finding)
     const conclusive = checks.filter((c) => !c.error);
     const verifiedCount = conclusive.filter((c) => c.verified).length;
     const precision = conclusive.length ? Math.round((verifiedCount / conclusive.length) * 100) : 0;
 
-    // שלב ב׳
+    // Stage B
     await writeAudit(runId, {
       status: "running", stage: "antislop", evidenceChecks: checks, precision,
       specificityScore: 0, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
@@ -319,19 +328,20 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
       refutedClaims: [],
       verdict: "",
       llmCalls: 0,
-      error: e instanceof Error ? e.message : "שגיאת ביקורת",
+      error: e instanceof Error ? e.message : "Audit error",
     });
   } finally {
     activeAudits.delete(runId);
   }
 }
 
-/** פתיחת ביקורת ברקע */
+/** Start an audit in the background */
 export async function startAudit(req: NextRequest, runId: number): Promise<void> {
-  // הנעילה באמת לפני כל await — בעבר ה-findUnique הראשון קדם לבדיקת הנעילה
-  // והתקיים חלון של מילי-שניות שבו שני POST מקביליים עברו שניהם (ביקורת כפולה).
+  // The lock is truly taken before any await — previously the first findUnique ran before
+  // the lock check, leaving a millisecond window where two parallel POSTs both passed
+  // (a double audit).
   if (activeAudits.has(runId)) {
-    const err = new Error("ביקורת כבר רצה על הסריקה הזו");
+    const err = new Error("An audit is already running for this sweep run");
     (err as Error & { status?: number }).status = 409;
     throw err;
   }
@@ -339,17 +349,17 @@ export async function startAudit(req: NextRequest, runId: number): Promise<void>
   try {
     const row = await db.sweepRun.findUnique({ where: { id: runId }, select: { id: true, audit: true, updatedAt: true } });
     if (!row) {
-      const err = new Error("הסריקה לא נמצאה");
+      const err = new Error("Sweep run not found");
       (err as Error & { status?: number }).status = 404;
       throw err;
     }
     const running = safeJsonParse<{ status?: string }>(row.audit, {});
     if (running.status === "running") {
-      // קצירה: running בלי עדכון > 15 דקות = השרת מת באמצע הביקורת —
-      // בעבר זו הייתה נעילה תקועה לנצח (409 לנצח, כפתור מושבת).
+      // Reaping: running without an update for > 15 minutes = the server died mid-audit —
+      // previously this was a lock stuck forever (409 forever, button disabled).
       const ageMs = row.updatedAt ? Date.now() - new Date(row.updatedAt).getTime() : Infinity;
       if (ageMs < STALE_AUDIT_MS) {
-        const err = new Error("ביקורת כבר רצה על הסריקה הזו");
+        const err = new Error("An audit is already running for this sweep run");
         (err as Error & { status?: number }).status = 409;
         throw err;
       }
@@ -363,13 +373,13 @@ export async function startAudit(req: NextRequest, runId: number): Promise<void>
         refutedClaims: [],
         verdict: "",
         llmCalls: 0,
-        error: "הביקורת נקטעה (השרת אותחל) — סימון אוטומטי",
+        error: "The audit was interrupted (the server was restarted) — automatically marked",
       });
     }
     const token = await resolveToken(req);
     void executeAudit(runId, token);
   } catch (e) {
-    activeAudits.delete(runId); // כשל מוקדם — משחררים את הנעילה
+    activeAudits.delete(runId); // early failure — release the lock
     throw e;
   }
 }

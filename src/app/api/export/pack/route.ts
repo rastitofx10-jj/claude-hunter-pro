@@ -4,15 +4,15 @@ import { db } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /**
- * חבילת ייצוא מלאה — "קודקס ה-DNA":
- * כל הגנים מהאליטה + הגנים שנולדו מהשדה + הכימרות, בקובץ Markdown אחד
- * מוכן להזרקה לכל פרויקט (.claude/skills + CLAUDE.md addendum).
+ * Full export bundle — the "DNA Codex":
+ * all the genes from the elite + the genes born from the field + the chimeras, in a single Markdown file
+ * ready for injection into any project (.claude/skills + CLAUDE.md addendum).
  */
 export async function GET() {
   try {
-    // take מפורש — בעבר: findMany בלי גבול עם content מלא; הקציר האוטומטי מגדיל
-    // את הספרייה כל הזמן והייצוא תפח בלי מגבלה (בדיוק האנטי-דפוסן ש-mission/route.ts
-    // כבר תיקן בסבב קודם).
+    // Explicit take — previously: findMany unbounded with full content; the automatic harvest keeps
+    // growing the library and the export swelled without limit (exactly the anti-pattern that mission/route.ts
+    // already fixed in a previous round).
     const EXPORT_TAKE = 600;
     const [artifacts, chimeras, fieldCount] = await Promise.all([
       db.dnaArtifact.findMany({ orderBy: [{ sourceRepo: "asc" }, { path: "asc" }], take: EXPORT_TAKE }),
@@ -21,16 +21,16 @@ export async function GET() {
     ]);
 
     if (artifacts.length === 0) {
-      return NextResponse.json({ error: "הספרייה ריקה — אין מה לייצא. הרץ קציר או כרייה קודם." }, { status: 400 });
+      return NextResponse.json({ error: "The library is empty — there is nothing to export. Run a harvest or mining first." }, { status: 400 });
     }
 
     const L: string[] = [];
     L.push(`# 🧬 Claude Hunter — DNA Codex`);
     L.push(
-      `> נוצר אוטומטית · ${new Date().toLocaleString("he-IL")} · ${artifacts.length} גנים מ-${new Set(artifacts.map((a) => a.sourceRepo)).size} מקורות (${fieldCount} נולדו מהשדה) · סף מודלים 5.5+`
+      `> Auto-generated · ${new Date().toLocaleString("he-IL")} · ${artifacts.length} genes from ${new Set(artifacts.map((a) => a.sourceRepo)).size} sources (${fieldCount} born from the field) · model threshold 5.5+`
     );
     L.push(
-      `\n## התקנה לכל פרויקט\n\n1. צור תיקיית \`skills/\` בשורש הפרויקט (או \`.claude/skills/\` ל-Claude Code).\n2. העתק כל קובץ לפי הנתיב הרשום בכותרת שלו.\n3. הערכת CLAUDE.md בסוף הקובץ — שפכו לתוך ה-CLAUDE.md שלכם.`
+      `\n## Installation for any project\n\n1. Create a \`skills/\` folder at the project root (or \`.claude/skills/\` for Claude Code).\n2. Copy each file according to the path written in its header.\n3. The CLAUDE.md addendum at the end of the file — pour it into your CLAUDE.md.`
     );
 
     const bySource = new Map<string, typeof artifacts>();
@@ -43,24 +43,24 @@ export async function GET() {
     let fileNo = 0;
     for (const [source, items] of bySource) {
       const isField = source.startsWith("field:");
-      L.push(`\n---\n\n# ${isField ? "🧪 מהשדה (ניסיון מצטבר)" : "📦 מקור"}: ${source}`);
+      L.push(`\n---\n\n# ${isField ? "🧪 From the field (accumulated experience)" : "📦 Source"}: ${source}`);
       for (const a of items) {
         fileNo++;
         L.push(`\n## [${fileNo}] ${a.kind} · ${a.path}${a.description ? `\n> ${a.description}` : ""}`);
-        L.push(`\`\`\`markdown\n${a.content ?? "(אין תוכן)"}\n\`\`\``);
+        L.push(`\`\`\`markdown\n${a.content ?? "(no content)"}\n\`\`\``);
       }
     }
 
     if (chimeras.length) {
-      L.push(`\n---\n\n# ⚗️ כימרות ממוזגות (${chimeras.length})`);
+      L.push(`\n---\n\n# ⚗️ Merged chimeras (${chimeras.length})`);
       for (const c of chimeras) {
-        L.push(`\n## ${c.name}\n> מקורות: ${c.sources.split(",").join(" · ")}`);
+        L.push(`\n## ${c.name}\n> Sources: ${c.sources.split(",").join(" · ")}`);
         L.push(`\`\`\`markdown\n${c.skillMd}\n\`\`\``);
       }
     }
 
     L.push(
-      `\n---\n\n# 📘 CLAUDE.md Addendum\n\n> הוסף את זה ל-CLAUDE.md של הפרויקט שלך כדי שהסוכן ידע על הסקילים:\n\n\`\`\`markdown\n## Available Skills (from Claude Hunter DNA Codex)\n\nThe following skills are available in skills/ — read the relevant SKILL.md before attempting a matching task:\n${artifacts
+      `\n---\n\n# 📘 CLAUDE.md Addendum\n\n> Add this to your project's CLAUDE.md so the agent knows about the skills:\n\n\`\`\`markdown\n## Available Skills (from Claude Hunter DNA Codex)\n\nThe following skills are available in skills/ — read the relevant SKILL.md before attempting a matching task:\n${artifacts
         .filter((a) => a.kind === "skill" || a.kind === "command")
         .map((a) => `- ${a.path}: ${a.description ?? a.name}`)
         .join("\n")}\n\`\`\``
@@ -74,6 +74,6 @@ export async function GET() {
     });
   } catch (e) {
     console.error("export/pack failed", e);
-    return NextResponse.json({ error: "ייצוא הקודקס נכשל" }, { status: 500 });
+    return NextResponse.json({ error: "Codex export failed" }, { status: 500 });
   }
 }

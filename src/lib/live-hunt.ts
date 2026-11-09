@@ -1,19 +1,19 @@
 // ============================================================
-// ציד חי — שרשרת הרג אוטונומית מלאה בלחיצה אחת.
-// הרעיון: כל המנועים שבנינו פועלים על שרשרת אחת סגורה, עם נתונים חיים:
+// Live hunt — a full autonomous kill chain in a single click.
+// The idea: all the engines we've built run on one closed chain, with live data:
 //
-//  hunt    — מטח שאילתות GitHub חי (טוקן השרת) → מועמדים עם סף 5.5+
-//  swarm   — טריאז׳ה חכמה + פרופילי השקעה (LLM)
-//  attack  — דפוסי שוק + תוכנית תקיפה + אבולוציית שאילתות + תדריך (LLM)
-//  mine    — כריית DNA חיה מהמטרות המובילות (GitHub → ספריית DNA)
-//  compile — גזירת מטרה אוטומטית מהמודיעין → הידור משימה מהגנים החדשים
-//  execute — טייס אוטומטי: שלב אחד לכל קריאה, עד לסיום כל השלבים
-//  grow    — זיקוק שדה → לידת DNA חדש בספרייה (field:livehunt-<id>)
-//  verdict — מסקנת מערכה: מספרים מלאים, הוכחת צמיחת הספרייה
+//  hunt    — a live volley of GitHub queries (server token) → candidates above the 5.5+ threshold
+//  swarm   — smart triage + investment profiles (LLM)
+//  attack  — market patterns + attack plan + query evolution + briefing (LLM)
+//  mine    — live DNA mining from the leading targets (GitHub → DNA library)
+//  compile — automatic goal derivation from the intel → mission compilation from the new genes
+//  execute — autopilot: one phase per call, until all phases complete
+//  grow    — field distillation → new DNA born into the library (field:livehunt-<id>)
+//  verdict — campaign verdict: full numbers, proof of library growth
 //
-// עיקרון מהטייס האוטומטי: שלב אחד לכל קריאת HTTP. מצב נשמר ב-DB אחרי
-// כל שלב — ריסטרט לא מפיל את השרשרת, וניתן לנסות שוב מהשלב הנוכחי.
-// צד שרת בלבד.
+// Principle from the autopilot: one phase per HTTP call. State is persisted to the DB after
+// each phase — a restart doesn't kill the chain, and it can be retried from the current phase.
+// Server-side only.
 // ============================================================
 
 import { db } from "@/lib/db";
@@ -46,13 +46,14 @@ import {
   type ExecBrief,
 } from "./intel-swarm";
 import {
-  rankDnaForGoal,
+  selectDnaForGoal,
   compileMission,
   distillFieldReport,
   extractHandoff,
-  type DnaRow,
   type MissionPhase,
 } from "./mission-compiler";
+import { llmCallSnapshot } from "./zai";
+import { writeDnaSnapshot } from "./dna-snapshot";
 import { runNextAutopilotPhase, parseAutopilotState, AutopilotError } from "./autopilot";
 import { advanceStatus, OUTCOME_STATUS } from "./mission-status";
 
@@ -68,14 +69,14 @@ export const LIVE_HUNT_STAGE_ORDER = [
 ] as const;
 
 export const LIVE_HUNT_STAGE_TITLES: Record<string, string> = {
-  hunt: "איתור חי — מטח שאילתות GitHub",
-  swarm: "להקת פרומפטים I — טריאז׳ה ופרופילים",
-  attack: "להקת פרומפטים II — דפוסים ותוכנית תקיפה",
-  mine: "כריית DNA חיה מהמטרות המובילות",
-  compile: "הידור משימה מהמודיעין והגנים",
-  execute: "ביצוע אוטונומי — טייס פר-שלב",
-  grow: "זיקוק שדה — הספרייה גדלה",
-  verdict: "מסקנת מערכה — ראיות מלאות",
+  hunt: "Live detection — GitHub query volley",
+  swarm: "Prompt swarm I — triage & profiles",
+  attack: "Prompt swarm II — patterns & attack plan",
+  mine: "Live DNA mining from the leading targets",
+  compile: "Mission compilation from the intel and genes",
+  execute: "Autonomous execution — per-phase autopilot",
+  grow: "Field distillation — the library grows",
+  verdict: "Campaign verdict — full evidence",
 };
 
 export interface LiveHuntStageRecord {
@@ -99,27 +100,27 @@ interface HuntCtx {
   id: number;
   done: LiveHuntStageRecord[];
   evidence: (key: string) => Record<string, unknown> | null;
-  /** סך קריאות ה-LLM שנצברו עד כה — למסקנת המערכה (מקור אמת אחד) */
+  /** Total LLM calls accumulated so far — for the campaign verdict (single source of truth) */
   llmCallsSoFar: number;
-  /** דור הציד — דור 2+ זורע את שאילתות האבולוציה של הציד הקודם */
+  /** Hunt generation — generation 2+ seeds the previous hunt's evolved queries */
   generation: number;
-  /** הציד האב — ממנו נזרעו השאילתות המתפתחות */
+  /** Parent hunt — from which the evolved queries were seeded */
   seededFrom: number | null;
 }
 
-// ---------- טוקן שרת (DB ← env) ----------
+// ---------- Server token (DB ← env) ----------
 
 async function getStoredToken(): Promise<string | null> {
   try {
     const row = await db.setting.findUnique({ where: { key: "github_pat" } });
     if (row?.value?.trim()) return row.value.trim();
   } catch {
-    // נופל ל-env
+    // fall back to env
   }
   return process.env.GITHUB_TOKEN ?? null;
 }
 
-// ---------- מבני עזר ----------
+// ---------- Helper structures ----------
 
 interface SwarmStageState {
   flat: CandidateFlat[];
@@ -162,38 +163,38 @@ function readMineEvidence(ctx: HuntCtx): Record<string, unknown> | null {
   return ctx.evidence("mine");
 }
 
-/** קריאת LLM סלחנית — כשל לא מפיל את השלב, נרשם ב-failures */
+/** Forgiving LLM call — a failure doesn't take down the stage, it's recorded in failures */
 async function llmTry<T>(fn: () => Promise<T>, failures: string[], label: string): Promise<T | null> {
   try {
     return await fn();
   } catch (e) {
-    failures.push(`${label}: ${e instanceof Error ? e.message : "שגיאה"}`);
+    failures.push(`${label}: ${e instanceof Error ? e.message : "error"}`);
     return null;
   }
 }
 
-// ---------- שלב 1: hunt ----------
+// ---------- Stage 1: hunt ----------
 
-/** סיווג שאילתה מתפתחת לנקודת-קצה הנכונה: מותאמי-repo (stars/fork/topic) נמדדים ב-repo search, השאר קוד */
+/** Classify an evolved query to the correct endpoint: repo qualifiers (stars/fork/topic) are measured in repo search, the rest are code */
 function evolvedKind(q: string): "code" | "repo" {
   if (/\b(stars|fork|pushed|topic|created|size):/i.test(q)) return "repo";
   return "code";
 }
 
-// תקרה כוללת לשאילתות ציד אחד (סטטיות + מתפתחות).
-// ארסנל מלא = 26 (15 קוד-רגיסטרי + 4 קוד-יכולת + 7 מאגרים). דור 2+ מוסיף ≤10 מתפתחות.
-// 32 = המקסימום האפשרי (26 סטטיות בדור 1; 22 סטטיות + 10 מתפתחות בדור 2+).
-// במרווח הזמן: 25 שאילתות קוד × 6.5 שניות + 7 מאגר × 2.1 ≈ 195 שניות — נותר ראש ל-backoff מול maxDuration=300.
+// Total cap on queries for a single hunt (static + evolved).
+// Full arsenal = 26 (15 registry-code + 4 capability-code + 7 repos). Generation 2+ adds ≤10 evolved.
+// 32 = the maximum possible (26 static in generation 1; 22 static + 10 evolved in generation 2+).
+// Timing budget: 25 code queries × 6.5s + 7 repo × 2.1 ≈ 195 seconds — headroom remains for backoff against maxDuration=300.
 const MAX_HUNT_QUERIES = 32;
 
 /**
- * שומר סף דטרמיניסטי לשאילתות מתפתחות — לא סומכים על ה-LLM לציית לכללים.
- * ראיות מהשטח: Gen4+Gen5 קיבלו מהמודל שוב ושוב repo:anthropic-ai/claude — מאגר שלא קיים,
- * למרות שהפרומפט אסר זאת מפורשות וכלל רשימת מתות. כל 10-12 השאילתות חזרו 0 תוצאות.
- * הכלל כאן בקוד:
- * 1. מתאם repo:owner/name חוקי רק אם owner/name ברשימת מאגרים אמיתיים (אליטה/מועמדים/אנתרופיק ידועים).
- * 2. שאילתה בלי מתאם repo: עוברת (חיפוש קוד חופשי לא יכול להיות מאגר לא-קיים).
- * 3. דפוס מת מהדור הקודם (0 תוצאות) נחסם אפילו אם המודל שינה רק מילה.
+ * A deterministic threshold guard for evolved queries — we don't rely on the LLM to follow the rules.
+ * Field evidence: Gen4+Gen5 repeatedly got repo:anthropic-ai/claude from the model — a repo that doesn't exist,
+ * even though the prompt explicitly forbade it and included a dead list. All 10-12 queries returned 0 results.
+ * The rule here, in code:
+ * 1. A repo:owner/name qualifier is legal only if owner/name is in the list of real repos (elite/candidates/known anthropic).
+ * 2. A query without a repo: qualifier passes (free code search can't be a non-existent repo).
+ * 3. A dead pattern from the previous generation (0 results) is blocked even if the model changed only one word.
  */
 function validateEvolvedQueries(
   rawQueries: string[],
@@ -209,12 +210,12 @@ function validateEvolvedQueries(
   for (const raw of rawQueries) {
     const q = String(raw ?? "").trim();
     if (q.length < 8 || q.length > 240) {
-      dropped.push({ q, why: "אורך לא תקין" });
+      dropped.push({ q, why: "invalid length" });
       continue;
     }
     const repoMatch = q.match(/\brepo:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/);
     if (repoMatch && !realRepos.has(repoMatch[1].toLowerCase())) {
-      dropped.push({ q, why: `repo:${repoMatch[1]} לא ברשימת מאגרים אמיתיים` });
+      dropped.push({ q, why: `repo:${repoMatch[1]} not in the list of real repos` });
       continue;
     }
     const bare = q.replace(/["']/g, "").toLowerCase();
@@ -222,13 +223,13 @@ function validateEvolvedQueries(
       (dw) => dw.length >= 2 && dw.every((w) => bare.includes(w.toLowerCase()))
     );
     if (isDeadPattern) {
-      dropped.push({ q, why: "שכפול דפוס שהחזיר 0 תוצאות בדור הקודם" });
+      dropped.push({ q, why: "duplicate of a pattern that returned 0 results in the previous generation" });
       continue;
     }
-    // השוואה בר-מרכאות משני הצדדים — בעבר הושווה bare מול המקור עם המרכאות,
-    // וכל שאילתה שהכילה " או ' עקפה את בדיקת הכפילויות ושרפה מכסה חיפוש פעמיים.
+    // Quote-insensitive comparison on both sides — previously bare was compared against the original with quotes,
+    // and any query containing " or ' bypassed the duplicate check and burned search quota twice.
     if (kept.some((k) => k.replace(/["']/g, "").toLowerCase() === bare)) {
-      dropped.push({ q, why: "כפילות" });
+      dropped.push({ q, why: "duplicate" });
       continue;
     }
     kept.push(q);
@@ -238,11 +239,11 @@ function validateEvolvedQueries(
 }
 
 /**
- * זריעה גנרציונית: השאילתות שהלהקה הציעה בציד האב מממשות בפועל בציד הבן — עם שומר סף דטרמיניסטי.
- * (בעבר: queryEvolution נרשם ונזרק; אחר-כך: הועבר כמו שהוא — והמודל המציא מאגרים לא-קיימים בכל דור)
+ * Generational seeding: the queries the swarm proposed in the parent hunt actually execute in the child hunt — with a deterministic threshold guard.
+ * (Before: queryEvolution was recorded and discarded; later: it was passed as-is — and the model invented non-existent repos every generation)
  */
-/** זריעה גנרציונית. `known` — מאגרים שדורות קודמים ראו; מחושב פעם אחת ב-stageHunt
- * ומועבר פנימה (בעבר: previousKnownRepos רץ פעמיים לכל ציד — 6 שורות מלאות + פירוק JSON כפול). */
+/** Generational seeding. `known` — repos that previous generations saw; computed once in stageHunt
+ * and passed inward (before: previousKnownRepos ran twice per hunt — 6 full rows + duplicate JSON parsing). */
 async function parentEvolvedQueries(
   ctx: HuntCtx,
   known: Set<string>,
@@ -255,12 +256,12 @@ async function parentEvolvedQueries(
   const raw = Array.isArray(attack?.queryEvo?.nextQueries) ? (attack!.queryEvo!.nextQueries as unknown[]) : [];
   const blind = Array.isArray(attack?.queryEvo?.blindSpots) ? (attack!.queryEvo!.blindSpots as unknown[]) : [];
 
-  // מאגרים אמיתיים: הכל שנראה אי-פעם + מאגרי אנתרופיק רשמיים (קיימים וידועים)
+  // Real repos: everything ever seen + official Anthropic repos (existing and known)
   const realRepos = new Set([...known].map((r) => r.toLowerCase()));
   for (const r of ["anthropics/claude-code", "anthropics/skills", "anthropics/anthropic-sdk-python", "anthropics/anthropic-sdk-typescript", "anthropics/cookbooks"]) {
     realRepos.add(r.toLowerCase());
   }
-  // שאילתות מתות = מה שהאב הריץ וקיבל 0 תוצאות
+  // Dead queries = what the parent ran and got 0 results from
   const parentHunt = stages.find((s) => s.key === "hunt")?.evidence as { queries?: { q?: unknown; count?: unknown }[] } | undefined;
   const deadQueries = (parentHunt?.queries ?? [])
     .filter((r) => typeof r?.q === "string" && r?.count === 0)
@@ -272,9 +273,9 @@ async function parentEvolvedQueries(
   return { queries, blindSpots: blind.map((b) => String(b)).slice(0, 4), parentId: parent.id, dropped };
 }
 
-/** איחוד כל המאגרים שדורות קודמים כבר ראו — לבדיקת חדשנות של הדור.
- * (בעבר: קראנו רק flat[top12]+topCandidates[top10] — הזיכרון היה קטום, וה-metric "חדשים מעבר לידע קודם" היה מזויף: תמיד ~935-22.
- * עכשיו: קוראים את כל המועמדים שנראו (allNames) — מדידה אמיתית.) */
+/** Union of all repos that previous generations already saw — for the generation's novelty check.
+ * (Before: we read only flat[top12]+topCandidates[top10] — memory was truncated, and the "novel beyond prior knowledge" metric was fake: always ~935-22.
+ * Now: we read all candidates ever seen (allNames) — a real measurement.) */
 async function previousKnownRepos(): Promise<Set<string>> {
   const hunts = await db.liveHunt.findMany({ where: { status: "done" }, orderBy: { id: "desc" }, take: 6 });
   const known = new Set<string>();
@@ -294,30 +295,30 @@ async function previousKnownRepos(): Promise<Set<string>> {
 
 async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const token = await getStoredToken();
-  // מפתח-מהר: בלי טוקן כל 26 השאילתות היו נכשלות 401 אחת-אחת עם backoff —
-  // דקות של רעש לפני כישלון. עכשיו: כישלון מיידי עם הודעה מדויקת.
+  // Fail fast: without a token all 26 queries would fail 401 one-by-one with backoff —
+  // minutes of noise before failure. Now: immediate failure with a precise message.
   if (!token) {
-    throw new LiveHuntError("אין טוקן GitHub בשרת — הציד החי זקוק לטוקן (הגדרות → טוקן)", 400);
+    throw new LiveHuntError("No GitHub token on the server — the live hunt requires a token (Settings → Token)", 400);
   }
   const arsenal = buildQueryArsenal();
 
-  // הידע המצטבר — פעם אחת לכל הציד (זריעה + מדד חדשנות חולקים אותו)
+  // Accumulated knowledge — once per hunt (seeding and the novelty metric share it)
   const known = await previousKnownRepos();
 
-  // זריעה גנרציונית — שאילתות האבולוציה של האב נכנסות לשטח באמת
+  // Generational seeding — the parent's evolution queries actually hit the field
   const seed = await parentEvolvedQueries(ctx, known);
   const seenQ = new Set(arsenal.map((q) => q.q.toLowerCase()));
   const evolved = seed.queries.filter((q) => !seenQ.has(q.q.toLowerCase()));
 
-  // תקציב סטטי לפי קטגוריה — השאילתות המתפתחות מחליפות רוחב-רגיסטרי,
-  // לעולם לא את ממד השוק/נושאים (repo). בעבר: פריסה לפי ראש-הרשימה רעבה
-  // בדור 2+ את כל 7 חיפושי המאגרים וגם רוקנה את חיפושי היכולת —
-  // הזריעה נועדה להוסיף כיסוי ובפועל מחקה ממדים שלמים.
+  // Static budget by category — evolved queries replace registry breadth,
+  // never the market/topic dimension (repo). Before: head-of-list allocation starved
+  // all 7 repo searches in generation 2+ and also drained the capability searches —
+  // seeding was meant to add coverage but actually wiped out entire dimensions.
   const staticBudget = Math.max(0, MAX_HUNT_QUERIES - evolved.length);
-  const repoQ = arsenal.filter((q) => q.kind === "repo"); // 7 — תמיד ראשונות
+  const repoQ = arsenal.filter((q) => q.kind === "repo"); // 7 — always first
   const codeQ = arsenal
     .filter((q) => q.kind === "code")
-    .sort((a, b) => (a.origin.startsWith("registry") ? -1 : 1) - (b.origin.startsWith("registry") ? -1 : 1)); // רגיסטרי לפני יכולת
+    .sort((a, b) => (a.origin.startsWith("registry") ? -1 : 1) - (b.origin.startsWith("registry") ? -1 : 1)); // registry before capability
   const staticQ: SweepQuery[] = [
     ...repoQ.slice(0, staticBudget),
     ...codeQ.slice(0, Math.max(0, staticBudget - repoQ.length)),
@@ -329,8 +330,8 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const enriched = await enrichCandidates(candidates, token, 20);
   const flat = flattenForSwarm(candidates);
 
-  // עצירת שרשרת: ציד שלא מצא כלום לא ממשיך לבנות משימה מאוויר.
-  // בעבר: 0 מועמדים עברו בשקט את כל 8 השלבים — משימה מטרה גנרית ודיווח שקרי "הצלחה".
+  // Chain stop: a hunt that found nothing doesn't go on to build a mission out of thin air.
+  // Before: 0 candidates silently passed all 8 stages — a generic-goal mission and a false "success" report.
   if (candidates.length === 0) {
     const failedQ = reports.filter((r: QueryReport) => r.error).length;
     const errTail = reports
@@ -340,23 +341,23 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       .join(" · ");
     throw new LiveHuntError(
       failedQ > 0
-        ? `הציד לא מצא מועמדים — ${failedQ}/${queries.length} שאילתות נכשלו${errTail ? ` (${errTail})` : ""}`
-        : "הציד לא מצא מועמדים — אין על מה להרכיב שרשרת (נסה דור חדש או הרחב טווח)",
+        ? `The hunt found no candidates — ${failedQ}/${queries.length} queries failed${errTail ? ` (${errTail})` : ""}`
+        : "The hunt found no candidates — nothing to build a chain from (try a new generation or widen the range)",
       502,
     );
   }
 
-  // חדשנות — מה הדור הזה מגלה מעבר לכל הידע המצטבר של הדורות הקודמים
+  // Novelty — what this generation discovers beyond all the accumulated knowledge of previous generations
   const novelCandidates = candidates.filter((c) => !known.has(c.fullName));
   const repeatPct = candidates.length ? Math.round(((candidates.length - novelCandidates.length) / candidates.length) * 100) : 0;
 
   const hard = candidates.filter((c) => c.evidence === "hard").length;
   const genTag =
     ctx.generation > 1
-      ? ` · דור ${ctx.generation} (זריעה מציד #${seed.parentId}: ${evolved.length} שאילתות${seed.dropped.length ? `, ${seed.dropped.length} נפסלו בשומר-הסף` : ""})`
+      ? ` · generation ${ctx.generation} (seeded from hunt #${seed.parentId}: ${evolved.length} queries${seed.dropped.length ? `, ${seed.dropped.length} rejected by the threshold guard` : ""})`
       : "";
-  const novelTag = known.size > 0 ? ` · ${novelCandidates.length} חדשים / ${repeatPct}% כבר נראו בדורות קודמים` : "";
-  const summary = `${queries.length} שאילתות · ${candidates.length} מועמדים מדורגים · ${hard} עם ראיה קשה · ${repoHits.length} מאגרים${genTag}${novelTag}`;
+  const novelTag = known.size > 0 ? ` · ${novelCandidates.length} novel / ${repeatPct}% already seen in previous generations` : "";
+  const summary = `${queries.length} queries · ${candidates.length} ranked candidates · ${hard} with hard evidence · ${repoHits.length} repos${genTag}${novelTag}`;
 
   return {
     summary,
@@ -387,14 +388,14 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       flat: flat.slice(0, 12),
       topCandidates: candidates.slice(0, 10),
       executedQueries: queries.map((q) => q.q),
-      statsLine: `${queries.length} שאילתות · ${codeHits.length} קודים · ${repoHits.length} מאגרים · ${candidates.length} מועמדים · ${enriched} הועשרו`,
+      statsLine: `${queries.length} queries · ${codeHits.length} code hits · ${repoHits.length} repos · ${candidates.length} candidates · ${enriched} enriched`,
       topList: candidates.slice(0, 8).map((c) => ({
         fullName: c.fullName,
         stars: c.stars,
         score: c.score,
         evidence: c.evidence,
-        // בעבר: c.tierLabel — שדה שלא קיים על Candidate (רק על CandidateFlat),
-        // נכנס כ-undefined ונשמט מה-JSON. עכשיו מחושב מהציון כמו ב-flattenForSwarm.
+        // Before: c.tierLabel — a field that doesn't exist on Candidate (only on CandidateFlat),
+        // entered as undefined and dropped from the JSON. Now computed from the score like in flattenForSwarm.
         tierLabel: tierOf(Math.min(100, c.score)).label,
         modelStrings: c.modelStrings.slice(0, 5),
       })),
@@ -402,16 +403,16 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   };
 }
 
-// ---------- שלב 2: swarm (טריאז׳ה + פרופילים) ----------
+// ---------- Stage 2: swarm (triage + profiles) ----------
 
 async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const huntEv = readHuntEvidence(ctx);
   const flat = (huntEv?.flat as CandidateFlat[] | undefined) ?? [];
   if (flat.length === 0) {
     return {
-      summary: "אין מועמדים מהשלב הקודם — הלהקה מדלגת",
-      // התאמה לחוק SwarmStageState המלא — בעבר חסרו autoSaved/autoSavedSkipped
-      // ו-readSwarmState היה קורא אותם כ-undefined במקרה הדילוג (עבד במקרה בזכות ?? בלבד)
+      summary: "No candidates from the previous stage — the swarm skips",
+      // Conform to the full SwarmStageState shape — before, autoSaved/autoSavedSkipped were missing
+      // and readSwarmState read them as undefined in the skip case (it only worked by luck, thanks to ??)
       evidence: { flat: [], triage: [], profiles: [], elite: [], watch: [], autoSaved: 0, autoSavedSkipped: 0, llmCalls: 0, llmFailures: [] },
     };
   }
@@ -419,30 +420,30 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
   const failures: string[] = [];
   let calls = 0;
 
-  // טריאז׳ה — אצווה אחת של 12 (גבול זמן HTTP נשמר)
+  // Triage — a single batch of 12 (HTTP time limit preserved)
   const batch = flat.slice(0, 12);
-  // מונה לפי קריאה, לא לפי תוכן: מודל שהחזיר [] תקין — הקריאה התרחשה ועלתה.
-  // (בעבר: תשובה ריקה-תקינה לא נספרה והמונה במסקנה שיקר בחסר)
-  const triage = (await llmTry(() => triageBatch(batch), failures, "טריאז׳ה")) ?? [];
-  calls++; // llmTry מחזיר null רק בכישלון; ?? [] מייצג הצלחה גם כשריק
+  // Count per call, not per content: a model that returned a valid [] — the call happened and it cost.
+  // (Before: a valid-empty answer wasn't counted and the counter in the verdict under-reported)
+  const triage = (await llmTry(() => triageBatch(batch), failures, "triage")) ?? [];
+  calls++; // llmTry returns null only on failure; ?? [] represents success even when empty
 
   const eliteNames = new Set(triage.filter((t) => t.verdict === "elite").map((t) => t.fullName));
   const watchNames = new Set(triage.filter((t) => t.verdict === "watch").map((t) => t.fullName));
   const elite = batch.filter((c) => eliteNames.has(c.fullName)).slice(0, 12);
   const watch = batch.filter((c) => watchNames.has(c.fullName)).slice(0, 12);
 
-  // פרופילים לאליטה בלבד, אצוות של 6
+  // Profiles for the elite only, batches of 6
   const profiles: SharpProfile[] = [];
   for (const pb of chunk(elite, 6)) {
-    const res = await llmTry(() => sharpProfiles(pb), failures, "פרופילים");
+    const res = await llmTry(() => sharpProfiles(pb), failures, "profiles");
     if (res) {
       profiles.push(...res);
       calls++;
     }
   }
 
-  // ארכוב אוטומטי: אליטה חיה נכנסת לרשימת הנשמרים עם סימון מפורש — מודיעין שנשמר בין דורות
-  // קריאה אחת מראש במקום findUnique פר-אליטה — בעבר עד 12×2 סבבי DB עקביים (N+1)
+  // Auto-archiving: live elite enters the saved list with an explicit marker — intel preserved across generations
+  // One up-front query instead of findUnique per elite — before, up to 12×2 sequential DB rounds (N+1)
   let autoSaved = 0;
   let autoSavedSkipped = 0;
   const triageMap = new Map(triage.map((t) => [t.fullName, t]));
@@ -454,7 +455,7 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
   for (const e of elite) {
     try {
       const existing = existingMap.get(e.fullName) ?? null;
-      const reason = triageMap.get(e.fullName)?.reason?.slice(0, 140) ?? "elite בטריאז׳ה";
+      const reason = triageMap.get(e.fullName)?.reason?.slice(0, 140) ?? "elite in triage";
       if (!existing) {
         await db.savedRepo.create({
           data: {
@@ -467,13 +468,13 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
             score: Math.min(100, Math.round(e.score ?? 0)),
             models: e.modelStrings?.slice(0, 6).join(",") ?? null,
             evidence: JSON.stringify({ contentEvidence: (e.contentEvidence ?? []).slice(0, 3), tier: e.tierLabel ?? null }),
-            notes: `⚔️ ציד חי אוטומטי (#${ctx.id} דור ${ctx.generation}): ${reason}`,
+            notes: `⚔️ Automatic live hunt (#${ctx.id} generation ${ctx.generation}): ${reason}`,
           },
         });
         autoSaved++;
       } else {
-        // נשמר ידנית על-ידי המשתמש — לא נוגעים בהערות שלו; סימון ציד קיים יתעדכן בלבד
-        if (existing.notes?.includes("ציד חי אוטומטי")) {
+        // Saved manually by the user — we don't touch their notes; an existing hunt marker only gets updated
+        if (existing.notes?.includes("Automatic live hunt")) {
           await db.savedRepo.update({
             where: { fullName: e.fullName },
             data: { stars: e.stars ?? existing.stars, score: Math.max(existing.score, Math.min(100, Math.round(e.score ?? 0))) },
@@ -484,39 +485,39 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
         }
       }
     } catch (saveErr) {
-      failures.push(`ארכוב אליטה ${e.fullName}: ${saveErr instanceof Error ? saveErr.message : "שגיאה"}`);
+      failures.push(`elite archive ${e.fullName}: ${saveErr instanceof Error ? saveErr.message : "error"}`);
     }
   }
 
-  const summary = `${triage.length} נשפטו · ${elite.length} אליטה · ${watch.length} מעקב · ${profiles.length} פרופילים · ${autoSaved} נשמרו אוטומטית${
-    failures.length ? ` · ${failures.length} כשלים` : ""
+  const summary = `${triage.length} triaged · ${elite.length} elite · ${watch.length} watch · ${profiles.length} profiles · ${autoSaved} auto-saved${
+    failures.length ? ` · ${failures.length} failures` : ""
   }`;
 
   const state: SwarmStageState = { flat, elite, watch, triage, profiles, autoSaved, autoSavedSkipped, llmCalls: calls, llmFailures: failures };
   return { summary, evidence: state as unknown as Record<string, unknown> };
 }
 
-// ---------- שלב 3: attack (דפוסים + תקיפה + שאילתות + תדריך) ----------
+// ---------- Stage 3: attack (patterns + attack + queries + briefing) ----------
 
 async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const swarm = readSwarmState(ctx);
-  if (!swarm) throw new LiveHuntError("מצב הלהקה חסר — נדרש שלב swarm", 500);
+  if (!swarm) throw new LiveHuntError("Swarm state missing — the swarm stage is required", 500);
 
   const failures: string[] = [];
   let calls = 0;
   const safePatterns: MarketPatterns = { patterns: [], stackConsensus: [], marketShift: "" };
 
   const patterns =
-    (await llmTry(() => patternSynthesis(swarm.elite, swarm.watch), failures, "דפוסים")) ?? safePatterns;
+    (await llmTry(() => patternSynthesis(swarm.elite, swarm.watch), failures, "patterns")) ?? safePatterns;
   if (patterns !== safePatterns) calls++;
 
   const attack =
-    (await llmTry(() => attackPlan(swarm.elite, swarm.profiles, patterns), failures, "תוכנית תקיפה")) ?? {
+    (await llmTry(() => attackPlan(swarm.elite, swarm.profiles, patterns), failures, "attack plan")) ?? {
       topMoves: [],
       differentiators: [],
       immediateActions: [],
     };
-  if (attack) calls++; // קריאה שהצליחה נספרת גם אם המודל החזיר תוכנית ריקה-תקינה
+  if (attack) calls++; // A successful call counts even if the model returned a valid-empty plan
 
   const queryEvo =
     (await llmTry(
@@ -530,7 +531,7 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
           swarm.elite
         ),
       failures,
-      "אבולוציית שאילתות"
+      "query evolution"
     )) ?? { nextQueries: [], blindSpots: [], rationale: "" };
   if (queryEvo) calls++;
 
@@ -545,19 +546,19 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
           dnaAdded: 0,
         }),
       failures,
-      "תדריך"
-    )) ?? { headline: "לא התקבל תדריך", keyIntel: [], decisiveMove: "", riskMap: failures.slice(0, 3) };
+      "briefing"
+    )) ?? { headline: "No briefing received", keyIntel: [], decisiveMove: "", riskMap: failures.slice(0, 3) };
   if (brief) calls++;
 
-  const summary = `${patterns.patterns.length} דפוסים · ${attack.topMoves.length} מהלכים · ${queryEvo.nextQueries.length} שאילתות הבאות${
-    failures.length ? ` · ${failures.length} כשלי LLM` : ""
+  const summary = `${patterns.patterns.length} patterns · ${attack.topMoves.length} moves · ${queryEvo.nextQueries.length} next queries${
+    failures.length ? ` · ${failures.length} LLM failures` : ""
   }`;
 
   const state: AttackStageState = { patterns, attack, queryEvo, brief, llmCalls: calls, llmFailures: failures };
   return { summary, evidence: state as unknown as Record<string, unknown> };
 }
 
-// ---------- שלב 4: mine (כריית DNA חיה) ----------
+// ---------- Stage 4: mine (live DNA mining) ----------
 
 async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const huntEv = readHuntEvidence(ctx);
@@ -565,14 +566,14 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const top = (huntEv?.topCandidates as Candidate[] | undefined) ?? [];
   if (top.length === 0) {
     return {
-      summary: "אין מטרות לכרייה — דילוג (הספרייה לא גדלה בשלב זה)",
+      summary: "No targets to mine — skipping (the library doesn't grow at this stage)",
       evidence: { mined: [], reposMined: 0, dnaAdded: 0 },
     };
   }
 
   const { reports: mined, emptySkipped } = await mineTopCandidates(top, token, 3);
-  // כנות מדידה: "נכרו" = ריפו שהניב ארטיפקטים. ריפו שנוגב והחזיר 0 לא נספר ככרייה —
-  // בעבר: "3 מאגרים נכרו" הסתיר שאף אחד מהם לא הניב כלום.
+  // Measurement honesty: "mined" = a repo that yielded artifacts. A repo that was swept and returned 0 doesn't count as mined —
+  // before: "3 repos mined" hid that none of them yielded anything.
   const reposAttempted = mined.length;
   const reposMined = mined.filter((m) => !m.error).length;
   const reposWithFindings = mined.filter((m) => !m.error && (m.artifacts ?? 0) > 0).length;
@@ -580,9 +581,9 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const dnaAdded = mined.reduce((acc, m) => acc + (m.newCount ?? 0), 0);
   const stubsSkipped = mined.reduce((acc, m) => acc + (m.skippedStubs ?? 0), 0);
 
-  const summary = `${reposWithFindings}/${reposMined} מאגרים הניבו גנים (מתוך ${reposAttempted} יעדים) · ${dnaAdded} גנים חדשים בספרייה${stubsSkipped ? ` · ${stubsSkipped} גני-סתם נפסלו` : ""}${
-    emptySkipped ? ` · ${emptySkipped} ריקים-מוכחים דולגו` : ""
-  }${mineErrors.length ? ` · ${mineErrors.length} כישלונות כרייה` : ""}`;
+  const summary = `${reposWithFindings}/${reposMined} repos yielded genes (out of ${reposAttempted} targets) · ${dnaAdded} new genes in the library${stubsSkipped ? ` · ${stubsSkipped} stub genes rejected` : ""}${
+    emptySkipped ? ` · ${emptySkipped} proven-empty skipped` : ""
+  }${mineErrors.length ? ` · ${mineErrors.length} mining failures` : ""}`;
 
   return {
     summary,
@@ -594,27 +595,27 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       mineErrorCount: mineErrors.length,
       dnaAdded,
       stubsSkipped,
-      // שקיפות: ריפו שכבר הוכחו ריקים (2 כריות ללא תוצאות) לא נכרים שוב
+      // Transparency: repos already proven empty (2 mines with no results) are not mined again
       emptySkipped,
     },
   };
 }
 
-// ---------- שלב 5: compile (גזירת מטרה + הידור) ----------
+// ---------- Stage 5: compile (goal derivation + compilation) ----------
 
 function deriveGoal(swarm: SwarmStageState | null, attack: AttackStageState | null, huntEv: Record<string, unknown> | null): string {
   const a = attack?.attack.immediateActions?.[0] ?? "";
   const m = attack?.attack.topMoves?.[0]?.move ?? "";
   const briefMove = attack?.brief.decisiveMove ?? "";
   const signature = swarm?.profiles?.[0]?.signature ?? "";
-  const topName = (huntEv?.topList as { fullName?: string }[] | undefined)?.[0]?.fullName ?? "המטרה המובילה";
+  const topName = (huntEv?.topList as { fullName?: string }[] | undefined)?.[0]?.fullName ?? "the leading target";
 
   const raw = a || m || briefMove || signature;
   const core = raw.trim().slice(0, 220);
   if (core) {
-    return `${core} — מבוסס על המודיעין החי מהציד (מוביל: ${topName})`;
+    return `${core} — based on the live intel from the hunt (leader: ${topName})`;
   }
-  return `נתח והפק יתרון מהשקעת הפרימיום ב-Claude 5.5+ שנחשפה בציד החי (מוביל: ${topName})`;
+  return `Analyze and extract an advantage from the Claude 5.5+ premium investment exposed in the live hunt (leader: ${topName})`;
 }
 
 async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
@@ -622,10 +623,10 @@ async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   const attack = readAttackState(ctx);
   const huntEv = readHuntEvidence(ctx);
 
-  // אידמפוטנטיות הידור: אם ניסיון קודם של compile יצר משימה ונפל רק בעדכון שורת
-  // הציד (בעבר: שתי כתיבות נפרדות) — ניסיון חוזר לא מייצר משימה שנייה יתומה.
-  // הקישור missionId נכתב לשורת הציד בטרנזקציה עם יצירת המשימה (למטה),
-  // ולכן קיומו כאן = המשימה כבר נוצרה בהצלחה.
+  // Compilation idempotency: if a previous compile attempt created a mission and only failed at updating the hunt
+  // row (before: two separate writes) — a retry doesn't produce a second orphan mission.
+  // The missionId link is written to the hunt row in the same transaction as mission creation (below),
+  // so its existence here = the mission was already created successfully.
   const linked = await db.liveHunt.findUnique({ where: { id: ctx.id }, select: { missionId: true } });
   if (linked?.missionId) {
     const existing = await db.mission.findUnique({ where: { id: linked.missionId } });
@@ -634,7 +635,7 @@ async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: 
       const existingDnaRefs = safeJsonParse<Array<{ id?: number; path?: string; name?: string; kind?: string; sourceRepo?: string }>>(existing.dnaRefs, []);
       const existingRisks = safeJsonParse<string[]>(existing.risks, []);
       return {
-        summary: `משימה #${existing.id} ״${existing.missionName}״ — שוחזרה מהניסיון הקודם (בלי הידור חוזר)`,
+        summary: `Mission #${existing.id} "${existing.missionName}" — restored from the previous attempt (without recompiling)`,
         evidence: {
           missionId: existing.id,
           missionName: existing.missionName,
@@ -654,36 +655,24 @@ async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: 
 
   const goal = deriveGoal(swarm, attack, huntEv);
   const contextBits: string[] = [];
-  if (attack?.patterns.marketShift) contextBits.push(`תזוזת שוק: ${attack.patterns.marketShift.slice(0, 200)}`);
-  if (swarm?.elite.length) contextBits.push(`אליטה: ${swarm.elite.map((e) => e.fullName).join(", ").slice(0, 300)}`);
-  if (attack?.brief.headline) contextBits.push(`כותרת המערכה: ${attack.brief.headline.slice(0, 150)}`);
+  if (attack?.patterns.marketShift) contextBits.push(`Market shift: ${attack.patterns.marketShift.slice(0, 200)}`);
+  if (swarm?.elite.length) contextBits.push(`Elite: ${swarm.elite.map((e) => e.fullName).join(", ").slice(0, 300)}`);
+  if (attack?.brief.headline) contextBits.push(`Campaign headline: ${attack.brief.headline.slice(0, 150)}`);
   const context = contextBits.join("\n").slice(0, 1200);
 
-  // הספרייה לדירוג — תוכן נחתך ב-DB ל-4,000 תווים + אורך אמיתי בעמודה נפרדת.
-  // בעבר: העלאת התוכן המלא של כל הספרייה לזיכרון בכל הידור (עשרות KB לגן);
-  // הדירוג ממילא משתמש ב-2,000 תווים לניקוד, 1,400 לתדריך, ובאורך הכולל לחוק העושר.
-  const rawRows = await db.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    `SELECT id, sourceRepo, path, kind, name, description, substr(content, 1, 4000) AS content, length(content) AS contentLen FROM DnaArtifact`,
-  );
-  const rows = rawRows.map((r) => ({
-    id: Number(r.id),
-    sourceRepo: String(r.sourceRepo ?? ""),
-    path: String(r.path ?? ""),
-    kind: String(r.kind ?? ""),
-    name: String(r.name ?? ""),
-    description: r.description == null ? null : String(r.description),
-    content: r.content == null ? null : String(r.content),
-    contentLen: Number(r.contentLen ?? 0),
-  })) as DnaRow[];
-  const selected = rankDnaForGoal(goal, rows, 8);
+  // One DNA-selection path for the whole system — the same selectDnaForGoal that /api/mission uses
+  // (metadata-only pre-rank over the newest 500 → content only for the leaders, truncated to 4,000
+  // chars at the source). (Before: this stage ran its own single-pass raw-SQL ranking over the entire
+  // library — a second, divergent selection path; the two could pick different genes for one goal.)
+  const selected = await selectDnaForGoal(goal, 8);
   const compiled = await compileMission(goal, context, selected);
 
   if (!compiled.phases || compiled.phases.length === 0) {
-    throw new LiveHuntError("התוכנית שהודורה ריקה — אין שלבים לביצוע", 502);
+    throw new LiveHuntError("The compiled plan is empty — there are no phases to execute", 502);
   }
 
-  // יצירת המשימה + קישורה לשורת הציד בטרנזקציה אחת —
-  // בעבר: שתי כתיבות נפרדות; מוות בין לבין הותיר משימה יתומה והניסיון החוזר שכפל אותה.
+  // Mission creation + linking it to the hunt row in a single transaction —
+  // before: two separate writes; a crash in between left an orphan mission and the retry duplicated it.
   const mission = await db.$transaction(async (tx) => {
     const m = await tx.mission.create({
       data: {
@@ -705,7 +694,7 @@ async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: 
     return m;
   });
 
-  const summary = `משימה #${mission.id} ״${compiled.missionName}״ · ${compiled.phases.length} שלבים · ${selected.length} גנים נבחרו · SKILL.md (${compiled.skillMdSource})`;
+  const summary = `Mission #${mission.id} "${compiled.missionName}" · ${compiled.phases.length} phases · ${selected.length} genes selected · SKILL.md (${compiled.skillMdSource})`;
 
   return {
     summary,
@@ -719,18 +708,20 @@ async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: 
       skillMdLines: compiled.skillMd.split("\n").length,
       risks: compiled.risks.slice(0, 4),
       goal,
-      librarySize: rows.length,
+      // The true library size (previously rows.length from the local full-table SQL — count()
+      // returns exactly the same number, and now matches the restored-mission branch above)
+      librarySize: await db.dnaArtifact.count(),
     },
   };
 }
 
-// ---------- שלב 6: execute (טייס — שלב אחד לכל קריאה, חוזר עד סיום) ----------
+// ---------- Stage 6: execute (autopilot — one phase per call, repeats until done) ----------
 
 async function stageExecute(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown>; stay: boolean }> {
   const compileEv = ctx.evidence("compile");
   const missionId = Number(compileEv?.missionId);
   if (!Number.isInteger(missionId) || missionId <= 0) {
-    throw new LiveHuntError("מזהה משימה חסר — נדרש שלב compile", 500);
+    throw new LiveHuntError("Mission ID missing — the compile stage is required", 500);
   }
 
   const result = await runNextAutopilotPhase(missionId);
@@ -740,12 +731,12 @@ async function stageExecute(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   const preview = last?.deliverable
     ? `${extractHandoff(last.deliverable).slice(0, 240)}`
     : fail
-      ? `כשל בשלב: ${fail.error.slice(0, 200)}`
-      : "לא בוצע";
+      ? `Phase failed: ${fail.error.slice(0, 200)}`
+      : "Not executed";
 
   const summary = result.allDone
-    ? `הביצוע הושלם: ${result.stepsDone}/${result.totalPhases} שלבים${result.state.failures.length ? ` (${result.state.failures.length} כשלים)` : ""}`
-    : `בוצע שלב ${result.stepsDone}/${result.totalPhases} — ממשיכים`;
+    ? `Execution complete: ${result.stepsDone}/${result.totalPhases} phases${result.state.failures.length ? ` (${result.state.failures.length} failures)` : ""}`
+    : `Phase ${result.stepsDone}/${result.totalPhases} executed — continuing`;
 
   return {
     summary,
@@ -764,11 +755,11 @@ async function stageExecute(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   };
 }
 
-// ---------- שלב 7: grow (זיקוק שדה → לידת DNA) ----------
+// ---------- Stage 7: grow (field distillation → DNA birth) ----------
 
 function localDistill(input: { outcome: string; notes: string }) {
   const outcomeHeb =
-    input.outcome === "success" ? "הצלחה מלאה" : input.outcome === "partial" ? "הצלחה חלקית" : "כישלון";
+    input.outcome === "success" ? "full success" : input.outcome === "partial" ? "partial success" : "failure";
   const lessons: string[] = [];
   for (const s of input.notes.split(/[\n.!?]+|\.\s/)) {
     const t = s.trim();
@@ -778,12 +769,12 @@ function localDistill(input: { outcome: string; notes: string }) {
   if (lessons.length === 0) {
     lessons.push(
       input.outcome === "failed"
-        ? "כישלון הוא נתון: לתעד איפה נתקעו ולחלק את השלב לצעדים קטנים יותר"
-        : "לתעד אילו שלבים עברו אימות בקלות — מועמדים ל-DNA במשימות הבאות"
+        ? "Failure is a data point: document where things got stuck and split the phase into smaller steps"
+        : "Document which phases passed verification easily — candidates for DNA in future missions"
     );
   }
   return {
-    verdict: `דיווח שדה (${outcomeHeb}) נשמר — זיקוק AI לא זמין, הלקחים חולצו מקומית`,
+    verdict: `Field report (${outcomeHeb}) saved — AI distillation unavailable, lessons extracted locally`,
     lessons,
     newDna: null,
   };
@@ -793,10 +784,10 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const compileEv = ctx.evidence("compile");
   const missionId = Number(compileEv?.missionId);
   if (!Number.isInteger(missionId) || missionId <= 0) {
-    throw new LiveHuntError("מזהה משימה חסר לזיקוק השדה", 500);
+    throw new LiveHuntError("Mission ID missing for the field distillation", 500);
   }
   const mission = await db.mission.findUnique({ where: { id: missionId } });
-  if (!mission) throw new LiveHuntError(`המשימה #${missionId} נעלמה`, 404);
+  if (!mission) throw new LiveHuntError(`Mission #${missionId} has disappeared`, 404);
 
   const state = parseAutopilotState(mission.autopilot);
   let phaseTitles: string[] = [];
@@ -813,13 +804,13 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     phaseTitles = [];
   }
 
-  // חוק תוצאה: 0 שלבים שבוצעו = כישלון, גם אם לא נרשם אף כשל מפורש —
-  // בעבר: מצב אבוד (autopilot ריק) זוקק כ"הצלחה מלאה".
+  // Outcome rule: 0 executed phases = failure, even if no explicit failure was recorded —
+  // before: a lost state (empty autopilot) was distilled as "full success".
   const outcome =
     state.steps.length === 0 ? "failed" : state.failures.length === 0 ? "success" : "partial";
   const lastDeliverable = state.steps[state.steps.length - 1]?.deliverable ?? "";
   const notes =
-    `${extractHandoff(lastDeliverable)}\n${state.failures.map((f) => `כשל בשלב ${f.phaseIndex + 1}: ${f.error}`).join("\n")}`
+    `${extractHandoff(lastDeliverable)}\n${state.failures.map((f) => `Phase ${f.phaseIndex + 1} failed: ${f.error}`).join("\n")}`
       .trim()
       .slice(0, 3500);
 
@@ -832,7 +823,7 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     distillMethod = "local";
   }
 
-  // לידת DNA מהשדה — עקבי עם מסלול הדיווח הידני (נתיב קבוע מונע התפצלות)
+  // DNA birth from the field — consistent with the manual reporting path (a fixed path prevents divergence)
   let bornDnaId: number | null = null;
   let dnaBirthError: string | null = null;
   if (distilled.newDna) {
@@ -858,16 +849,16 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       });
       bornDnaId = created.id;
     } catch (dnaErr) {
-      // בעבר: כשל לידה היה console-only — הראיות לא הבחינו בין "AI החליט שאין DNA"
-      // לבין "כתיבת DB נכשלה". עכשיו זה נראה בראיות וב-UI.
-      dnaBirthError = dnaErr instanceof Error ? dnaErr.message : "שגיאה";
+      // Before: a birth failure was console-only — the evidence couldn't distinguish "the AI decided there's no DNA"
+      // from "the DB write failed". Now it's visible in the evidence and the UI.
+      dnaBirthError = dnaErr instanceof Error ? dnaErr.message : "error";
       console.error("[live-hunt] DNA birth failed (report still saved):", dnaErr);
     }
   }
 
-  // עדכון סטטוס המשימה — רק קדימה (חוק אחד ממודול mission-status), היסטוריית דיווחים נשמרת
-  // אידמפוטנטיות דיווח: ניסיון חוזר של grow לא מכפיל רשומות — הרשומה הקודמת של אותו מקור
-  // מוחלפת. בעבר: retry אחרי כשל בעדכון המשימה היה מוסיף דיווח כפול.
+  // Mission status update — forward-only (one rule from the mission-status module), report history is preserved
+  // Report idempotency: a grow retry doesn't duplicate records — the previous record from the same source
+  // is replaced. Before: a retry after a mission-update failure added a duplicate report.
   const nextStatus = OUTCOME_STATUS[outcome] ?? mission.status;
   const finalStatus = advanceStatus(mission.status, nextStatus);
   let reportHistory: Array<Record<string, unknown>> = [];
@@ -894,8 +885,8 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     data: { status: finalStatus, report: JSON.stringify([...reportHistory, newReport].slice(-20)) },
   });
 
-  const summary = `${distillMethod === "ai" ? "זוקק ב-AI" : "זיקוק מקומי"} · ${distilled.lessons.length} לקחים${
-    bornDnaId ? ` · DNA #${bornDnaId} נולד לספרייה 🧬` : dnaBirthError ? ` · לידת DNA נכשלה (${dnaBirthError.slice(0, 80)})` : " · ללא DNA חדש"
+  const summary = `${distillMethod === "ai" ? "AI-distilled" : "local distillation"} · ${distilled.lessons.length} lessons${
+    bornDnaId ? ` · DNA #${bornDnaId} born into the library 🧬` : dnaBirthError ? ` · DNA birth failed (${dnaBirthError.slice(0, 80)})` : " · no new DNA"
   }`;
 
   return {
@@ -904,7 +895,9 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       missionId,
       outcome,
       distillMethod,
-      // מדידה אמיתית למונה ה-LLM: זיקוק AI = 1, זיקוק מקומי = 0 (בעבר: +1 גם כשה-AI נכשל)
+      // Stage display only (the UI shows this stage's usage): AI distillation = 1 call, local = 0.
+      // The hunt total is no longer derived from here — runNextLocked accumulates exact
+      // per-attempt deltas from the zai.ts counter, so retries are counted too.
       llmCalls: distillMethod === "ai" ? 1 : 0,
       verdict: distilled.verdict,
       lessons: distilled.lessons,
@@ -918,7 +911,7 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   };
 }
 
-// ---------- שלב 8: verdict ----------
+// ---------- Stage 8: verdict ----------
 
 async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const huntEv = readHuntEvidence(ctx);
@@ -934,10 +927,10 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   ]);
 
   const bornDnaId = Number(growEv?.bornDnaId) || null;
-  // novelTop קיים בראיות (נכתב ב-stageHunt) אבל הטיפוס המקומי לא הכריז אותו —
-  // התיפוס היה משקר על צורת הנתונים; עכשיו מוכרז במפורש.
+  // novelTop exists in the evidence (written in stageHunt) but the local type didn't declare it —
+  // the typing lied about the data shape; now declared explicitly.
   const huntEv2 = huntEv as { novelCandidates?: unknown; novelTop?: unknown[]; evolvedQueries?: unknown[]; knownBefore?: unknown } | null;
-  const summary = `דור ${ctx.generation} · ${ctx.done.length} שלבים · ${missionCount} משימות בסך הכל · ${ctx.llmCallsSoFar} קריאות LLM`;
+  const summary = `Generation ${ctx.generation} · ${ctx.done.length} stages · ${missionCount} missions total · ${ctx.llmCallsSoFar} LLM calls`;
 
   return {
     summary,
@@ -970,11 +963,11 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
       totals: {
         dnaAfter,
         missionCount,
-        // מקור אמת יחיד: המונה המצטבר בשורת הציד (בעבר: נוסחה מקומית שסתרה את המונה)
-        // שיטת מדידה: swarm/attack/grow מדודים מהראיות; compile=2, execute=1/שלב —
-        // ניסיונות חוזר פנימיים של המהדר אינם נספרים → המונה הוא חסם תחתון, לא מספר מדויק
+        // Single source of truth: the accumulated counter on the hunt row (before: a local formula that contradicted the counter)
+        // Measurement method: exact per-attempt deltas from the global LLM queue (zai.ts llmCallSnapshot) —
+        // every real SDK attempt is counted, 429 retries included, which is the honest number for quota pressure
         llmCalls: ctx.llmCallsSoFar,
-        llmCallsBasis: "lower-bound: מדוד ל-swarm/attack/grow; נוסחה ל-compile/execute; ניסיונות חוזר לא נספרים",
+        llmCallsBasis: "exact: per-attempt deltas from the global LLM queue (zai.ts); 429 retries counted",
       },
     },
   };
@@ -986,33 +979,33 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// ---------- מנוע המדינה (state machine) ----------
+// ---------- State machine ----------
 
 /**
- * פתיחת ציד: נעילת תחילה סוגרת את חלון המירוץ בין הבדיקה ("אין ריצה פעילה")
- * ליצירה — בלי זה שתי לחיצות "התחל" מקבילות יצרו שני צידים רצים שניהם.
- * (בדיוק הדגם של startSweep/startingSweep — כאן הוחל גם על הציד החי.)
+ * Hunt start: a start lock closes the race window between the check ("no active run")
+ * and creation — without it, two parallel "Start" clicks created two hunts, both running.
+ * (Exactly the startSweep/startingSweep pattern — applied here to the live hunt as well.)
  */
 let startingHunt = false;
 
 export async function startLiveHunt(): Promise<{ id: number }> {
   if (startingHunt) {
-    throw new LiveHuntError("פתיחת ציד כבר מתבצעת — רגע קטן", 409);
+    throw new LiveHuntError("A hunt start is already in progress — one moment", 409);
   }
   startingHunt = true;
   try {
-    // ריצה פעילה אחת בלבד — ריצה שלא עודכנה 15 דקות נחשבת מתה
+    // Only one active run — a run not updated for 15 minutes is considered dead
     const staleCutoff = new Date(Date.now() - 15 * 60_000);
     await db.liveHunt.updateMany({
       where: { status: "running", updatedAt: { lt: staleCutoff } },
-      data: { status: "failed", error: "הריצה נקטעה (השרת אותחל) — סימון אוטומטי" },
+      data: { status: "failed", error: "The run was interrupted (the server was restarted) — marked automatically" },
     });
     const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true } });
     if (active) {
-      throw new LiveHuntError("ציד חי כבר רץ כרגע — חכה לסיומו", 409);
+      throw new LiveHuntError("A live hunt is already running — wait for it to finish", 409);
     }
     const dnaBefore = await db.dnaArtifact.count();
-    // דור גנרציוני: כל ציד חדש הוא דור+1 מהציד המוצלח האחרון — הבן צד עם שאילתות האבולוציה של האב
+    // Generational lineage: every new hunt is generation+1 from the last successful hunt — the child hunts with the parent's evolved queries
     const prevDone = await db.liveHunt.findFirst({ where: { status: "done" }, orderBy: { id: "desc" }, select: { id: true, generation: true } });
     const generation = (prevDone?.generation ?? 0) + 1;
     const seededFrom = prevDone?.id ?? null;
@@ -1081,8 +1074,8 @@ export function serializeLiveHunt(row: {
 }
 
 /**
- * הרצת השלב הבא. נעילה פר-ריצה — קריאות מקבילות מתורגמות לרצף.
- * שלב execute חוזר על עצמו עד שכל שלבי המשימה בוצעו.
+ * Run the next stage. Per-run lock — parallel calls are serialized.
+ * The execute stage repeats itself until all mission phases have run.
  */
 const huntLocks = new Map<number, Promise<unknown>>();
 
@@ -1098,15 +1091,15 @@ export function runNextLiveHuntStage(id: number): Promise<LiveHuntState> {
 
 async function runNextLocked(id: number): Promise<LiveHuntState> {
   const row = await db.liveHunt.findUnique({ where: { id } });
-  if (!row) throw new LiveHuntError("הציד לא נמצא", 404);
+  if (!row) throw new LiveHuntError("Hunt not found", 404);
   if (row.status === "done") return serializeLiveHunt(row);
-  // בעבר: ציד "נכשל" שנכנס שוב ל-runNextLocked (הלקוח לא עצר את המשאבה)
-  // הריץ את השלב הכושל מחדש בלולאה אינסופית — שריפת מכסת GitHub/LLM ללא השגחה.
-  // כל כניסה חדשה לשלב חייבת מצב running; ניסיון חוזר = retry מפורש.
+  // Before: a "failed" hunt re-entering runNextLocked (the client didn't stop the pump)
+  // re-ran the failed stage in an infinite loop — burning GitHub/LLM quota unattended.
+  // Any new entry into a stage requires running status; a retry = an explicit retry.
   if (row.status === "failed") {
-    // המצב הכושל מוצמד לשגיאה (.state) — ה-route מחזיר אותו בגוף התשובה,
-    // והמשאבה בלקוח קוראת אותו (payload.hunt) ועוצרת במקום לרוץ בלולאה.
-    const guardErr = new LiveHuntError("הציד נכשל — נדרש ניסיון חוזר מפורש (retry)", 409);
+    // The failed state is attached to the error (.state) — the route returns it in the response body,
+    // and the client pump reads it (payload.hunt) and stops instead of looping.
+    const guardErr = new LiveHuntError("The hunt failed — an explicit retry is required", 409);
     throw Object.assign(guardErr, { state: serializeLiveHunt(row) });
   }
 
@@ -1125,6 +1118,10 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
 
   const stageKey = row.stageKey;
   const title = LIVE_HUNT_STAGE_TITLES[stageKey] ?? stageKey;
+
+  // Exact LLM measurement starts here: the zai.ts counter increments on every real SDK call attempt,
+  // so the delta at stage end is precisely what this stage burned (see the llmDelta computation below).
+  const llmCallsBefore = llmCallSnapshot();
 
   try {
     let result: { summary: string; evidence: Record<string, unknown>; stay?: boolean };
@@ -1154,7 +1151,7 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
         result = await stageVerdict(ctx);
         break;
       default:
-        throw new LiveHuntError(`שלב לא מוכר: ${stageKey}`, 400);
+        throw new LiveHuntError(`Unknown stage: ${stageKey}`, 400);
     }
 
     const rec: LiveHuntStageRecord = {
@@ -1165,9 +1162,9 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
       evidence: result.evidence,
     };
 
-    // execute חוזר — מחליף את הרשומה הקיימת במקום להצטבר
-    // (בעבר: הריצה האחרונה של execute לא סיננה את הקודמת — נשארו שתי רשומות
-    //  execute ב-JSON, ומספר השלבים במסקנת המערכה דווח נפוח ב-1)
+    // execute repeats — replaces the existing record instead of accumulating
+    // (before: the last execute run didn't filter out the previous one — two execute
+    //  records remained in the JSON, and the stage count in the campaign verdict was inflated by 1)
     const newDone =
       result.stay || stageKey === "execute"
         ? [...doneStages.filter((s) => s.key !== stageKey), rec]
@@ -1175,28 +1172,25 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
 
     let nextStageKey: string;
     if (result.stay) {
-      nextStageKey = stageKey; // נשארים על execute עד סיום כל השלבים
+      nextStageKey = stageKey; // stay on execute until all phases complete
     } else {
       const idx = LIVE_HUNT_STAGE_ORDER.indexOf(stageKey as (typeof LIVE_HUNT_STAGE_ORDER)[number]);
       nextStageKey = idx >= 0 && idx + 1 < LIVE_HUNT_STAGE_ORDER.length ? LIVE_HUNT_STAGE_ORDER[idx + 1] : "done";
     }
 
-    // עדכון missionId כשנודע, goal כשנגזר
+    // Update missionId when known, goal when derived
     const missionIdFromEvidence = Number(result.evidence.missionId);
     const goalFromEvidence = typeof result.evidence.goal === "string" ? (result.evidence.goal as string) : null;
 
     const isFinished = nextStageKey === "done" && stageKey === "verdict";
     const dnaAfter = isFinished ? await db.dnaArtifact.count() : row.dnaAfter;
-    const llmDelta =
-      stageKey === "swarm" || stageKey === "attack"
-        ? Number(result.evidence.llmCalls) || 0
-        : stageKey === "grow"
-          ? Number(result.evidence.llmCalls) || 0 // 1 אם זיקוק AI, 0 אם נפל למקומי — לפי הראיה בפועל (בעבר: +1 גם כשנפל)
-          : ["compile", "execute"].includes(stageKey)
-            ? stageKey === "compile"
-              ? 2 // compilePlan + compileSkillMd — ניסיונות חוזר פנימיים אינם נספרים (חסם תחתון)
-              : 1 // הערה: צעד ידני על אותה משימה דרך /api/mission במקביל נזקף כאן בכל זאת — חסם תחתון, לא מדידה מדויקת
-            : 0;
+    // Exact LLM usage: counter delta between stage start and stage end — every real SDK attempt,
+    // 429 retries included (the honest number for quota pressure). (Before: estimates — swarm/attack/grow
+    // were read from per-stage evidence, compile was hardcoded 2, execute 1/phase — internal retries
+    // were invisible and the total was only a lower bound.) One caveat, stated honestly: the counter is
+    // process-global, so a manual flow racing this hunt (e.g. a mission compiled from the UI during the
+    // execute stage) lands inside this stage's window; with the serial LLM queue that is rare in practice.
+    const llmDelta = llmCallSnapshot() - llmCallsBefore;
 
     const updated = await db.liveHunt.update({
       where: { id },
@@ -1214,38 +1208,42 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
 
     const state = serializeLiveHunt(updated);
     if (isFinished) {
-      // מסקנת המערכה — הצמיחה מוכחת במספרים
+      // Campaign verdict — growth proven in numbers
       state.done = true;
+      // The chain is complete and the library may have grown (mined + born genes) — snapshot it
+      // automatically in the background (the manual script required a human to remember).
+      // Fire-and-forget: snapshot I/O must never delay or fail the verdict response.
+      void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
     }
     return state;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "שגיאה לא ידועה";
+    const msg = e instanceof Error ? e.message : "Unknown error";
     const failed = await db.liveHunt.update({
       where: { id },
       data: { status: "failed", error: msg.slice(0, 500) },
     });
     console.error(`[live-hunt] stage ${stageKey} failed for hunt #${id}:`, e);
-    // AutopilotError עם 4xx = בעיה מובנית — מוחזר כפי שהוא; אחרת שגיאת שרת
+    // An AutopilotError with 4xx = a built-in problem — returned as-is; otherwise a server error
     const status = e instanceof LiveHuntError ? e.status : e instanceof AutopilotError ? e.status : 500;
     const err = new LiveHuntError(msg, status || 500);
-    // עדיין מחזירים את המצב המלא בשדה של השגיאה דרך ה-API
+    // Still return the full state in a field of the error via the API
     throw Object.assign(err, { state: serializeLiveHunt(failed) });
   }
 }
 
-/** ניסיון חוזר על השלב הנוכחי אחרי כשל */
+/** Retry the current stage after a failure */
 export async function retryLiveHunt(id: number): Promise<LiveHuntState> {
   if (startingHunt) {
-    throw new LiveHuntError("פתיחת ציד כבר מתבצעת — רגע קטן", 409);
+    throw new LiveHuntError("A hunt start is already in progress — one moment", 409);
   }
   const row = await db.liveHunt.findUnique({ where: { id } });
-  if (!row) throw new LiveHuntError("הציד לא נמצא", 404);
-  if (row.status !== "failed") throw new LiveHuntError("רק ציד שנכשל יכול להינסות שוב", 400);
-  // בעבר: retry ללא בדיקת ריצה פעילה שבר את חוק הריצה-האחת — שתי שורות running,
-  // start נתקע ב-409 לנצח, ושתי השרשרות התחרו על תור ה-LLM ומכסת GitHub.
+  if (!row) throw new LiveHuntError("Hunt not found", 404);
+  if (row.status !== "failed") throw new LiveHuntError("Only a failed hunt can be retried", 400);
+  // Before: a retry without an active-run check broke the single-run rule — two running rows,
+  // start stuck on 409 forever, and both chains competing for the LLM queue and GitHub quota.
   const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true } });
   if (active && active.id !== id) {
-    throw new LiveHuntError(`ציד חי #${active.id} כבר רץ — רק ריצה אחת בכל פעם`, 409);
+    throw new LiveHuntError(`Live hunt #${active.id} is already running — only one run at a time`, 409);
   }
   const updated = await db.liveHunt.update({
     where: { id },

@@ -1,26 +1,27 @@
 // ============================================================
-// מערכת סף המודלים המחמירה — Claude Hunter
+// The strict model threshold system — Claude Hunter
 //
-// חוק ברזל (דרישת משתמש, לא ניתן לשינוי מה-UI):
-//   ✔ רק מודלים בגרסה 5.5 ומעלה נחשבים "פרימיום מזכה" — Opus 5.5, Fable, Opus 6+...
-//   ⛔ משפחת 4.x וכל גרסה מתחת ל-5.5 חסומה לחלוטין:
-//      משקל 0, לא נכללת בציון, לא מוצעת במסננים, ונחסמת גם בצד השרת.
+// Iron rule (a user requirement, not changeable from the UI):
+//   ✔ Only models at version 5.5 and above count as "qualifying premium" — Opus 5.5, Fable, Opus 6+...
+//   ⛔ The 4.x family and every version below 5.5 is completely blocked:
+//      weight 0, not included in the score, not offered in the filters, and
+//      blocked on the server side as well.
 // ============================================================
 
 export const MIN_QUALIFYING_VERSION = 5.5;
 export const THRESHOLD_LABEL = "5.5+";
 export const THRESHOLD_RULE_TEXT =
-  "סף המודלים נעול: רק 5.5 ומעלה (Opus 5.5, Fable, Opus 6+) — משפחת 4.x חסומה לחלוטין";
+  "The model threshold is locked: only 5.5 and above (Opus 5.5, Fable, Opus 6+) — the 4.x family is completely blocked";
 
 export type ModelFamily = "opus" | "sonnet" | "haiku" | "fable" | "generic";
 
 export interface ClaudeModelDef {
-  id: string; // canonical id, למשל claude-opus-5-5
+  id: string; // canonical id, e.g. claude-opus-5-5
   label: string; // Opus 5.5
   family: ModelFamily;
   version: number; // 5.5
-  weight: number; // תרומה לציון המודל (תקרה 45)
-  searchStrings: string[]; // מחרוזות מדויקות לחיפוש קוד ב-GitHub
+  weight: number; // contribution to the model score (cap 45)
+  searchStrings: string[]; // exact strings for GitHub code search
 }
 
 export interface BlockedModelHit {
@@ -33,7 +34,7 @@ export interface BlockedModelHit {
 export interface ModelDetection {
   qualifying: ClaudeModelDef[];
   blocked: BlockedModelHit[];
-  /** true אם זוהו רק מודלים חסומים (4.x ומטה) ואף מודל מזכה */
+  /** true if only blocked models (4.x and below) were detected and no qualifying model */
   blockedOnly: boolean;
 }
 
@@ -46,8 +47,8 @@ const FAMILY_LABEL: Record<ModelFamily, string> = {
 };
 
 /**
- * רישום המודלים המזכים הידועים — כולם ≥ 5.5.
- * Fable הוא דגל הפרימיום הגבוה ביותר (משקל מלא 45).
+ * The registry of known qualifying models — all ≥ 5.5.
+ * Fable is the highest premium flagship (full weight 45).
  */
 export const QUALIFYING_MODELS: ClaudeModelDef[] = [
   {
@@ -100,7 +101,7 @@ export const QUALIFYING_MODELS: ClaudeModelDef[] = [
   },
 ];
 
-/** תיוג מודלים חסומים ידועים (רק להצגה — משקלם תמיד 0) */
+/** Labels for known blocked models (display only — their weight is always 0) */
 const KNOWN_BLOCKED_LABELS: Record<string, string> = {
   "claude-opus-4-5": "Opus 4.5",
   "claude-opus-4-1": "Opus 4.1",
@@ -114,8 +115,8 @@ const KNOWN_BLOCKED_LABELS: Record<string, string> = {
 };
 
 /**
- * סיווג לפי גרסה: מתחת ל-5.5 → חסום (משקל 0).
- * מעל הסף → משקל לפי משפחה וגרסה (תקרה 45).
+ * Classification by version: below 5.5 → blocked (weight 0).
+ * Above the threshold → weight by family and version (cap 45).
  */
 export function classifyVersion(
   v: number,
@@ -151,8 +152,8 @@ function buildLabel(family: ModelFamily, maj: number, min: number | null): strin
 }
 
 /**
- * זיהוי מודלים בטקסט חופשי (README, תיאור, CLAUDE.md, settings).
- * מחזיר הפרדה מלאה: מזכים (≥5.5) מול חסומים (<5.5, כולל כל משפחת 4.x).
+ * Detects models in free text (README, description, CLAUDE.md, settings).
+ * Returns a full separation: qualifying (≥5.5) vs blocked (<5.5, including the entire 4.x family).
  */
 export function detectClaudeModels(text: string): ModelDetection {
   const qualifying = new Map<string, ClaudeModelDef>();
@@ -179,12 +180,12 @@ export function detectClaudeModels(text: string): ModelDetection {
   };
   const addBlocked = (id: string, family: ModelFamily, v: number) => {
     const label = KNOWN_BLOCKED_LABELS[id] ?? buildLabel(family, Math.floor(v), v % 1 ? Number(String(v).split(".")[1]) : null);
-    blocked.set(id, { id, label, version: v, reason: `גרסה ${v} מתחת לסף 5.5 — משפחת ${label.replace(/\s.*/, "")} חסומה` });
+    blocked.set(id, { id, label, version: v, reason: `Version ${v} is below the 5.5 threshold — the ${label.replace(/\s.*/, "")} family is blocked` });
   };
 
   const handle = (family: ModelFamily, maj: number, min: number | null) => {
-    // סניטציה נגד פוזיבים: מספרי גרסה סבירים בלבד — maj 1-9, min 0-9.
-    // "opus 45" / "sonnet 4.25" מהפרוזה לא ייחשבו עוד גרסה (מונע עבירת סף שגויה).
+    // Sanitization against false positives: only plausible version numbers — maj 1-9, min 0-9.
+    // "opus 45" / "sonnet 4.25" from prose no longer counts as a version (prevents a wrong threshold crossing).
     if (!Number.isInteger(maj) || maj < 1 || maj > 9) return;
     if (min != null && (!Number.isInteger(min) || min < 0 || min > 9)) return;
     const v = fmtVersion(maj, min);
@@ -195,14 +196,14 @@ export function detectClaudeModels(text: string): ModelDetection {
   };
 
   // claude-opus-4-5 / claude_opus_5_5 / claude opus 4.5 / claude-opus-4-5-20251101
-  // maj: (\d{1,2}) + (?!\d) — כדי ש-"opus 45" לא ייתפס כגרסה 45
+  // maj: (\d{1,2}) + (?!\d) — so that "opus 45" is not captured as version 45
   const re1 = /claude[-_ ]?(opus|sonnet|haiku|fable)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
   // claude-3-5-sonnet / claude-3-7-sonnet-20250219 / claude-5-5
   const re2 = /claude[-_ ](\d{1,2})(?!\d)[-_. ](\d{1,2})(?!\d)(?:[-_ ]?(opus|sonnet|haiku|fable))?/gi;
-  // opus 5.5 / opus-5.5 / sonnet-4-5 (גם ללא קידומת claude) — כולל פסיק עשרוני "opus 5,5"
+  // opus 5.5 / opus-5.5 / sonnet-4-5 (also without the claude prefix) — including the decimal comma "opus 5,5"
   const re3 = /\b(opus|sonnet|haiku)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
-  // claude-5 / claude 6 — אזכור מודל בלי משפחה ובלי מינור.
-  // חוק ברזל: אזכור ללא מינור = maj.0 → "claude 5" נחסם (5.0 < 5.5), "claude 6" מזכה (6.0 ≥ 5.5).
+  // claude-5 / claude 6 — a model mention without a family and without a minor version.
+  // Iron rule: a mention without a minor = maj.0 → "claude 5" is blocked (5.0 < 5.5), "claude 6" qualifies (6.0 ≥ 5.5).
   const re4 = /claude[-_ ](\d{1,2})(?!\d)/gi;
 
   let m: RegExpExecArray | null;
@@ -214,9 +215,9 @@ export function detectClaudeModels(text: string): ModelDetection {
   while ((m = re3.exec(lower))) handle(m[1] as ModelFamily, Number(m[2]), m[3] != null ? Number(m[3]) : null);
   while ((m = re4.exec(lower))) handle("generic", Number(m[1]), null);
 
-  // fable עומד לבדו — מזכה רק עם הקשר מודל מפורש (מניעת פוזיבים).
-  // נוסחאות מחמירות: "claude fable" / "claude-fable" / "anthropic's fable" /
-  // "fable model" — אבל לא כל סיפור פבל שמזכיר את Claude (פוזיב קריטי שתוקן).
+  // fable stands alone — qualifies only with an explicit model context (false-positive prevention).
+  // Strict formulas: "claude fable" / "claude-fable" / "anthropic's fable" /
+  // "fable model" — but not just any fable story that mentions Claude (a critical fixed false positive).
   if (
     /\b(?:claude|anthropic)[^\w]{0,3}fable\b/.test(lower) ||
     /\bfable[^\w]{0,3}(?:model|models|claude|anthropic)\b/.test(lower)
@@ -224,11 +225,11 @@ export function detectClaudeModels(text: string): ModelDetection {
     addQual("claude-fable", "fable", 5.5);
   }
 
-  // דה-דופליקציה: הסר מזכים שהם קידומת של מזכה ארוך יותר מאותה משפחה
+  // De-duplication: remove a qualifying model that is a prefix of a longer qualifying one from the same family
   const qList0 = Array.from(qualifying.values()).filter(
     (a) => !Array.from(qualifying.values()).some((b) => b !== a && b.id.startsWith(`${a.id}-`))
   );
-  // חיזוק: הסר מזכה גנרי (למשל claude-5-5) אם קיים מזכה משפחתי עם אותה גרסה — מניעת כפילות
+  // Hardening: remove a generic qualifying model (e.g. claude-5-5) if a family qualifying model with the same version exists — prevents duplicates
   const qList = qList0.filter(
     (a) => !(a.family === "generic" && qList0.some((b) => b.family !== "generic" && b.version === a.version))
   );
@@ -244,9 +245,9 @@ export function detectClaudeModels(text: string): ModelDetection {
 }
 
 /**
- * בדיקה מחמירה למחרוזת "מודל" שמגיעה מהמסננים.
- * מחזיר true אם המחרוזת מתארת מודל מתחת לסף (4.x ומטה) — נחסמת בשרת.
- * אם המחרוזת מזוהה גם עם מודל מזכה (5.5+) — היא מותרת.
+ * A strict check for a "model" string coming from the filters.
+ * Returns true if the string describes a model below the threshold (4.x and below) — blocked on the server.
+ * If the string is also identified with a qualifying model (5.5+) — it is allowed.
  */
 export function isBlockedModelString(s: string): boolean {
   if (!s) return false;
@@ -254,7 +255,7 @@ export function isBlockedModelString(s: string): boolean {
   return det.blocked.length > 0 && det.qualifying.length === 0;
 }
 
-/** אפשרויות מסנן ל-UI — מופקות אוטומטית מהרישום, כך ש-4.x לא יכולה לדלוף */
+/** Filter options for the UI — derived automatically from the registry, so 4.x cannot leak in */
 export function qualifyingModelOptions(): { value: string; label: string }[] {
   return QUALIFYING_MODELS.map((m) => ({
     value: m.id,

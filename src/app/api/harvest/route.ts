@@ -2,18 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { harvest } from "@/lib/harvester";
 import { GhError } from "@/lib/github";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
+import { writeDnaSnapshot } from "@/lib/dna-snapshot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-/** נעילת קציר: קציר הוא צינור ארוך (עד 300 שניות) — שני POST מקביליים
- * היו מכפילים שריפת מכסה ומנים במקביל את אותם ריפו (בעבר: בלי שום נעילה) */
+/** Harvest lock: a harvest is a long pipeline (up to 300 seconds) — two parallel POSTs
+ * would double the quota burn and concurrently mine the same repos (previously: no lock at all) */
 let harvestRunning = false;
 
-/** קציר אוטונומי: גילוי מאגרי אליטה 5.5+ ← כריית DNA ← הספרייה מתפוצצת */
+/** Autonomous harvest: discover elite 5.5+ repos ← mine DNA ← the library explodes */
 export async function POST(req: NextRequest) {
   if (harvestRunning) {
-    return NextResponse.json({ error: "קציר כבר רץ כרגע — חכה לסיומו" }, { status: 409 });
+    return NextResponse.json({ error: "A harvest is already running — wait for it to finish" }, { status: 409 });
   }
   harvestRunning = true;
   let maxRepos = 6;
@@ -23,25 +24,29 @@ export async function POST(req: NextRequest) {
       maxRepos = Math.max(1, Math.min(10, Math.floor(body.maxRepos)));
     }
   } catch {
-    // גוף ריק מותר — ברירת מחדל 6
+    // An empty body is allowed — default 6
   }
 
   try {
     const token = await resolveToken(req);
     const result = await harvest(token, maxRepos);
+    // The harvest just upserted artifacts into the library — snapshot it automatically in the
+    // background (the manual script required a human to remember). Fire-and-forget: the response
+    // never waits on (or fails from) snapshot I/O.
+    void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
     await captureTokenFrom(req);
     return NextResponse.json(result);
   } catch (e) {
-    // (בעבר: e.message גולמי דלף ללקוח)
+    // (Previously: a raw e.message leaked to the client)
     console.error("[harvest]", e);
-    // מכסת GitHub שנגמרה — 429 מדויק במקום 500 גנרי שמטעה ("נסה שוב" לא עוזר)
+    // GitHub quota exhausted — a precise 429 instead of a misleading generic 500 ("try again" does not help)
     if (e instanceof GhError && e.rateLimited === true) {
       return NextResponse.json(
-        { error: "מכסת GitHub API נגמרה — הקציר נעצר. נסה שוב בעוד דקה." },
+        { error: "GitHub API quota exhausted — the harvest stopped. Try again in a minute." },
         { status: 429 }
       );
     }
-    return NextResponse.json({ error: "הקציר האוטונומי נכשל — פרטים בלוג השרת" }, { status: 500 });
+    return NextResponse.json({ error: "The autonomous harvest failed — details in the server log" }, { status: 500 });
   } finally {
     harvestRunning = false;
   }

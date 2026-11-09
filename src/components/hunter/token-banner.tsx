@@ -20,9 +20,9 @@ import { useHydrated } from "@/hooks/use-hydrated";
 import type { RateInfo } from "@/lib/hunter-types";
 
 /**
- * כרטיס הדבקת טוקן גלוי ובולט בראש העמוד.
- * בלי טוקן — נפתח אוטומטית עם פוקוס בשדה: מדביקים → אנטר → מסיימים.
- * עם טוקן תקין — מתכווץ לפס ירוק דק עם מכסה מחיה.
+ * A prominent token-paste card at the top of the page.
+ * Without a token — opens automatically with the field focused: paste → Enter → done.
+ * With a valid token — collapses into a thin green bar with a live quota.
  */
 interface ServerTokenInfo {
   exists: boolean;
@@ -44,7 +44,7 @@ export function TokenBanner() {
   const hasToken = mounted && !!token;
   const open = !mounted || !hasToken || editing;
 
-  // אימוץ טוקן שנשמר בשרת: סשן דפדפן חדש לא מאבד את הטוקן — השרת מחזיק אותו
+  // Adopt a server-stored token: a fresh browser session doesn't lose the token — the server holds it
   const { data: serverInfo } = useQuery({
     queryKey: ["server-token"],
     queryFn: () => apiFetch<ServerTokenInfo>("/api/settings/token", ""),
@@ -58,7 +58,7 @@ export function TokenBanner() {
     }
   }, [serverInfo?.exists, setToken]);
 
-  // מוצג: מסוכם מהשמירה המקומית האחרונה, או מהשרת (אימוץ)
+  // Shown: masked from the latest local save, or from the server (adoption)
   const shownMasked = masked ?? (serverInfo?.exists ? serverInfo.masked : null);
 
   const {
@@ -73,7 +73,7 @@ export function TokenBanner() {
     retry: 1,
   });
 
-  // פוקוס אוטומטי בכל פתיחה — מדביקים מיד בלי לגעת בעכבר
+  // Auto-focus on every open — paste immediately without touching the mouse
   useEffect(() => {
     if (open) {
       const t = setTimeout(() => {
@@ -87,8 +87,9 @@ export function TokenBanner() {
   const save = async () => {
     const t = draft.trim();
     if (!t) return;
-    // השמירה האמיתית היא בשרת; הלקוח עובר לסנטינל בלבד — PAT גולמי לא נכנס
-    // ל-state ולא נשמר ב-localStorage (בעבר: setToken(t) שמר את הטוקן הגולמי בדפדפן לנצח).
+    // The real save happens on the server; the client switches to the sentinel only — the raw PAT
+    // never enters state and is never stored in localStorage (previously: setToken(t) kept the raw
+    // token in the browser forever).
     try {
       const res = await fetch("/api/settings/token", {
         method: "POST",
@@ -103,10 +104,10 @@ export function TokenBanner() {
         setDraft("");
         setSaveError(null);
       } else {
-        setSaveError("השמירה בשרת לא הצליחה — נסה שוב");
+        setSaveError("Saving to the server failed — try again");
       }
     } catch {
-      setSaveError("השמירה בשרת לא הצליחה — נסה שוב");
+      setSaveError("Saving to the server failed — try again");
     }
   };
 
@@ -118,7 +119,7 @@ export function TokenBanner() {
     } catch {
       // ignore
     } finally {
-      // איפוס המטמון כדי שהטוקן שהוסר לא יאומץ מחדש מ-cache
+      // Reset the cache so the removed token isn't re-adopted from cache
       queryClient.invalidateQueries({ queryKey: ["server-token"] });
       queryClient.invalidateQueries({ queryKey: ["rate"] });
     }
@@ -136,11 +137,11 @@ export function TokenBanner() {
     }
   };
 
-  // ---------- מצב פתוח: שדה הדבקה ----------
+  // ---------- open state: paste field ----------
   if (open) {
     return (
       <section
-        aria-label="הדבקת טוקן GitHub"
+        aria-label="Paste GitHub token"
         className="relative mb-6 overflow-hidden rounded-xl border-2 border-orange-400/70 bg-gradient-to-l from-orange-50 via-amber-50/60 to-background p-4 shadow-md sm:p-5 dark:border-orange-500/50 dark:from-orange-950/30 dark:via-amber-950/10 dark:to-background"
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -150,10 +151,10 @@ export function TokenBanner() {
             </div>
             <div>
               <p className="text-sm font-bold leading-tight sm:text-base">
-                הדביקו כאן טוקן GitHub
+                Paste your GitHub token here
               </p>
               <p className="text-xs text-muted-foreground">
-                חינם · 5,000 בקשות/שעה · פותח חיפוש קוד
+                Free · 5,000 requests/hour · Unlocks code search
               </p>
             </div>
           </div>
@@ -165,13 +166,13 @@ export function TokenBanner() {
                 type="password"
                 inputMode="text"
                 autoComplete="off"
-                placeholder="הדביקו לכאן: github_pat_... או ghp_..."
+                placeholder="Paste here: github_pat_... or ghp_..."
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && save()}
                 dir="ltr"
                 className="h-11 border-orange-300 bg-white/90 pr-4 font-mono text-sm shadow-inner focus-visible:ring-orange-400 dark:bg-background/80 dark:border-orange-700"
-                aria-label="שדה הדבקת טוקן GitHub"
+                aria-label="GitHub token paste field"
               />
             </div>
             <Button
@@ -179,10 +180,10 @@ export function TokenBanner() {
               variant="outline"
               size="lg"
               className="h-11 shrink-0 gap-1.5 border-orange-300 text-orange-700 hover:bg-orange-100 hover:text-orange-800 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-950/50"
-              title="הדבקה מהלוח"
+              title="Paste from clipboard"
             >
               <ClipboardPaste className="h-4 w-4" />
-              <span className="hidden sm:inline">הדבק</span>
+              <span className="hidden sm:inline">Paste</span>
             </Button>
             <Button
               onClick={save}
@@ -191,7 +192,7 @@ export function TokenBanner() {
               className="h-11 shrink-0 gap-1.5 bg-gradient-to-l from-orange-600 to-amber-600 text-white shadow-md hover:from-orange-700 hover:to-amber-700"
             >
               <CheckCircle2 className="h-4 w-4" />
-              שמור ובדוק
+              Save & check
             </Button>
           </div>
         </div>
@@ -203,9 +204,9 @@ export function TokenBanner() {
             rel="noreferrer"
             className="inline-flex items-center gap-1 font-medium text-orange-600 hover:underline dark:text-orange-400"
           >
-            אין טוקן? יצירה ב-GitHub (30 שניות, בלי הרשאות מיוחדות) <ExternalLink className="h-3 w-3" />
+            No token? Create one on GitHub (30 seconds, no special permissions) <ExternalLink className="h-3 w-3" />
           </a>
-          <span>הטוקן נשמר בשרת המקומי בלבד (לא בדפדפן), ומועבר רק ל-GitHub API.</span>
+          <span>The token is stored only on the local server (not in the browser) and is sent only to the GitHub API.</span>
           {saveError && (
             <span role="alert" className="inline-flex items-center gap-1 font-medium text-red-600 dark:text-red-400">
               <XCircle className="h-3.5 w-3.5" /> {saveError}
@@ -220,7 +221,7 @@ export function TokenBanner() {
               }}
               className="inline-flex items-center gap-1 hover:text-foreground"
             >
-              <XCircle className="h-3.5 w-3.5" /> ביטול עריכה
+              <XCircle className="h-3.5 w-3.5" /> Cancel editing
             </button>
           )}
         </div>
@@ -228,11 +229,11 @@ export function TokenBanner() {
     );
   }
 
-  // ---------- מצב מכווץ: פס סטטוס דק ----------
+  // ---------- collapsed state: thin status bar ----------
   const core = data?.core;
-  // טוקן אמיתי = מכסה 5,000. אורח = 60. אם המכסה ברמת אורח — הטוקן לא באמת עובד.
+  // A real token = a 5,000 quota. Guest = 60. If the quota is at guest level — the token isn't really working.
   const tokenLevelQuota = (core?.limit ?? 0) >= 1000;
-  // data?.error מת לכאן — apiFetch זורק חריגה על גוף שגיאה; הערך לעולם לא מגיע כ-data
+  // data?.error is dead here — apiFetch throws on error bodies; the value never arrives as data
   const ok = !error && !!data && tokenLevelQuota;
   const search = data?.search;
 
@@ -256,10 +257,10 @@ export function TokenBanner() {
           <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" aria-hidden />
         )}
         {isFetching ? (
-          "בודק טוקן מול GitHub…"
+          "Checking token against GitHub…"
         ) : ok ? (
           <>
-            <b>טוקן GitHub פעיל</b>
+            <b>GitHub token active</b>
             {shownMasked && (
               <span dir="ltr" className="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[11px] text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
                 {shownMasked}
@@ -274,9 +275,9 @@ export function TokenBanner() {
           </>
         ) : (
           <>
-            <b>הטוקן לא זוהה על ידי GitHub</b>
+            <b>GitHub didn't recognize the token</b>
             <span className="text-xs">
-              {data?.error ?? error?.message ?? "מכסת אורח (60/שעה) — הטוקן השמור לא עובד, הדביקו טוקן תקין"}
+              {data?.error ?? error?.message ?? "Guest quota (60/hour) — the saved token isn't working; paste a valid token"}
             </span>
           </>
         )}
@@ -291,7 +292,7 @@ export function TokenBanner() {
             setDraft("");
           }}
         >
-          <PencilLine className="h-3.5 w-3.5" /> החלף טוקן
+          <PencilLine className="h-3.5 w-3.5" /> Change token
         </Button>
         <Button
           variant="ghost"
@@ -299,7 +300,7 @@ export function TokenBanner() {
           className="h-8 gap-1.5 text-red-600 hover:bg-red-100 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950"
           onClick={remove}
         >
-          <Trash2 className="h-3.5 w-3.5" /> הסר
+          <Trash2 className="h-3.5 w-3.5" /> Remove
         </Button>
       </span>
     </div>

@@ -30,7 +30,7 @@ const res = await fetch(`${BASE}/api/genesis/synthesize`, {
   body: JSON.stringify({
     repos,
     productContext:
-      "Claude Hunter Pro — מערכת מודיעין תחרותית אוטונומית לגילוי, סריקה וכריית DNA מפרויקטי Claude פרימיום ב-GitHub. Next.js 16, TypeScript, Prisma/SQLite, z-ai-web-dev-sdk. המטרה: להפוך את הצייד לתעשייתי — יותר מטרות איכותיות, פחות רעש, ספריית DNA שמתפצצת.",
+      "Claude Hunter Pro — an autonomous competitive-intelligence system for discovering, sweeping and mining DNA from premium Claude projects on GitHub. Next.js 16, TypeScript, Prisma/SQLite, z-ai-web-dev-sdk. The goal: make the hunter industrial-grade — more high-quality targets, less noise, an exploding DNA library.",
   }),
   signal: AbortSignal.timeout(150_000),
 });

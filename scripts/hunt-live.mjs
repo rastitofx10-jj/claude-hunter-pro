@@ -11,7 +11,8 @@
 import { readFileSync } from "node:fs";
 
 const BASE = "http://localhost:3000";
-const TOKEN_FILE = "upload/טוקן טיטפקס10.secret";
+// Local secret file holding the GitHub PAT (never committed; the upload/ dir is not part of the repo).
+const TOKEN_FILE = "upload/token.secret";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

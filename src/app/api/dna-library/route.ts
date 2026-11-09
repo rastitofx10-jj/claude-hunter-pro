@@ -4,16 +4,16 @@ import { db } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /**
- * ספריית ה-DNA — מקובץ לפי ריפו.
- * ברירת מחדל קלה: בלי תוכן מלא (ראינו 692KB JSON לכל פתיחת לשונית) —
- * contentPreview לתצוגה + size למיון. תוכן מלא: ?full=1 או /api/dna-library/[id].
+ * The DNA library — grouped by repo.
+ * Light default: no full content (we saw 692KB JSON on every tab open) —
+ * contentPreview for display + size for sorting. Full content: ?full=1 or /api/dna-library/[id].
  */
 const PREVIEW_CHARS = 400;
 
 /**
- * מצב ברירת המחדל (בלי full) — בעבר: findMany עם content מלא מה-DB
- * ואז content=null וניפוח preview בצד השרת — מגה-בייטים מועברים מ-SQLite
- * רק כדי להיזרק. עכשיו: substr בתוך ה-SQL — מהתהליך יוצא רק ה-400 תווים.
+ * The default mode (without full) — previously: findMany with full content from the DB
+ * and then content=null with preview inflation on the server side — megabytes transferred from SQLite
+ * just to be thrown away. Now: substr inside the SQL — only the 400 characters leave the process.
  */
 async function listLight() {
   const rows = await db.$queryRaw<{
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       const items = await listLight();
       return NextResponse.json({ items, full: false });
     }
-    // take מפורש — בעבר full=1 החזיר את כל הספרייה בלי גבול
+    // Explicit take — previously full=1 returned the entire library unbounded
     const rows = await db.dnaArtifact.findMany({
       orderBy: [{ sourceRepo: "asc" }, { kind: "asc" }, { name: "asc" }],
       take: 400,
@@ -64,21 +64,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ items: rows, full: true });
   } catch (e) {
     console.error("dna-library GET failed", e);
-    return NextResponse.json({ error: "טעינת ספריית ה-DNA נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load the DNA library" }, { status: 500 });
   }
 }
 
 /**
- * מחיקה: ?repo=owner/name לריפו בודד, או ?all=1 לכל הספרייה.
- * בעבר: מחיקה בלי פרמטר = מחיקת הכל, וגם ?repo= ריק דלף לשם — שגיאת קלד
- * בלתי-הפיכה (אסון נתונים מחכה לקרות). עכשיו: כל פעולה חייבת להיות מפורשת.
+ * Deletion: ?repo=owner/name for a single repo, or ?all=1 for the entire library.
+ * Previously: deletion without a parameter = delete everything, and an empty ?repo= leaked there too — an
+ * irreversible typo (a data disaster waiting to happen). Now: every action must be explicit.
  */
 export async function DELETE(req: NextRequest) {
   const repo = (req.nextUrl.searchParams.get("repo") ?? "").trim();
   const all = req.nextUrl.searchParams.get("all") === "1";
   if (!repo && !all) {
     return NextResponse.json(
-      { error: "נדרש ?repo=owner/name או ?all=1 מפורש — מחיקה בלי הוראה ברורה נחסמת" },
+      { error: "An explicit ?repo=owner/name or ?all=1 is required — deletion without a clear instruction is blocked" },
       { status: 400 }
     );
   }
@@ -87,6 +87,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true, scope: repo || "all" });
   } catch (e) {
     console.error("dna-library DELETE failed", e);
-    return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Deletion failed" }, { status: 500 });
   }
 }

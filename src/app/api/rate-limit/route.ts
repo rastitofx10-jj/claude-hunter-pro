@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const token = await resolveToken(req);
   try {
     const data = await ghFetch<RateLimitResp>("/rate_limit", token);
-    // הטוקן מהכותרת עבר אימות מול GitHub — נשמר לשימוש השרת
+    // The token from the header was validated against GitHub — saved for server use
     await captureTokenFrom(req);
     const info: RateInfo = {
       hasToken: !!token,
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     };
     return NextResponse.json(info);
   } catch (e) {
-    const msg = e instanceof GhError ? e.message : "בדיקת המכסה נכשלה";
+    const msg = e instanceof GhError ? e.message : "Failed to check the rate limit";
     const status = e instanceof GhError ? e.status : 500;
     return NextResponse.json({ hasToken: !!token, error: msg } satisfies RateInfo, { status });
   }

@@ -3,19 +3,19 @@ import { generateBattleSynthesis, IntelError } from "@/lib/ai-intel";
 import type { WatchItem } from "@/lib/hunter-types";
 
 export const dynamic = "force-dynamic";
-// worst-case: 2 attempts × 110s through the serial LLM queue — בעבר לא הוגדר בכלל
+// worst-case: 2 attempts × 110s through the serial LLM queue — previously not defined at all
 export const maxDuration = 120;
 
-// POST /api/synthesis — סינתזת קרב חוצת-ריפואים מרשימת המעקב
+// POST /api/synthesis — cross-repo battle synthesis from the watchlist
 export async function POST(req: NextRequest) {
   let body: { items?: WatchItem[] };
   try {
     body = (await req.json()) as { items?: WatchItem[] };
   } catch {
-    return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  // ולידציה מלאה לפני הפרומפט: בעבר שדות לא-מספריים זרמו לפרומפט כ"ציון undefined/100"
+  // Full validation before the prompt: previously non-numeric fields flowed into the prompt as "score undefined/100"
   const items = (body.items ?? []).filter(
     (i) =>
       i &&
@@ -26,12 +26,12 @@ export async function POST(req: NextRequest) {
   );
   if (items.length < 2) {
     return NextResponse.json(
-      { error: "סינתזת קרב דורשת לפחות 2 מאגרים ברשימת המעקב — שמור עוד יעדים ואז הפעל" },
+      { error: "Battle synthesis requires at least 2 repos in the watchlist — save more targets and then run it" },
       { status: 400 }
     );
   }
   if (items.length > 20) {
-    return NextResponse.json({ error: "מותרות עד 20 מאגרים לסינתזה אחת" }, { status: 400 });
+    return NextResponse.json({ error: "Up to 20 repos are allowed per synthesis" }, { status: 400 });
   }
 
   try {
@@ -42,6 +42,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: e.message }, { status: 502 });
     }
     console.error("synthesis failed", e);
-    return NextResponse.json({ error: "יצירת סינתזת הקרב נכשלה. נסה שוב." }, { status: 500 });
+    return NextResponse.json({ error: "Failed to generate the battle synthesis. Try again." }, { status: 500 });
   }
 }

@@ -29,7 +29,7 @@ export function ResultsSection({
   querySent: string;
   page: number;
   perPage: number;
-  /** false = אין עימוד אמיתי (code mode) — לא מוצגים כפתורי עימוד פיקטיביים */
+  /** false = no real pagination (code mode) — no fake pagination buttons are shown */
   canPaginate?: boolean;
   blockedHidden?: number;
   loading: boolean;
@@ -64,11 +64,11 @@ export function ResultsSection({
     );
 
   return (
-    <section className="space-y-3" aria-label="תוצאות חיפוש">
+    <section className="space-y-3" aria-label="Search results">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm text-muted-foreground">
-          <span className="font-semibold text-foreground">{totalMatches.toLocaleString()}</span> תוצאות
-          {mode === "code" && repoCount != null && <> · מקובצות ל-<span className="font-semibold text-foreground">{repoCount}</span> מאגרים</>}
+          <span className="font-semibold text-foreground">{totalMatches.toLocaleString()}</span> results
+          {mode === "code" && repoCount != null && <> · grouped into <span className="font-semibold text-foreground">{repoCount}</span> repos</>}
           <span dir="ltr" className="mx-2 hidden font-mono text-xs sm:inline">q={querySent}</span>
         </div>
         <div className="flex gap-1.5">
@@ -81,12 +81,12 @@ export function ResultsSection({
         </div>
       </div>
 
-      {/* ⛔ שקיפות חסימה: מאגרים עם רק מודלי 4.x הוסתרו לגמרי */}
+      {/* ⛔ Blocking transparency: repos with only 4.x models were hidden completely */}
       {(blockedHidden ?? 0) > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50/60 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">
           <ShieldX className="h-4 w-4 shrink-0" />
           <span>
-            <strong>{blockedHidden}</strong> מאגרים הוסתרו לחלוטין — זוהו בהם רק מודלים מתחת לסף 5.5 (משפחת 4.x חסומה).
+            <strong>{blockedHidden}</strong> repos were hidden entirely — only models below the 5.5 threshold were detected in them (the 4.x family is blocked).
           </span>
         </div>
       )}
@@ -106,9 +106,9 @@ export function ResultsSection({
       {canPaginate !== false && totalMatches > perPage && (
         <div className="flex items-center justify-center gap-3 pt-2">
           <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => onPage(page - 1)} className="gap-1">
-            <ChevronRight className="h-4 w-4" /> הקודם
+            <ChevronLeft className="h-4 w-4" /> Previous
           </Button>
-          <span className="text-sm text-muted-foreground">עמוד {page}</span>
+          <span className="text-sm text-muted-foreground">Page {page}</span>
           <Button
             variant="outline"
             size="sm"
@@ -116,7 +116,7 @@ export function ResultsSection({
             onClick={() => onPage(page + 1)}
             className="gap-1"
           >
-            הבא <ChevronLeft className="h-4 w-4" />
+            Next <ChevronRight className="h-4 w-4" />
           </Button>
           {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>

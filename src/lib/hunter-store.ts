@@ -29,11 +29,11 @@ export const useHunterStore = create<HunterState>()(
     }),
     {
       name: "claude-hunter-v1",
-      // הטוקן נשמר כאן רק כסנטינל (@server) או ריק — לעולם לא PAT גולמי.
-      // בעבר: persist בלי partialize/merge שמר טוקן גולמי ב-localStorage לנצח
-      // (סתירה מלאה להערה ב-api-client: "הטוקן נמצא בשרת — הלקוח לא מחזיק אותו").
-      // מיגרציה חד-פעמית: PAT גולמי שהיה כבר באחסון מוחלף בסנטינל; אם הוא לא
-      // על השרת — המשתמש מדביק פעם אחת נוספת (ומיד נלכד שם דרך captureTokenFrom).
+      // The token is stored here only as a sentinel (@server) or empty — never a raw PAT.
+      // Previously: persist without partialize/merge kept a raw token in localStorage forever
+      // (a complete contradiction of the note in api-client: "the token lives on the server — the client never holds it").
+      // One-time migration: a raw PAT already in storage is replaced with the sentinel; if it is not
+      // on the server — the user pastes it once more (and it is immediately captured there via captureTokenFrom).
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<HunterState>;
         const raw = typeof p.token === "string" ? p.token : "";

@@ -1,9 +1,9 @@
 // ============================================================
-// להקת פרומפטים — מודיעין עומק מרובה-שלבים
-// במקום פרומפט אחד כללי: 8 פרומפטים מקצועיים עם תפקידים מומחים —
-// טריאז׳ה ראיות ← פרופילי השקעה ← דפוסי שוק ← תוכנית תקיפה
-// ← אבולוציית שאילתות ← תדריך מנהלים.
-// כל פרומפט מחזיר JSON קפדני עם שרשרת תיקון. צד שרת בלבד.
+// Prompt swarm — multi-stage deep intelligence
+// Instead of one generic prompt: 8 professional prompts with expert roles —
+// evidence triage ← investment profiles ← market patterns ← attack plan
+// ← query evolution ← executive briefing.
+// Each prompt returns strict JSON with a correction chain. Server-side only.
 // ============================================================
 
 import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
@@ -19,37 +19,37 @@ export class SwarmError extends Error {
 
 const TIMEOUT_MS = 110_000;
 
-const SWARM_ROLE = `אתה קצין מודיעין בכיר ביחידת צייד טכנולוגי. אתה חד, חשדן ומבוסס-ראיות.
-כללי ברזל:
-1. אתה מנוע JSON — מחזיר JSON תקין ותו לא מעבר. בלי code fences, בלי הסברים.
-2. עברית בלבד (מונחים טכניים באנגלית בתוך הטקסט).
-3. אסור להמציא. אין ראיה? כתוב שלא נמצאה. חשדן כלפי ראיות חלשות.
-4. סף המודלים: רק 5.5+ (Opus 5.5, Fable, Opus 6+) נחשב פרימיום. משפחת 4.x זבל — אפס ערך.
-5. בתוך ערכי מחרוזת אסורה מרכאה כפולה (") — גרש (') או מירכאות עבריות (״).`;
+const SWARM_ROLE = `You are a senior intelligence officer in a technology-hunting unit. You are sharp, skeptical, and evidence-based.
+Iron rules:
+1. You are a JSON engine — return valid JSON and nothing beyond it. No code fences, no explanations.
+2. English only (technical terms stay in English within the text).
+3. Never invent. No evidence? Write that none was found. Be skeptical of weak evidence.
+4. Model threshold: only 5.5+ (Opus 5.5, Fable, Opus 6+) counts as premium. The 4.x family is junk — zero value.
+5. Inside string values, double quotes (") are forbidden — use single quotes (').`;
 
-const RETRY_HINT = `\n\n⚠️ תיקון: התשובה הקודמת לא הייתה JSON תקין. החזר את אותו תוכן ב-JSON מהודק — בלי מרכאות כפולות בערכים, בלי פסיקים תלויים, גוף ה-JSON בלבד.`;
+const RETRY_HINT = `\n\n⚠️ Correction: the previous answer was not valid JSON. Return the same content as tight JSON — no double quotes inside values, no dangling commas, JSON body only.`;
 
 async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // התור הגלובלי ב-zai.ts מסדר את כל קריאות ה-AI בתהליך (מקביליות 1)
-      // — שתי מנועות שרצות יחד (כימרה בזמן סריקה) כבר לא מפילות 429
-      // זו של זו. role:"system" — הוראות המערכת מקבלות עדיפות אמיתית.
+      // The global queue in zai.ts serializes all AI calls in the process (concurrency 1)
+      // — two engines running together (chimney during a sweep) no longer take each other
+      // down with 429s. role:"system" — the system instructions get real priority.
       const { content: raw } = await llmComplete(
         [
           { role: "system", content: SWARM_ROLE },
           { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
         ],
-        { timeoutMs: TIMEOUT_MS, timeoutLabel: "קריאת ה-AI", timeoutError: SwarmError }
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "AI call", timeoutError: SwarmError }
       );
       if (!raw.trim()) {
-        lastErr = new SwarmError("ה-AI החזיר תשובה ריקה");
+        lastErr = new SwarmError("The AI returned an empty answer");
         continue;
       }
       return extractJson(raw, SwarmError);
     } catch (e) {
-      if (isTimeoutError(e)) throw e; // timeout — בלי retry, 8+ פרומפטים × 110 שניות = מלכודת
+      if (isTimeoutError(e)) throw e; // timeout — no retry, 8+ prompts × 110 seconds = a trap
       if (e instanceof SwarmError) {
         lastErr = e;
         continue;
@@ -57,26 +57,26 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
       throw e;
     }
   }
-  throw lastErr instanceof Error ? lastErr : new SwarmError("פרומפט נכשל");
+  throw lastErr instanceof Error ? lastErr : new SwarmError("A prompt failed");
 }
 
-// ---------- עזרי דיוג ----------
+// ---------- Fishing helpers ----------
 
 function candidateLine(c: CandidateFlat, i: number): string {
   const provenance =
     c.contentEvidence.length > 0
-      ? `קשה-מאומתת (המחרוזת בתוכן קובץ אמיתי: ${c.contentEvidence.join(", ")})`
+      ? `hard-verified (the string inside a real file's content: ${c.contentEvidence.join(", ")})`
       : c.textEvidence.length > 0
-        ? `רכה בלבד (רק אזכור בתיאור/topics, לא הוכחה בקוד: ${c.textEvidence.join(", ")})`
-        : "חלשה (אזכור claude כללי)";
+        ? `soft only (just a mention in description/topics, not proven in code: ${c.textEvidence.join(", ")})`
+        : "weak (a generic claude mention)";
   return [
     `[${i}] ${c.fullName}`,
-    `⭐${c.stars} · דחיפה אחרונה: ${c.pushedAt?.slice(0, 10) ?? "??"} · ראיה: ${provenance}`,
+    `⭐${c.stars} · last push: ${c.pushedAt?.slice(0, 10) ?? "??"} · evidence: ${provenance}`,
     c.contentEvidence.length > 0 && c.evidencePaths.length > 0
-      ? `קבצי ראיה ממאגר אמיתי: ${c.evidencePaths.slice(0, 3).join(" | ")}`
+      ? `evidence files in a real repo: ${c.evidencePaths.slice(0, 3).join(" | ")}`
       : "",
-    c.description ? `תיאור: ${c.description.slice(0, 200)}` : "תיאור: אין",
-    c.capabilityHits ? `קבצי יכולת שנתגלו: ${c.capabilityHits}` : "",
+    c.description ? `description: ${c.description.slice(0, 200)}` : "description: none",
+    c.capabilityHits ? `capability files discovered: ${c.capabilityHits}` : "",
     c.topics.length ? `topics: ${c.topics.join(", ")}` : "",
   ]
     .filter(Boolean)
@@ -89,7 +89,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// ---------- P1+P2: טריאז׳ה ----------
+// ---------- P1+P2: triage ----------
 
 export interface TriageVerdict {
   fullName: string;
@@ -107,39 +107,40 @@ function parseTriage(j: Record<string, unknown>, batch: CandidateFlat[]): Triage
     const fullName = str(o.fullName ?? o.repo);
     if (!valid.has(fullName)) continue;
     const v = str(o.verdict).toLowerCase();
+    // The contract language is English (elite|watch|noise); legacy Hebrew fallbacks were removed with the Hebrew contract.
     const verdict: TriageVerdict["verdict"] =
-      v.includes("elite") || v.includes("אליט") ? "elite" : v.includes("watch") || v.includes("מעקב") ? "watch" : "noise";
+      v.includes("elite") ? "elite" : v.includes("watch") ? "watch" : "noise";
     const conf = Number(o.confidence ?? o.confidenceScore ?? 50);
     out.push({
       fullName,
       verdict,
       confidence: Number.isFinite(conf) ? Math.max(0, Math.min(100, Math.round(conf))) : 50,
-      reason: str(o.reason ?? o.why, "ללא נימוק"),
+      reason: str(o.reason ?? o.why, "no reasoning given"),
     });
   }
   return out;
 }
 
-/** פרומפטי טריאז׳ה — מחזיר פסק דין לכל מועמד באצווה */
+/** Triage prompt — returns a verdict for every candidate in the batch */
 export async function triageBatch(batch: CandidateFlat[]): Promise<TriageVerdict[]> {
   const list = batch.map((c, i) => candidateLine(c, i)).join("\n---\n");
-  const prompt = `רשימת מועמדים מסריקת GitHub (סף מודלים 5.5+ בלבד):
+  const prompt = `A list of candidates from a GitHub sweep (model threshold 5.5+ only):
 
 ${list}
 
-בצע טריאז׳ה מודיעינית השוואתית. הכללים:
-— ראיה ״קשה-מאומתת״ = המחרוזת נמצאה בתוכן קובץ אמיתי — תנאי הכרחי ל-elite, אבל לא מספיק.
-— elite = רק החזקים באמת מול המטרה: השקעה כספית מוכחת במודלי פרימיום 5.5+ ויכולות .claude אמתיות. אם כל המועמדים נראים דומים, דרג אותם זה מול זה ותן elite רק לשליש החזק ביותר — השאר watch עם נימוק מה חסר להם.
-— ראיה ״רכה״ = אזכור בתיאור בלבד — אסור לתת elite, לכל היותר watch. אסור לומר שהשתמשו במודל בקוד.
-— בלי ראיה = noise.
-— אסור לסמן את כל הרשימה elite. פיזור אמיתי: אם היית שופט שוב ושוב ותמיד כולם elite — הטריאז׳ה שלך חסרת ערך.
-החזר JSON בדיוק:
-{"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "נימוק קצר בעברית המציין בדיוק מאיפה הראיה (תוכן קוד / תיאור) ולמה זה טוב/חלש יחסית לאחרים"}]}`;
+Perform a comparative intelligence triage. The rules:
+— "Hard-verified" evidence = the string was found inside a real file's content — a necessary condition for elite, but not sufficient.
+— elite = only the truly strongest against the goal: proven monetary investment in 5.5+ premium models and real .claude capabilities. If all candidates look similar, rank them against each other and give elite only to the strongest third — the rest watch, with reasoning about what they lack.
+— "Soft" evidence = a mention in the description only — elite is forbidden, watch at most. You must not claim the model was used in code.
+— No evidence = noise.
+— Marking the entire list elite is forbidden. Real spread: if you judged again and again and everyone is always elite — your triage is worthless.
+Return exactly this JSON:
+{"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "a short reasoning in English stating exactly where the evidence comes from (code content / description) and why it is strong/weak relative to the others"}]}`;
   const j = await llmJson(prompt);
   return parseTriage(j, batch);
 }
 
-// ---------- P3+P4: פרופילי השקעה חדים ----------
+// ---------- P3+P4: sharp investment profiles ----------
 
 export interface SharpProfile {
   fullName: string;
@@ -162,7 +163,7 @@ function parseProfiles(j: Record<string, unknown>, batch: CandidateFlat[]): Shar
     out.push({
       fullName,
       investment: Number.isFinite(inv) ? Math.max(0, Math.min(100, Math.round(inv))) : 0,
-      moneyLevel: str(o.moneyLevel, "לא ידוע"),
+      moneyLevel: str(o.moneyLevel, "unknown"),
       signature: str(o.signature ?? o.whatTheyBuilt),
       stealThis: strArr(o.stealThis, 3),
       blindSpot: str(o.blindSpot ?? o.weakness),
@@ -171,20 +172,20 @@ function parseProfiles(j: Record<string, unknown>, batch: CandidateFlat[]): Shar
   return out;
 }
 
-/** פרומפטי פרופילים — למועמדי הצמרת בלבד */
+/** Profiles prompt — for top-tier candidates only */
 export async function sharpProfiles(batch: CandidateFlat[]): Promise<SharpProfile[]> {
   const list = batch.map((c, i) => candidateLine(c, i)).join("\n---\n");
-  const prompt = `הצמרת של הסריקה — מועמדים עם הראיות הקשות ביותר להשקעה במודלי Claude 5.5+:
+  const prompt = `The top of the sweep — candidates with the hardest evidence of investment in Claude 5.5+ models:
 
 ${list}
 
-לכל אחד בנה פרופיל השקעה חד. על בסיס הראיות בלבד:
-{"profiles": [{"fullName": "owner/name", "investment": 0-100, "moneyLevel": "בטוח|סביר|חלש", "signature": "מה בנו שם שדורש מודל פרימיום", "stealThis": ["מה לגנוב למוצר שלנו"], "blindSpot": "מה הם לא רואים ואנחנו כן"}]}`;
+Build a sharp investment profile for each one. Based on the evidence only:
+{"profiles": [{"fullName": "owner/name", "investment": 0-100, "moneyLevel": "certain|likely|weak|unknown", "signature": "what they built there that requires a premium model", "stealThis": ["what to steal for our product"], "blindSpot": "what they don't see and we do"}]}`;
   const j = await llmJson(prompt);
   return parseProfiles(j, batch);
 }
 
-// ---------- P5: דפוסי שוק ----------
+// ---------- P5: market patterns ----------
 
 export interface MarketPatterns {
   patterns: { pattern: string; repos: string[]; insight: string }[];
@@ -199,12 +200,12 @@ export async function patternSynthesis(
   const list = [...elite, ...watch.slice(0, 12)]
     .map((c, i) => candidateLine(c, i))
     .join("\n---\n");
-  const prompt = `תמונת השוק מהסריקה — אליטה (${elite.length}) + מעקב (${watch.length}):
+  const prompt = `The market picture from the sweep — elite (${elite.length}) + watch (${watch.length}):
 
 ${list}
 
-מצא דפוסים חוצי-מאגרים: מה בונים עם מודלי 5.5+? אילו סוגי מוצרים משלמים? לאן השוק זז?
-{"patterns": [{"pattern": "שם הדפוס", "repos": ["owner/name"], "insight": "המשמעות למוצר שלנו"}], "stackConsensus": ["טכנולוגיות שחוזרות"], "marketShift": "2-3 משפטים: לאן השוק של שימושי Claude פרימיום זז"}`;
+Find cross-repo patterns: what are people building with 5.5+ models? Which product types are paying? Where is the market heading?
+{"patterns": [{"pattern": "pattern name", "repos": ["owner/name"], "insight": "what it means for our product"}], "stackConsensus": ["recurring technologies"], "marketShift": "2-3 sentences: where the premium-Claude-usage market is heading"}`;
   const j = await llmJson(prompt);
   const patternsRaw = Array.isArray(j.patterns) ? j.patterns : [];
   return {
@@ -218,11 +219,11 @@ ${list}
       .filter((p): p is MarketPatterns["patterns"][number] => !!p)
       .slice(0, 8),
     stackConsensus: strArr(j.stackConsensus, 10),
-    marketShift: str(j.marketShift, "לא התקבל שיפוט שוק"),
+    marketShift: str(j.marketShift, "No market judgment received"),
   };
 }
 
-// ---------- P6: תוכנית תקיפה ----------
+// ---------- P6: attack plan ----------
 
 export interface AttackPlan {
   topMoves: { move: string; why: string; effort: string }[];
@@ -238,22 +239,22 @@ export async function attackPlan(
   const profList = profiles
     .map(
       (p) =>
-        `${p.fullName}: השקעה ${p.investment}/100 (${p.moneyLevel}) — חתימה: ${p.signature.slice(0, 150)}${
-          p.blindSpot ? ` · נקודה עיוורת: ${p.blindSpot.slice(0, 150)}` : ""
+        `${p.fullName}: investment ${p.investment}/100 (${p.moneyLevel}) — signature: ${p.signature.slice(0, 150)}${
+          p.blindSpot ? ` · blind spot: ${p.blindSpot.slice(0, 150)}` : ""
         }`
     )
     .join("\n");
   const patList = patterns.patterns.map((p) => `— ${p.pattern}: ${p.insight.slice(0, 150)}`).join("\n");
-  const prompt = `אתה בונה ממשק AI מתחרה. הנה המודיעין מהסריקה:
+  const prompt = `You are building a competing AI interface. Here is the intelligence from the sweep:
 
-פרופילי השקעה:
-${profList || "אין פרופילים"}
+Investment profiles:
+${profList || "no profiles"}
 
-דפוסי שוק:
-${patList || "אין דפוסים"}
+Market patterns:
+${patList || "no patterns"}
 
-נסח תוכנית תקיפה אכזרית וממוקדת:
-{"topMoves": [{"move": "מהלך", "why": "על בסיס איזה מודיעין", "effort": "נמוך|בינוני|גבוה"}], "differentiators": ["מה אף מתחרה לא עשה"], "immediateActions": ["צעדים ל-48 שעות הקרובות"]}`;
+Formulate a ruthless, focused attack plan:
+{"topMoves": [{"move": "the move", "why": "based on which intelligence", "effort": "low|medium|high"}], "differentiators": ["what no competitor has done"], "immediateActions": ["steps for the next 48 hours"]}`;
   const j = await llmJson(prompt);
   const movesRaw = Array.isArray(j.topMoves) ? j.topMoves : [];
   return {
@@ -262,7 +263,7 @@ ${patList || "אין דפוסים"}
         const o = (m ?? {}) as Record<string, unknown>;
         const move = str(o.move ?? o.action ?? o.title);
         if (!move) return null;
-        return { move, why: str(o.why ?? o.reason), effort: str(o.effort, "בינוני") };
+        return { move, why: str(o.why ?? o.reason), effort: str(o.effort, "medium") };
       })
       .filter((m): m is AttackPlan["topMoves"][number] => !!m)
       .slice(0, 8),
@@ -271,7 +272,7 @@ ${patList || "אין דפוסים"}
   };
 }
 
-// ---------- P7: אבולוציית שאילתות ----------
+// ---------- P7: query evolution ----------
 
 export interface QueryEvolution {
   nextQueries: string[];
@@ -284,23 +285,23 @@ export async function queryEvolution(
   elite: CandidateFlat[]
 ): Promise<QueryEvolution> {
   const perQuery = executedQueries
-    .map((r) => `— [${r.error ? `שגיאה: ${String(r.error).slice(0, 60)}` : `${r.count} תוצאות`}] ${r.q}`)
+    .map((r) => `— [${r.error ? `error: ${String(r.error).slice(0, 60)}` : `${r.count} results`}] ${r.q}`)
     .join("\n");
   const dead = executedQueries.filter((r) => !r.error && r.count === 0).slice(0, 8);
-  const deadList = dead.map((r) => r.q).join(" | ") || "אין";
-  const prompt = `הרצנו את השאילתות הבאות ב-GitHub — עם מספר התוצאות האמיתי של כל אחת:
+  const deadList = dead.map((r) => r.q).join(" | ") || "none";
+  const prompt = `We ran the following queries on GitHub — with each one's real result count:
 ${perQuery}
 
-ומצאנו ${elite.length} מאגרי אליטה: ${elite.slice(0, 15).map((c) => c.fullName).join(", ") || "אין"}
+And we found ${elite.length} elite repos: ${elite.slice(0, 15).map((c) => c.fullName).join(", ") || "none"}
 
-כללים קשוחים:
-1. שאילתה עם 0 תוצאות היא מתה — אסור לחזור על דפוס שלה. מתות שכבר זוהו: ${deadList}
-2. אסור להמציא מתאמי repo:owner/name — owner/name חוקי רק מהרשימת האליטה האמיתית למעלה, ורק אם רוצים לצלול לעומק של מאגר ספציפי.
-3. שאילתה שמחזירה מאות אלפי תוצאות היא רעש יותר מאותת — צמצם עם מילות ראיה ספציפיות (למשל שמות קבצים, מחרוזות תצורה, שמות משתני סביבה) שקיימות בקוד של צרכני מודלי 5.5+.
-4. שאף ל-8-12 שאילתות שכל אחת מהן צפויה להחזיר 5-200 תוצאות איכותיות.
+Strict rules:
+1. A query with 0 results is dead — its pattern must not be repeated. Already identified dead ones: ${deadList}
+2. Inventing repo:owner/name qualifiers is forbidden — an owner/name is legal only from the real elite list above, and only if you want to drill deeper into a specific repo.
+3. A query returning hundreds of thousands of results is more noise than signal — narrow it with specific evidence words (e.g. file names, config strings, environment variable names) that exist in the code of 5.5+ model consumers.
+4. Aim for 8-12 queries, each expected to return 5-200 quality results.
 
-הצע את הסבב הבא: אילו שאילתות GitHub יחשפו את מה שפספסנו?
-{"nextQueries": ["8-12 שאילתות חדשות בתחביר GitHub (code/repo search), ממוקדות עוד יותר בראיות של מודלי 5.5+"], "blindSpots": ["מה הסריקה הנוכחית לא רואה"], "rationale": "למה דווקא אלה"}`;
+Propose the next round: which GitHub queries will expose what we missed?
+{"nextQueries": ["8-12 new queries in GitHub syntax (code/repo search), focused even more sharply on evidence of 5.5+ models"], "blindSpots": ["what the current sweep does not see"], "rationale": "why these in particular"}`;
   const j = await llmJson(prompt);
   return {
     nextQueries: strArr(j.nextQueries, 12),
@@ -309,7 +310,7 @@ ${perQuery}
   };
 }
 
-// ---------- P8: תדריך מנהלים ----------
+// ---------- P8: executive briefing ----------
 
 export interface ExecBrief {
   headline: string;
@@ -325,26 +326,26 @@ export async function execBrief(input: {
   attack: AttackPlan;
   dnaAdded: number;
 }): Promise<ExecBrief> {
-  const prompt = `סגור את המבצע בתדריך מנהלים חד-עמודי.
+  const prompt = `Close the operation with a one-page executive briefing.
 
-נתוני המבצע: ${input.statsLine}
-מאגרי אליטה: ${input.eliteCount}
-DNA חדש שנכרה: ${input.dnaAdded}
+Operation stats: ${input.statsLine}
+Elite repos: ${input.eliteCount}
+New DNA mined: ${input.dnaAdded}
 
-דפוסים: ${input.patterns.patterns.map((p) => p.pattern).join("; ") || "אין"}
-מהלכים מובילים: ${input.attack.topMoves.map((m) => m.move).slice(0, 5).join("; ") || "אין"}
+Patterns: ${input.patterns.patterns.map((p) => p.pattern).join("; ") || "none"}
+Leading moves: ${input.attack.topMoves.map((m) => m.move).slice(0, 5).join("; ") || "none"}
 
-{"headline": "כותרת אחת שמסכמת את ממצא המלחמה", "keyIntel": ["3-5 ממצאים קריטיים"], "decisiveMove": "המהלך המכריע האחד לשבוע הקרוב", "riskMap": ["סיכונים ונחשולים"]}`;
+{"headline": "one headline summarizing the campaign's finding", "keyIntel": ["3-5 critical findings"], "decisiveMove": "the single decisive move for the coming week", "riskMap": ["risks and threats"]}`;
   const j = await llmJson(prompt);
   return {
-    headline: str(j.headline, "לא התקבלה כותרת"),
+    headline: str(j.headline, "No headline received"),
     keyIntel: strArr(j.keyIntel, 6),
     decisiveMove: str(j.decisiveMove),
     riskMap: strArr(j.riskMap, 6),
   };
 }
 
-// ---------- ריצת הלהקה המלאה ----------
+// ---------- Full swarm run ----------
 
 export interface SwarmResult {
   triage: TriageVerdict[];
@@ -358,15 +359,15 @@ export interface SwarmResult {
 }
 
 /**
- * ריצה מלאה: 8 פרומפטים (2 טריאז׳ה + 2 פרופילים + דפוסים + תקיפה + שאילתות + תדריך).
- * סלחנית לכשלים חלקיים: פרומפט שנכשל לא מפיל את המבצע — נרשם ב-failures.
- * executedQueries חייב להיות אובייקטים {q,count,error} — בעבר החתימה הצהירה string[]
- * וכל מי שהעביר מחרוזות גרם ל-"undefined תוצאות" בפרומפט אבולוציית השאילתות
- * ולרשימת שאילתות-מתות ריקה תמידית (באג אמיתי שסוגר כאן ברמת הטיפוס).
+ * Full run: 8 prompts (2 triage + 2 profiles + patterns + attack + queries + briefing).
+ * Forgiving of partial failures: a failed prompt doesn't take down the operation — it's recorded in failures.
+ * executedQueries must be {q,count,error} objects — before, the signature declared string[]
+ * and anyone passing strings caused "undefined results" in the query-evolution prompt
+ * and a permanently empty dead-queries list (a real bug closed here at the type level).
  */
-/** כיסוי הטריאז׳ה — מספר הממצאים שמקבלים פסק-דין מהלהקה.
- * מיוצא כדי שהשומר והממצאים הנשמרים יסכמו תמיד לאותו מספר — בעבר נשמרו
- * 60 ממצאים כשרק 36 קיבלו verdict, והשורות 37-60 הציגו "ממתין" לנצח. */
+/** Triage coverage — the number of findings that receive a verdict from the swarm.
+ * Exported so the guard and the saved findings always sum to the same number — before,
+ * 60 findings were saved when only 36 got a verdict, and rows 37-60 showed "pending" forever. */
 export const SWARM_TRIAGE_COVERAGE = 36;
 
 export async function runSwarm(
@@ -379,7 +380,7 @@ export async function runSwarm(
   const failures: string[] = [];
   let calls = 0;
 
-  // טריאז׳ה באצוות של 12
+  // Triage in batches of 12
   const batches = chunk(candidates.slice(0, SWARM_TRIAGE_COVERAGE), 12);
   const triage: TriageVerdict[] = [];
   const totalPrompts = batches.length * 2 + 4;
@@ -389,7 +390,7 @@ export async function runSwarm(
       calls++;
       triage.push(...(await triageBatch(batch)));
     } catch (e) {
-      failures.push(`טריאז׳ה: ${e instanceof Error ? e.message : "שגיאה"}`);
+      failures.push(`triage: ${e instanceof Error ? e.message : "error"}`);
     }
     await onProgress?.(calls, totalPrompts);
   }
@@ -399,14 +400,14 @@ export async function runSwarm(
   const watchNames = new Set(triage.filter((t) => t.verdict === "watch").map((t) => t.fullName));
   const watch = candidates.filter((c) => watchNames.has(c.fullName)).slice(0, 12);
 
-  // פרופילים — רק לאליטה, באצוות של 6
+  // Profiles — elite only, in batches of 6
   const profiles: SharpProfile[] = [];
   for (const batch of chunk(elite, 6)) {
     try {
       calls++;
       profiles.push(...(await sharpProfiles(batch)));
     } catch (e) {
-      failures.push(`פרופילים: ${e instanceof Error ? e.message : "שגיאה"}`);
+      failures.push(`profiles: ${e instanceof Error ? e.message : "error"}`);
     }
     await onProgress?.(calls, totalPrompts);
   }
@@ -417,7 +418,7 @@ export async function runSwarm(
     calls++;
     patterns = await patternSynthesis(elite, watch);
   } catch (e) {
-    failures.push(`דפוסים: ${e instanceof Error ? e.message : "שגיאה"}`);
+    failures.push(`patterns: ${e instanceof Error ? e.message : "error"}`);
   }
   await onProgress?.(calls, totalPrompts);
 
@@ -427,7 +428,7 @@ export async function runSwarm(
     calls++;
     attack = await attackPlan(elite, profiles, patterns);
   } catch (e) {
-    failures.push(`תוכנית תקיפה: ${e instanceof Error ? e.message : "שגיאה"}`);
+    failures.push(`attack plan: ${e instanceof Error ? e.message : "error"}`);
   }
   await onProgress?.(calls, totalPrompts);
 
@@ -436,7 +437,7 @@ export async function runSwarm(
     calls++;
     queries = await queryEvolution(executedQueries, elite);
   } catch (e) {
-    failures.push(`אבולוציית שאילתות: ${e instanceof Error ? e.message : "שגיאה"}`);
+    failures.push(`query evolution: ${e instanceof Error ? e.message : "error"}`);
   }
   await onProgress?.(calls, totalPrompts);
 
@@ -451,7 +452,7 @@ export async function runSwarm(
       dnaAdded,
     });
   } catch (e) {
-    failures.push(`תדריך: ${e instanceof Error ? e.message : "שגיאה"}`);
+    failures.push(`briefing: ${e instanceof Error ? e.message : "error"}`);
   }
   await onProgress?.(calls, totalPrompts);
 

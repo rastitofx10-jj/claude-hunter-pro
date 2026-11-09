@@ -3,20 +3,20 @@ import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-/** היסטוריית כימרות שנוצרו.
- * מחזיר את אותה צורה בדיוק כמו POST /api/genesis/synthesize
- * (chimeraName/oneLiner/generatedAt) — בעבר: שדות שונים (name/createdAt) וה-UI
- * הציג כותרות ריקות והוריד genesis-undefined.md על לחיצה בהיסטוריה. */
+/** History of created chimeras.
+ * Returns exactly the same shape as POST /api/genesis/synthesize
+ * (chimeraName/oneLiner/generatedAt) — previously: different fields (name/createdAt) and the UI
+ * showed empty titles and downloaded genesis-undefined.md when clicking in the history. */
 export async function GET() {
   try {
     const rows = await db.chimera.findMany({ orderBy: { createdAt: "desc" }, take: 20 });
     return NextResponse.json({
       items: rows.map((r) => ({
         id: r.id,
-        // שמות השדות שה-UI מצפה להם (ChimeraResponse)
+        // The field names the UI expects (ChimeraResponse)
         chimeraName: r.name,
-        // הערך האמיתי שנשמר ביצירה; breakthrough רק כגיבוי לשורות ישנות
-        // (בעבר: oneLiner זויף מתוך breakthrough — הכותרת שה-AI כתב אבדה).
+        // The real value saved at creation; breakthrough only as a fallback for old rows
+        // (previously: oneLiner was faked from breakthrough — the title the AI wrote was lost).
         oneLiner: r.oneLiner ?? r.breakthrough ?? "",
         skillMd: r.skillMd,
         principles: safeArr(r.principles),
@@ -29,7 +29,7 @@ export async function GET() {
     });
   } catch (e) {
     console.error("[genesis:chimeras]", e);
-    return NextResponse.json({ error: "טעינת הכימרות נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load the chimeras" }, { status: 500 });
   }
 }
 

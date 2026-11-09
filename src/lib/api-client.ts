@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Sentinel: "הטוקן נמצא בשרת" — הלקוח לא מחזיק אותו.
- * כשה-token הוא ה-sentinel (או ריק) אנחנו לא שולחים כותרת x-gh-token,
- * והשרת פותר את הטוקן לבד מה-DB (server-token.resolveToken).
+ * Sentinel: "the token lives on the server" — the client never holds it.
+ * When the token is the sentinel (or empty) we do not send the x-gh-token header,
+ * and the server resolves the token on its own from the DB (server-token.resolveToken).
  */
 export const SERVER_TOKEN = "@server";
 
@@ -17,8 +17,8 @@ export async function apiFetch<T>(
   token: string,
   init?: RequestInit
 ): Promise<T> {
-  // Record<string,string> מפורש — בעבר איחוד הסוגים עם {"x-gh-token"?: undefined}
-  // הפיל את ה-typecheck (TS2769) שהוסתר ע"י ignoreBuildErrors.
+  // Explicit Record<string,string> — the previous type union with {"x-gh-token"?: undefined}
+  // broke the typecheck (TS2769), hidden by ignoreBuildErrors.
   const authHeaders: Record<string, string> = isServerToken(token) ? {} : { "x-gh-token": token.trim() };
   const res = await fetch(url, {
     ...init,
@@ -30,10 +30,12 @@ export async function apiFetch<T>(
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok || data?.error) {
-    // הגוף המלא של השגיאה נצמד ל-Error — המשאבה של הציד החי קוראת ממנו את
-    // state הציד הכושל (payload.hunt) ועוצרת במקום לרוץ בלולאה אינסופית.
-    // בעבר: ה-route צירף את המצב בגוף התשובה אבל ה-wrapper זרק אותו לפני שמישהו הספיק לקרוא.
-    const err = new Error(data?.error || `שגיאה ${res.status}`);
+    // The full error body is attached to the Error — the live-hunt pump reads the
+    // failed hunt's state from it (payload.hunt) and stops instead of running in
+    // an infinite loop.
+    // Previously: the route attached the state in the response body, but the wrapper
+    // threw it away before anyone could read it.
+    const err = new Error(data?.error || `Error ${res.status}`);
     throw Object.assign(err, { payload: data as unknown, status: res.status });
   }
   return data as T;

@@ -6,7 +6,7 @@ import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
 
-/** כריית DNA מריפו + שמירה לספרייה */
+/** Mine DNA from a repo + save it to the library */
 export async function POST(req: NextRequest) {
   const token = await resolveToken(req);
   let owner = "";
@@ -22,29 +22,29 @@ export async function POST(req: NextRequest) {
       repo = (body.repo ?? "").trim();
     }
   } catch {
-    return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
   if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) {
-    return NextResponse.json({ error: "נדרש owner/repo תקין" }, { status: 400 });
+    return NextResponse.json({ error: "A valid owner/repo is required" }, { status: 400 });
   }
 
   try {
     const pkg = await mineDna(owner, repo, token);
-    // הכרייה הצליחה מול GitHub — טוקן תקין מהכותרת נשמר לשימוש השרת
-    // (בעבר: analyze/harvest/rate-limit לכדו; כאן לא — אי-עקביות).
+    // Mining succeeded against GitHub — a valid token from the header is saved for server use
+    // (previously: analyze/harvest/rate-limit captured it; here it did not — an inconsistency).
     await captureTokenFrom(req).catch(() => undefined);
     const warnings: string[] = [];
     if (pkg.treeTruncated) {
-      warnings.push("עץ הקבצים של הריפו נחתך (מאגר ענק מאוד) — ייתכן שנמצאו רק חלק מקבצי היכולת");
+      warnings.push("The repo's file tree was truncated (very large repo) — only some capability files may have been found");
     }
     if (pkg.artifacts.length === 0) {
       return NextResponse.json({
         ...pkg,
         warnings,
-        note: "לא נמצאו קבצי יכולת Claude (.claude/, CLAUDE.md) בריפו הזה — ייתכן שהפרויקט לא נבנה עם Claude Code",
+        note: "No Claude capability files (.claude/, CLAUDE.md) found in this repo — the project may not have been built with Claude Code",
       });
     }
-    // שמירה/עדכון בספריית ה-DNA
+    // Save/update in the DNA library
     const fullName = `${owner}/${repo}`;
     for (const a of pkg.artifacts) {
       await db.dnaArtifact.upsert({
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ...pkg, warnings });
   } catch (e) {
-    const msg = e instanceof GhError ? e.message : "הכרייה נכשלה";
+    const msg = e instanceof GhError ? e.message : "Mining failed";
     const status = e instanceof GhError ? e.status : 500;
     return NextResponse.json({ error: msg }, { status });
   }

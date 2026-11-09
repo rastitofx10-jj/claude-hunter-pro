@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { rankDnaForGoal, compileMission, buildMissionBundle } from "@/lib/mission-compiler";
+import { selectDnaForGoal, compileMission, buildMissionBundle } from "@/lib/mission-compiler";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -8,11 +8,11 @@ export const maxDuration = 300;
 const MAX_GOAL = 2000;
 const MAX_CONTEXT = 2000;
 
-/** רשימת משימות + סטטיסטיקת לולאה */
+/** Mission list + loop statistics */
 export async function GET() {
   try {
-    // take 50 לתצוגה + total אמיתי — בעבר הכותרת הציגה items.length בלבד
-    // ומשימה מס' 51 ומעלה נעלמו מהממשק בלי שאיש ידע.
+    // take 50 for display + the real total — previously the header showed only items.length
+    // and mission #51 and beyond vanished from the interface without anyone knowing.
     const [missions, total] = await Promise.all([
       db.mission.findMany({ orderBy: { id: "desc" }, take: 50 }),
       db.mission.count(),
@@ -53,11 +53,11 @@ export async function GET() {
     return NextResponse.json({ items, total, stats: { totalDna, fieldDna } });
   } catch (e) {
     console.error("[mission:list]", e);
-    return NextResponse.json({ error: "טעינת המשימות נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load the missions" }, { status: 500 });
   }
 }
 
-/** הידור משימה חדשה: מטרה ← אחזור DNA ← תוכנית קרב */
+/** Compile a new mission: goal ← DNA retrieval ← battle plan */
 export async function POST(req: NextRequest) {
   let goal = "";
   let context = "";
@@ -66,45 +66,28 @@ export async function POST(req: NextRequest) {
     goal = typeof body.goal === "string" ? body.goal.trim() : "";
     context = typeof body.context === "string" ? body.context.trim() : "";
   } catch {
-    return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
   if (goal.length < 8) {
-    return NextResponse.json({ error: "תאר את המטרה במשפט אחד לפחות (8+ תווים)" }, { status: 400 });
+    return NextResponse.json({ error: "Describe the goal in at least one sentence (8+ characters)" }, { status: 400 });
   }
   if (goal.length > MAX_GOAL) goal = goal.slice(0, MAX_GOAL);
   if (context.length > MAX_CONTEXT) context = context.slice(0, MAX_CONTEXT);
 
   try {
-    // אחזור חכם: קודם pre-score זול על metadata בלבד (בלי תוכן), ורק אז
-    // טוענים content רק למועמדים המובילים — במקום לטעון את כל התוכנים לזיכרון
-    // (בעבר: findMany עם content לכל השורות בלי take)
-    const metaDna = await db.dnaArtifact.findMany({
-      select: { id: true, sourceRepo: true, path: true, kind: true, name: true, description: true },
-      take: 500,
-      orderBy: { id: "desc" },
-    });
-    if (metaDna.length === 0) {
+    // One DNA-selection path for the whole system (selectDnaForGoal in mission-compiler): a cheap
+    // metadata-only pre-rank over the newest 500 → full content (truncated to 4,000 chars) only for
+    // the leaders → final re-rank. (Before: this route ran its own findMany-based selection while
+    // live-hunt's compile stage ranked with raw SQL over the whole library — two paths that could
+    // silently pick different genes for the same goal.)
+    const selected = await selectDnaForGoal(goal, 8);
+    if (selected.length === 0) {
       return NextResponse.json(
-        { error: "הספרייה ריקה — כרה קודם DNA מריפו אליטה בלשונית Genesis" },
+        { error: "The DNA library is empty — first mine DNA from an elite repo in the Genesis tab" },
         { status: 400 }
       );
     }
 
-    const rankedMeta = rankDnaForGoal(
-      goal,
-      metaDna.map((r) => ({ ...r, content: null })), // pre-score מטא-דאטה בלבד — content נטען רק למובילים
-      24
-    );
-    const topIds = rankedMeta.map((r) => r.row.id);
-    const withContent = await db.dnaArtifact.findMany({
-      where: { id: { in: topIds } },
-      select: { id: true, sourceRepo: true, path: true, kind: true, name: true, description: true, content: true },
-    });
-    // שמירה על סדר הדירוג המקורי, ואז דירוג מחדש מלא (כולל content) ל-8 המובילים
-    const contentById = new Map(withContent.map((r) => [r.id, r]));
-    const orderedTop = topIds.map((id) => contentById.get(id)).filter((r): r is (typeof withContent)[number] => !!r);
-
-    const selected = rankDnaForGoal(goal, orderedTop, 8);
     const compiled = await compileMission(goal, context, selected);
 
     const saved = await db.mission.create({
@@ -130,8 +113,8 @@ export async function POST(req: NextRequest) {
       context: context || null,
       status: saved.status,
       report: null,
-      // בעבר חסר בתשובת POST (ה-GET החזיר) — הערך מוכרז בטיפוס הלקוח אבל לא סופק,
-      // וההערה ב-GET מבטיחה "אותה צורה בדיוק". עכשיו אמיתי.
+      // Previously missing from the POST response (the GET returned it) — the value is declared in the
+      // client type but was not provided, and the GET comment promises "exactly the same shape". Now real.
       reportHistory: [],
       autopilot: null,
       autopilotAt: null,
@@ -140,9 +123,9 @@ export async function POST(req: NextRequest) {
       bundle: buildMissionBundle(compiled, goal),
     });
   } catch (e) {
-    // (בעבר: e.message גולמי מ-Prisma/ZAI דלף ללקוח — עכשיו לוג שרת + הודעה גנרית)
+    // (Previously: a raw e.message from Prisma/ZAI leaked to the client — now: server log + generic message)
     console.error("[mission:compile]", e);
-    const msg = e instanceof Error && e.name === "MissionError" ? e.message : "הידור המשימה נכשל";
+    const msg = e instanceof Error && e.name === "MissionError" ? e.message : "Mission compilation failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

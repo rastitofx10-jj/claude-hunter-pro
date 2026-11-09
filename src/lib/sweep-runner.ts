@@ -1,8 +1,8 @@
 // ============================================================
-// מריץ מבצע הסריקה — מחבר את כל השלבים עם התקדמות חיה ב-DB:
-// שאילתות (40%) ← העשרה (52%) ← כרייה (70%) ← להקת פרומפטים (98%) ← הושלם
-// ריצה אחת פעילה בכל רגע. כשל מבצעי לא מפיל את הסריקה כולה.
-// צד שרת בלבד.
+// Sweep operation runner — connects all the stages with live progress in the DB:
+// queries (40%) ← enrichment (52%) ← mining (70%) ← prompt swarm (98%) ← done
+// One active run at any moment. An operational failure doesn't take down the whole sweep.
+// Server-side only.
 // ============================================================
 
 import { db } from "./db";
@@ -20,21 +20,22 @@ import {
 import { runSwarm, SWARM_TRIAGE_COVERAGE, type SwarmResult } from "./intel-swarm";
 import { resolveToken } from "./server-token";
 import { parseAudit } from "./auditor";
+import { writeDnaSnapshot } from "./dna-snapshot";
 import type { NextRequest } from "next/server";
 
 const activeRuns = new Set<number>();
-let startingSweep = false; // נעילת-תחילה: סוגר את חלון המירוץ בין הבדיקה ליצירה (POST כפול = סריקה אחת)
+let startingSweep = false; // start lock: closes the race window between the check and creation (double POST = one sweep)
 
-/** שורת running שלא התעדכנה מעבר לזה = נגמרה (crash/restart) — משחררים אוטומטיק.
- * בעבר: שורת running תקועה חסמה את פתיחת סריקות חדשות לנצח (409 תמידי). */
-const STALE_RUN_MS = 15 * 60_000; // 15 דקות בלי עדכון התקדמות = מת
+/** A running row not updated beyond this = finished (crash/restart) — released automatically.
+ * Before: a stuck running row blocked new sweeps forever (permanent 409). */
+const STALE_RUN_MS = 15 * 60_000; // 15 minutes without a progress update = dead
 
 async function reapStaleRuns(): Promise<void> {
   try {
     const cutoff = new Date(Date.now() - STALE_RUN_MS);
     const dead = await db.sweepRun.updateMany({
       where: { status: "running", updatedAt: { lt: cutoff } },
-      data: { status: "failed", error: "הריצה נקטעה (השרת אותחל) — סימון אוטומטי" },
+      data: { status: "failed", error: "The run was interrupted (the server was restarted) — marked automatically" },
     });
     if (dead.count > 0) console.error(`[sweep] reaped ${dead.count} stale running row(s)`);
   } catch (e) {
@@ -55,16 +56,16 @@ async function updateRun(
   try {
     await db.sweepRun.update({ where: { id }, data });
   } catch {
-    // ריצה נמחקה במהלך פעולה — מפסיקים בשקט
+    // The run was deleted mid-operation — stop silently
   }
 }
 
-/** ליבת הריצה — לא נזרקת ישירות ללקוח; כל שגיאה נשמרת בשורת הריצה */
+/** The run core — not thrown directly to the client; every error is saved on the run row */
 async function executeSweep(runId: number, token: string | null): Promise<void> {
   const startedAt = Date.now();
   activeRuns.add(runId);
   try {
-    // ---------- שלב א׳: שאילתות ----------
+    // ---------- Stage A: queries ----------
     const arsenal = buildQueryArsenal();
     const reports: QueryReport[] = [];
     await updateRun(runId, { phase: "queries", progress: 1 });
@@ -78,15 +79,15 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       });
     });
 
-    // ---------- שלב ב׳: איחוד + העשרה ----------
+    // ---------- Stage B: consolidation + enrichment ----------
     await updateRun(runId, { phase: "enrich", progress: 41 });
     let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits);
     const enriched = await enrichCandidates(candidates, token, 30);
     await updateRun(runId, { phase: "mine", progress: 52 });
 
-    // ---------- שלב ג׳: כריית DNA ----------
+    // ---------- Stage C: DNA mining ----------
     const dnaAddedTotal = { n: 0 };
-    let reposMined = 0; // לפי ההגדרה של הדוח: מאגרים שנוגבו בלי שגיאה
+    let reposMined = 0; // per the report's definition: repos swept without error
     let reposWithFindings = 0;
     let mineErrors = 0;
     const minedReports = await mineTopCandidates(candidates, token, 8, async (done, total, rep) => {
@@ -100,8 +101,8 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       const progress = 52 + Math.round((done / Math.max(1, total)) * 18);
       await updateRun(runId, { progress });
     });
-    // כישלוני כרייה לא נזרקים עוד — בעבר "3 מאגרים נכרו" הסתיר 5 כישלונות
-    // ושורת ה-DB לא רשמה אותם כלל (הסתעפות מהציד החי שכן מדווח).
+    // Mining failures are no longer thrown — before, "3 repos mined" hid 5 failures
+    // and the DB row didn't record them at all (a divergence from the live hunt, which does report them).
     const mineErrorList = minedReports.reports
       .filter((r) => r.error)
       .slice(0, 6)
@@ -112,14 +113,18 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
     ]);
 
-    // ---------- שלב ד׳: להקת הפרומפטים ----------
+    // ---------- Stage D: prompt swarm ----------
     await updateRun(runId, { phase: "swarm", progress: 71 });
+    // The mine phase just completed and the library may have grown — snapshot it automatically
+    // in the background (the manual script required a human to remember). Fire-and-forget:
+    // the sweep's own flow never waits on (or fails from) snapshot I/O.
+    void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
 
     const flat = flattenForSwarm(candidates);
-    // אבולוציית השאילתות זקוקה ל-{q,count,error} אמיתי — בעבר הועברו מחרוזות
-    // בלבד, הפרומפט קיבל "undefined תוצאות" ורשימת השאילתות המתות הייתה ריקה תמיד.
+    // Query evolution needs a real {q,count,error} — before, only strings were passed,
+    // the prompt received "undefined results", and the dead-query list was always empty.
     const executedQueries = reports.map((r) => ({ q: r.q, count: r.count, error: r.error ?? null }));
-    const statsLine = `${arsenal.length} שאילתות · ${codeHits.length} קודים · ${repoHits.length} מאגרים · ${candidates.length} מועמדים · ${enriched} הועשרו`;
+    const statsLine = `${arsenal.length} queries · ${codeHits.length} code hits · ${repoHits.length} repos · ${candidates.length} candidates · ${enriched} enriched`;
 
     let swarm: SwarmResult | null = null;
     try {
@@ -128,7 +133,7 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
         await updateRun(runId, { progress });
       });
     } catch (e) {
-      // להקה שנפלה כולה — הסריקה עדיין שווה עם הממצאים הגולמיים
+      // The whole swarm fell — the sweep is still worthwhile with the raw findings
       await updateRun(runId, {
         briefing: JSON.stringify({
           triage: [],
@@ -137,18 +142,18 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
           attack: { topMoves: [], differentiators: [], immediateActions: [] },
           queryEvolution: { nextQueries: [], blindSpots: [], rationale: "" },
           brief: {
-            headline: "הלהקה נכשלה — ממצאים גולמיים בלבד",
+            headline: "The swarm failed — raw findings only",
             keyIntel: [],
             decisiveMove: "",
-            riskMap: [e instanceof Error ? e.message : "שגיאת AI לא ידועה"],
+            riskMap: [e instanceof Error ? e.message : "Unknown AI error"],
           },
           llmCalls: 0,
-          llmFailures: [e instanceof Error ? e.message : "שגיאת AI לא ידועה"],
+          llmFailures: [e instanceof Error ? e.message : "Unknown AI error"],
         }),
       });
     }
 
-    // ---------- סיכום ----------
+    // ---------- Summary ----------
     const eliteCount = swarm ? swarm.triage.filter((t) => t.verdict === "elite").length : 0;
     const stats = {
       queriesRun: arsenal.length,
@@ -171,8 +176,8 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       elapsedMs: Date.now() - startedAt,
     };
 
-    // מיזוג פסקי הדין של הלהקה אל תוך הממצאים — רק עד כיסוי הטריאז׳ה בפועל.
-    // בעבר נשמרו 60 כשרק 36 קיבלו verdict — השורות 37-60 הציגו "ממתין" לנצח.
+    // Merge the swarm's verdicts into the findings — only up to the actual triage coverage.
+    // Before, 60 were saved when only 36 got a verdict — rows 37-60 showed "pending" forever.
     const triageMap = new Map((swarm?.triage ?? []).map((t) => [t.fullName, t]));
     const profMap = new Map((swarm?.profiles ?? []).map((p) => [p.fullName, p]));
     const findings = flat.slice(0, SWARM_TRIAGE_COVERAGE).map((c) => ({
@@ -197,25 +202,25 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
   } catch (e) {
     await updateRun(runId, {
       status: "failed",
-      error: e instanceof Error ? e.message : "שגיאה לא ידועה",
+      error: e instanceof Error ? e.message : "Unknown error",
     });
   } finally {
     activeRuns.delete(runId);
   }
 }
 
-/** פתיחת ריצה חדשה ברקע — מחזיר מיד את המזהה. מוגן מפני תחרות POST כפול */
+/** Start a new run in the background — returns the id immediately. Protected against double-POST races */
 export async function startSweep(req: NextRequest): Promise<{ id: number }> {
   if (startingSweep || (await hasActiveRun())) {
-    const err = new Error("סריקה כבר רצה כרגע — חכה לסיומה או בדוק את המצב");
+    const err = new Error("A sweep is already running — wait for it to finish or check the status");
     (err as Error & { status?: number }).status = 409;
     throw err;
   }
   startingSweep = true;
   try {
-    // בדיקה חוזרת אחרי תפיסת הנעילה — שני POST מקביליים: רק הראשון עובר
+    // Re-check after acquiring the lock — two parallel POSTs: only the first passes
     if (await hasActiveRun()) {
-      const err = new Error("סריקה כבר רצה כרגע — חכה לסיומה או בדוק את המצב");
+      const err = new Error("A sweep is already running — wait for it to finish or check the status");
       (err as Error & { status?: number }).status = 409;
       throw err;
     }
@@ -223,8 +228,8 @@ export async function startSweep(req: NextRequest): Promise<{ id: number }> {
     const run = await db.sweepRun.create({
       data: { status: "running", phase: "queries", progress: 0 },
     });
-    activeRuns.add(run.id); // נרשם לפני הריצה — hasActiveRun מזהה מיד
-    // ריצה ברקע — בכוונה בלי await
+    activeRuns.add(run.id); // registered before the run — hasActiveRun detects it immediately
+    // Background run — intentionally without await
     void executeSweep(run.id, token);
     return { id: run.id };
   } finally {
@@ -232,7 +237,7 @@ export async function startSweep(req: NextRequest): Promise<{ id: number }> {
   }
 }
 
-/** פירוק שורת ריצה לתצוגה */
+/** Break down a run row for display */
 export function parseSweepRow(row: {
   id: number;
   status: string;

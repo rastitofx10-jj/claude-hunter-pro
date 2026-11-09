@@ -62,7 +62,7 @@ export function AnalyzeSheet({
         token
       );
       if (!res || typeof res.score?.total !== "number" || !res.repo) {
-        throw new Error("התגובה מהשרת לא תקינה — נסה שוב");
+        throw new Error("Invalid server response — try again");
       }
       return res;
     },
@@ -73,10 +73,10 @@ export function AnalyzeSheet({
   return (
     <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="left" className="w-full overflow-y-auto sm:max-w-2xl p-0">
-        <div className="p-6 space-y-5" dir="rtl">
+        <div className="p-6 space-y-5">
           <SheetHeader className="space-y-1 p-0 text-right">
             <SheetTitle className="flex items-center gap-2 text-lg">
-              🔬 ניתוח מעמיק
+              🔬 Deep Analysis
               {target && (
                 <span dir="ltr" className="font-mono text-sm text-muted-foreground">
                   {target.owner}/{target.repo}
@@ -84,7 +84,7 @@ export function AnalyzeSheet({
               )}
             </SheetTitle>
             <SheetDescription>
-              סריקת ראיות שימוש ב-Claude בתשלום, מודלים פרימיום והשקעת טוקנים
+              Scanning for evidence of paid Claude usage, premium models, and token investment
             </SheetDescription>
           </SheetHeader>
 
@@ -95,7 +95,7 @@ export function AnalyzeSheet({
               <Skeleton className="h-40 w-full" />
               <Skeleton className="h-24 w-full" />
               <p className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> סורק את המאגר… (עד ~15 שניות)
+                <Loader2 className="h-4 w-4 animate-spin" /> Scanning the repo… (up to ~15 seconds)
               </p>
             </div>
           )}
@@ -103,12 +103,12 @@ export function AnalyzeSheet({
           {!isLoading && (error || (data && !data.score)) && (
             <Alert variant="destructive">
               <TriangleAlert className="h-4 w-4" />
-              <AlertTitle>הניתוח נכשל</AlertTitle>
+              <AlertTitle>Analysis Failed</AlertTitle>
               <AlertDescription className="space-y-2">
-                <p>{(error as Error)?.message || "התגובה מהשרת לא תקינה — נסה שוב"}</p>
+                <p>{(error as Error)?.message || "Invalid server response — try again"}</p>
                 {!token && (
                   <p className="text-xs">
-                    טיפ: ללא טוקן יש מכסה נמוכה מאוד (60/שעה). הוסף טוקן חינמי מהכפתור למעלה.
+                    Tip: without a token you get a very low quota (60/hour). Add a free token with the button above.
                   </p>
                 )}
                 <a
@@ -117,7 +117,7 @@ export function AnalyzeSheet({
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 text-xs underline"
                 >
-                  פתח ידנית ב-GitHub <ExternalLink className="h-3 w-3" />
+                  Open manually on GitHub <ExternalLink className="h-3 w-3" />
                 </a>
               </AlertDescription>
             </Alert>
@@ -125,24 +125,24 @@ export function AnalyzeSheet({
 
           {data?.score && (
             <div className="space-y-5">
-              {/* verdict — סף המודלים המחמיר */}
+              {/* verdict — the strict model threshold */}
               {data.score.meetsModelThreshold ? (
                 <Alert className="border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
                   <Sparkles className="h-4 w-4" />
-                  <AlertTitle className="text-sm">עומד בסף המודלים (5.5+)</AlertTitle>
+                  <AlertTitle className="text-sm">Meets the model threshold (5.5+)</AlertTitle>
                   <AlertDescription className="text-xs">
-                    זוהו מודלי דגל בגרסה 5.5 ומעלה — הפרויקט עובר את הקריטריון המחמיר.
+                    Flagship models at version 5.5 and above were detected — the project passes the strict criterion.
                   </AlertDescription>
                 </Alert>
               ) : (
                 <Alert variant="destructive">
                   <TriangleAlert className="h-4 w-4" />
-                  <AlertTitle className="text-sm">⛔ לא עומד בסף — נדרש 5.5 ומעלה</AlertTitle>
+                  <AlertTitle className="text-sm">⛔ Below threshold — 5.5+ required</AlertTitle>
                   <AlertDescription className="text-xs">
-                    לא זוהה אף מודל בגרסה 5.5+ (Opus 5.5, Fable, Opus 6+).
+                    No model at version 5.5+ was detected (Opus 5.5, Fable, Opus 6+).
                     {data.models.some((m) => !m.qualifying)
-                      ? " זוהו רק מודלים מתחת לסף (משפחת 4.x ומטה) — הם חסומים לחלוטין ולא תורמים לציון."
-                      : " משפחת 4.x חסומה לחלוטין בכלי זה."}
+                      ? " Only below-threshold models were found (the 4.x family and lower) — they are completely blocked and contribute nothing to the score."
+                      : " The 4.x family is completely blocked in this tool."}
                   </AlertDescription>
                 </Alert>
               )}
@@ -154,11 +154,11 @@ export function AnalyzeSheet({
                   <a href={data.repo.htmlUrl} target="_blank" rel="noreferrer" dir="ltr" className="block truncate text-lg font-bold hover:text-orange-600 hover:underline">
                     {data.repo.fullName}
                   </a>
-                  <p className="text-sm text-muted-foreground" dir="auto">{data.repo.description || "אין תיאור"}</p>
+                  <p className="text-sm text-muted-foreground" dir="auto">{data.repo.description || "No description"}</p>
                   <div className="flex flex-wrap items-center gap-2 pt-0.5">
                     <TierChip tier={data.score.tier} />
                     <Badge variant="outline" className="text-[10px]">
-                      {data.repo.owner?.type === "User" ? "👤 פרטי" : "🏢 ארגון"}
+                      {data.repo.owner?.type === "User" ? "👤 Personal" : "🏢 Organization"}
                     </Badge>
                     {data.repo.license && <Badge variant="outline" className="text-[10px]">📄 {data.repo.license}</Badge>}
                   </div>
@@ -167,12 +167,12 @@ export function AnalyzeSheet({
 
               {/* score breakdown */}
               <div className="rounded-xl border bg-card p-4 space-y-3">
-                <p className="text-sm font-semibold">מדד ההשקעה — פירוט</p>
+                <p className="text-sm font-semibold">Token Investment Score — Breakdown</p>
                 {[
-                  { label: "מודלים פרימיום 5.5+ (Opus 5.5/Fable…)", v: data.score.modelScore, max: 45 },
-                  { label: "ראיות תשלום ו-API", v: data.score.paidScore, max: 30 },
-                  { label: "תנועה ופעילות קהילה", v: data.score.tractionScore, max: 25 },
-                  { label: "אזכורי עלות/טוקנים", v: data.score.usageScore, max: 15 },
+                  { label: "Premium 5.5+ models (Opus 5.5/Fable…)", v: data.score.modelScore, max: 45 },
+                  { label: "Payment & API evidence", v: data.score.paidScore, max: 30 },
+                  { label: "Traction & community activity", v: data.score.tractionScore, max: 25 },
+                  { label: "Cost/token mentions", v: data.score.usageScore, max: 15 },
                 ].map((row) => (
                   <div key={row.label} className="space-y-1">
                     <div className="flex justify-between text-xs">
@@ -187,12 +187,12 @@ export function AnalyzeSheet({
               {/* stats */}
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
                 {[
-                  { icon: <Star className="h-4 w-4 fill-amber-400 text-amber-400" />, v: (data.repo.stars ?? 0).toLocaleString(), l: "כוכבים" },
+                  { icon: <Star className="h-4 w-4 fill-amber-400 text-amber-400" />, v: (data.repo.stars ?? 0).toLocaleString(), l: "Stars" },
                   { icon: <GitFork className="h-4 w-4" />, v: (data.repo.forks ?? 0).toLocaleString(), l: "forks" },
-                  { icon: <Users className="h-4 w-4" />, v: String(data.contributors), l: "תורמים" },
-                  { icon: <HardDrive className="h-4 w-4" />, v: `${Math.round((data.repo.size ?? 0) / 1024)}KB`, l: "גודל" },
-                  { icon: <Eye className="h-4 w-4" />, v: String(data.repo.watchers ?? "?"), l: "צופים" },
-                  { icon: <GitCommitHorizontal className="h-4 w-4" />, v: data.repo.pushedAt ? new Date(data.repo.pushedAt).toLocaleDateString("he-IL") : "?", l: "דחיפה אחרונה" },
+                  { icon: <Users className="h-4 w-4" />, v: String(data.contributors), l: "Contributors" },
+                  { icon: <HardDrive className="h-4 w-4" />, v: `${Math.round((data.repo.size ?? 0) / 1024)}KB`, l: "Size" },
+                  { icon: <Eye className="h-4 w-4" />, v: String(data.repo.watchers ?? "?"), l: "Watchers" },
+                  { icon: <GitCommitHorizontal className="h-4 w-4" />, v: data.repo.pushedAt ? new Date(data.repo.pushedAt).toLocaleDateString("en-US") : "?", l: "Last push" },
                 ].map((s, i) => (
                   <div key={i} className="rounded-lg border bg-muted/40 p-2 text-center">
                     <div className="flex justify-center">{s.icon}</div>
@@ -205,7 +205,7 @@ export function AnalyzeSheet({
               {/* models */}
               {data.models.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-sm font-semibold">🧠 מודלים שזוהו בקוד</p>
+                  <p className="text-sm font-semibold">🧠 Models Detected in Code</p>
                   <div className="space-y-1.5">
                     {data.models.map((m) => (
                       <div
@@ -218,12 +218,12 @@ export function AnalyzeSheet({
                           {m.label}
                         </span>
                         {m.qualifying ? (
-                          <Badge className="bg-orange-100 text-[10px] text-orange-800 hover:bg-orange-100 dark:bg-orange-900 dark:text-orange-200">✅ 5.5+ · משקל {m.weight}</Badge>
+                          <Badge className="bg-orange-100 text-[10px] text-orange-800 hover:bg-orange-100 dark:bg-orange-900 dark:text-orange-200">✅ 5.5+ · weight {m.weight}</Badge>
                         ) : (
-                          <Badge variant="destructive" className="text-[10px]">⛔ חסום (מתחת ל-5.5) · משקל 0</Badge>
+                          <Badge variant="destructive" className="text-[10px]">⛔ Blocked (below 5.5) · weight 0</Badge>
                         )}
-                        {m.hits != null && <Badge variant="outline" className="text-[10px]">{m.hits} קבצים</Badge>}
-                        <span className="text-xs text-muted-foreground">מקורות: {m.sources.join(", ")}</span>
+                        {m.hits != null && <Badge variant="outline" className="text-[10px]">{m.hits} files</Badge>}
+                        <span className="text-xs text-muted-foreground">Sources: {m.sources.join(", ")}</span>
                       </div>
                     ))}
                   </div>
@@ -233,7 +233,7 @@ export function AnalyzeSheet({
               {/* evidence */}
               {data.evidence.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-sm font-semibold">🔎 ראיות שימוש בתשלום</p>
+                  <p className="text-sm font-semibold">🔎 Paid Usage Evidence</p>
                   <div className="space-y-1.5">
                     {data.evidence.map((e, i) => (
                       <div key={i} className="flex items-start gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
@@ -249,7 +249,7 @@ export function AnalyzeSheet({
               {/* insights */}
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
                 <p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
-                  <Lightbulb className="h-4 w-4" /> מה אפשר לקחת מפה לממשק שלנו?
+                  <Lightbulb className="h-4 w-4" /> What can we take from here for our interface?
                 </p>
                 <ul className="mt-2 space-y-1.5">
                   {data.insights.map((ins, i) => (
@@ -261,13 +261,13 @@ export function AnalyzeSheet({
                 </ul>
               </div>
 
-              {/* 🧠 דוח מודיעין AI — סוגר את הלולאה ממציאה להחלטה */}
+              {/* 🧠 AI intelligence report — closes the loop from discovery to decision */}
               <RepoIntelSection analysis={data} />
 
               {/* claude files */}
               {data.claudeFiles.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-sm font-semibold">📁 קבצי Claude ({data.claudeFiles.length})</p>
+                  <p className="text-sm font-semibold">📁 Claude Files ({data.claudeFiles.length})</p>
                   {data.commands.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {data.commands.map((c) => (
@@ -298,7 +298,7 @@ export function AnalyzeSheet({
               {/* languages */}
               {data.languages.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-sm font-semibold">💻 שפות</p>
+                  <p className="text-sm font-semibold">💻 Languages</p>
                   {data.languages.map((l) => (
                     <div key={l.name} className="space-y-1">
                       <div className="flex justify-between text-xs" dir="ltr">
@@ -314,7 +314,7 @@ export function AnalyzeSheet({
               {/* mentions */}
               {(data.mentions.prices.length > 0 || data.mentions.tokens.length > 0) && (
                 <div className="space-y-1.5 rounded-xl border bg-card p-4">
-                  <p className="text-sm font-semibold">💰 אזכורי עלות/טוקנים</p>
+                  <p className="text-sm font-semibold">💰 Cost/Token Mentions</p>
                   <div className="flex flex-wrap gap-1.5" dir="ltr">
                     {[...data.mentions.prices, ...data.mentions.tokens].map((m, i) => (
                       <span key={i} className="rounded bg-muted px-2 py-0.5 font-mono text-xs">{m}</span>
@@ -326,7 +326,7 @@ export function AnalyzeSheet({
               {/* readme */}
               {data.readmeExcerpt && (
                 <div className="space-y-1.5">
-                  <p className="text-sm font-semibold">📖 קטע README</p>
+                  <p className="text-sm font-semibold">📖 README Excerpt</p>
                   <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed" dir="ltr">
                     {data.readmeExcerpt}
                   </pre>
@@ -344,7 +344,7 @@ export function AnalyzeSheet({
               {/* actions */}
               <div className="flex gap-2">
                 <Button onClick={() => onSaveRepo(data)} className="flex-1 gap-1.5">
-                  <BookmarkPlus className="h-4 w-4" /> שמור לרשימה
+                  <BookmarkPlus className="h-4 w-4" /> Save to list
                 </Button>
                 <Button variant="outline" asChild>
                   <a href={data.repo.htmlUrl} target="_blank" rel="noreferrer" className="gap-1.5">

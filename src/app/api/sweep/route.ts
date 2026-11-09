@@ -4,7 +4,7 @@ import { parseSweepRow, startSweep } from "@/lib/sweep-runner";
 
 export const dynamic = "force-dynamic";
 
-/** רשימת הסריקות האחרונות */
+/** List of recent sweeps */
 export async function GET() {
   try {
     const rows = await db.sweepRun.findMany({ orderBy: { id: "desc" }, take: 20 });
@@ -25,19 +25,19 @@ export async function GET() {
     return NextResponse.json({ items, active });
   } catch (e) {
     console.error("sweep GET failed", e);
-    return NextResponse.json({ error: "טעינת הסריקות נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load the sweeps" }, { status: 500 });
   }
 }
 
-/** שגור סריקת עומק חדשה — מחזיר מיד, הריצה ברקע */
+/** Launch a new deep sweep — returns immediately, the run continues in the background */
 export async function POST(req: NextRequest) {
   try {
     const { id } = await startSweep(req);
     return NextResponse.json({ ok: true, id });
   } catch (e) {
     const status = (e as { status?: number }).status ?? 500;
-    if (status < 500) return NextResponse.json({ error: e instanceof Error ? e.message : "שגירת הסריקה נכשלה" }, { status });
+    if (status < 500) return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to launch the sweep" }, { status });
     console.error("sweep POST failed", e);
-    return NextResponse.json({ error: "שגירת הסריקה נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to launch the sweep" }, { status: 500 });
   }
 }

@@ -1,7 +1,7 @@
 // ============================================================
-// מנוע מודיעין AI — Claude Hunter
-// סוגר את הלולאה: מ"מציאת פרויקטים" ל"החלטות מוצר".
-// פועל בצד שרת בלבד (z-ai-web-dev-sdk אסור בצד לקוח).
+// AI intelligence engine — Claude Hunter
+// Closes the loop: from "finding projects" to "product decisions".
+// Runs on the server side only (z-ai-web-dev-sdk is forbidden on the client).
 // ============================================================
 
 import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
@@ -26,20 +26,20 @@ export class IntelError extends Error {
 
 const TIMEOUT_MS = 110_000;
 
-const SYSTEM_ROLE = `אתה אנליסט מודיעין תחרותי בכיר בצוות מוצר שבונה ממשק AI חדשני.
-המשימה שלך: להפוך ראיות גולמיות מ-GitHub לתוכנית קרב מעשית בעברית.
+const SYSTEM_ROLE = `You are a senior competitive-intelligence analyst on a product team building an innovative AI interface.
+Your mission: turn raw GitHub evidence into a practical battle plan, in English.
 
-כללי ברזל:
-1. אתה מנוע JSON — מחזיר JSON תקין ותו לא מעבר. בלי גדרי קוד (code fences), בלי הסברים, בלי מרקדאון.
-2. כל שדה בעברית בלבד (שמות טכניים כמו CLAUDE.md / claude-opus-5-5 נשארים באנגלית בתוך הטקסט).
-3. אסור להמציא עובדות שאינן בראיות. אין ראיה למשהו? כתוב שלא נמצאה ראיה או דלג.
-4. הסף המחמיר שלנו: רק מודלים בגרסה 5.5 ומעלה (Opus 5.5, Fable, Opus 6+) נחשבים פרימיום. משפחת 4.x כלום.
-5. תמיד מנקודת מבט של "מה זה נותן למוצר שלנו" — לא סקירה אקדמית אלא פקודות מבצע.
-6. בתוך ערכי מחרוזת ב-JSON אסורה מרכאה כפולה (") — החלף בגרש (') או במירכאות עבריות (״).`;
+Iron rules:
+1. You are a JSON engine — return valid JSON and nothing beyond it. No code fences, no explanations, no markdown.
+2. Every field in English only (technical names like CLAUDE.md / claude-opus-5-5 stay in English inside the text).
+3. Never invent facts that are not in the evidence. No evidence for something? Write that no evidence was found, or skip it.
+4. Our strict threshold: only models at version 5.5 and above (Opus 5.5, Fable, Opus 6+) count as premium. The 4.x family counts for nothing.
+5. Always from the perspective of "what does this give our product" — not an academic review but operational orders.
+6. Inside JSON string values, double quotes (") are forbidden — replace them with a single quote (').`;
 
 // ---------- utilities ----------
 
-const EFFORTS = new Set(["נמוך", "בינוני", "גבוה", "לא ידוע"]);
+const EFFORTS = new Set(["low", "medium", "high", "unknown"]);
 
 function stealArr(v: unknown, max = 6): StealIdea[] {
   if (!Array.isArray(v)) return [];
@@ -77,8 +77,8 @@ function moveArr(v: unknown, max = 7): TopMove[] {
       const o = (x ?? {}) as Record<string, unknown>;
       const move = str(o.move ?? o.action ?? o.title);
       if (!move) return null;
-      const eff = str(o.effort, "לא ידוע");
-      return { move, why: str(o.why ?? o.reason), effort: (EFFORTS.has(eff) ? eff : "לא ידוע") as TopMove["effort"] };
+      const eff = str(o.effort, "unknown");
+      return { move, why: str(o.why ?? o.reason), effort: (EFFORTS.has(eff) ? eff : "unknown") as TopMove["effort"] };
     })
     .filter((x): x is TopMove => !!x)
     .slice(0, max);
@@ -97,31 +97,31 @@ function patternArr(v: unknown, max = 6): SynthPattern[] {
     .slice(0, max);
 }
 
-const RETRY_HINT = `\n\n⚠️ תיקון חוזר: התגובה הקודמת שלך לא הייתה JSON תקין.
-החזר שוב את אותו הדוח בדיוק, הפעם ב-JSON מהודק:
-- אסורות מרכאות כפולות (") בתוך ערכי מחרוזת — גרש (') או מירכאות עבריות (״) בלבד
-- אסורים פסיקים תלויים לפני } או ]
-- החזר את גוף ה-JSON בלבד, שום טקסט אחר.`;
+const RETRY_HINT = `\n\n⚠️ Repair retry: your previous response was not valid JSON.
+Return the same report again exactly, this time as strict JSON:
+- Double quotes (") are forbidden inside string values — single quotes (') only
+- No trailing commas before } or ]
+- Return the JSON body only, nothing else.`;
 
 async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // התור הגלובלי ב-zai.ts (מקביליות 1 + retry 429) — ראה תיעוד שם
+      // The global queue in zai.ts (concurrency 1 + 429 retry) — see the documentation there
       const { content: raw } = await llmComplete(
         [
           { role: "system", content: SYSTEM_ROLE },
           { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
         ],
-        { timeoutMs: TIMEOUT_MS, timeoutLabel: "קריאת ה-AI", timeoutError: IntelError }
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "AI call", timeoutError: IntelError }
       );
       if (!raw.trim()) {
-        lastErr = new IntelError("ה-AI החזיר תשובה ריקה — נסה שוב");
+        lastErr = new IntelError("The AI returned an empty response — try again");
         continue;
       }
       return extractJson(raw, IntelError);
     } catch (e) {
-      if (isTimeoutError(e)) throw e; // timeout — ניסיון חוזר יבזבז עוד 110 שניות
+      if (isTimeoutError(e)) throw e; // timeout — a retry would waste another 110 seconds
       if (e instanceof IntelError) {
         lastErr = e;
         continue; // parse failure → retry with repair hint
@@ -129,7 +129,7 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
       throw e; // network — no point retrying within same request
     }
   }
-  throw lastErr instanceof Error ? lastErr : new IntelError("יצירת הדוח נכשלה");
+  throw lastErr instanceof Error ? lastErr : new IntelError("Report generation failed");
 }
 
 // ---------- digest builders ----------
@@ -138,23 +138,23 @@ function repoDigest(a: AnalyzeResponse): string {
   const qual = a.models.filter((m) => m.qualifying);
   const blocked = a.models.filter((m) => !m.qualifying);
   return [
-    `מאגר: ${a.repo.fullName}`,
-    `תיאור: ${a.repo.description ?? "אין"}`,
-    `כוכבים: ${a.repo.stars} · forks: ${a.repo.forks} · תורמים: ${a.contributors} · שפה ראשית: ${a.repo.language ?? "?"}`,
-    `ציון השקעה: ${a.score.total}/100 (מודלים ${a.score.modelScore}/45, תשלום ${a.score.paidScore}/30, תנועה ${a.score.tractionScore}/25, שימוש ${a.score.usageScore}/15)`,
-    `עומד בסף 5.5+: ${a.score.meetsModelThreshold ? "כן" : "לא"}`,
-    qual.length ? `מודלים מזכים (5.5+): ${qual.map((m) => `${m.label}${m.hits ? ` [${m.hits} קבצים]` : ""} (מקורות: ${m.sources.join("/")})`).join("; ")}` : "מודלים מזכים: אף אחד",
-    blocked.length ? `מודלים חסומים שנמצאו (4.x ומטה, משקל 0): ${blocked.map((m) => m.label).join(", ")}` : "",
-    a.evidence.length ? `ראיות תשלום: ${a.evidence.map((e) => e.label).join("; ")}` : "ראיות תשלום: אין",
-    a.commands.length ? `פקודות Claude Code: /${a.commands.join(", /")}` : "",
-    a.agents.length ? `סוכני משנה: ${a.agents.join(", ")}` : "",
-    a.mcpServers.length ? `שרתי MCP: ${a.mcpServers.join(", ")}` : "",
-    a.mentions.prices.length ? `אזכורי מחיר ב-README: ${a.mentions.prices.join(", ")}` : "",
-    a.mentions.tokens.length ? `אזכורי טוקנים ב-README: ${a.mentions.tokens.join(", ")}` : "",
-    `הצהרת "נבנה עם Claude": ${a.mentions.builtWithClaude ? "כן" : "לא"}`,
-    a.claudeFiles.length ? `קבצי Claude: ${a.claudeFiles.slice(0, 20).map((f) => f.path).join(", ")}` : "קבצי Claude: אין",
-    a.languages.length ? `שפות: ${a.languages.map((l) => `${l.name} ${l.pct}%`).join(", ")}` : "",
-    `קטע README (עד 1800 תווים):\n${(a.readmeExcerpt ?? "").slice(0, 1800) || "אין"}`,
+    `Repo: ${a.repo.fullName}`,
+    `Description: ${a.repo.description ?? "none"}`,
+    `Stars: ${a.repo.stars} · forks: ${a.repo.forks} · contributors: ${a.contributors} · primary language: ${a.repo.language ?? "?"}`,
+    `Investment score: ${a.score.total}/100 (models ${a.score.modelScore}/45, payment ${a.score.paidScore}/30, traction ${a.score.tractionScore}/25, usage ${a.score.usageScore}/15)`,
+    `Meets the 5.5+ threshold: ${a.score.meetsModelThreshold ? "yes" : "no"}`,
+    qual.length ? `Qualifying models (5.5+): ${qual.map((m) => `${m.label}${m.hits ? ` [${m.hits} files]` : ""} (sources: ${m.sources.join("/")})`).join("; ")}` : "Qualifying models: none",
+    blocked.length ? `Blocked models found (4.x and below, weight 0): ${blocked.map((m) => m.label).join(", ")}` : "",
+    a.evidence.length ? `Payment evidence: ${a.evidence.map((e) => e.label).join("; ")}` : "Payment evidence: none",
+    a.commands.length ? `Claude Code commands: /${a.commands.join(", /")}` : "",
+    a.agents.length ? `Subagents: ${a.agents.join(", ")}` : "",
+    a.mcpServers.length ? `MCP servers: ${a.mcpServers.join(", ")}` : "",
+    a.mentions.prices.length ? `Price mentions in README: ${a.mentions.prices.join(", ")}` : "",
+    a.mentions.tokens.length ? `Token mentions in README: ${a.mentions.tokens.join(", ")}` : "",
+    `"Built with Claude" declaration: ${a.mentions.builtWithClaude ? "yes" : "no"}`,
+    a.claudeFiles.length ? `Claude files: ${a.claudeFiles.slice(0, 20).map((f) => f.path).join(", ")}` : "Claude files: none",
+    a.languages.length ? `Languages: ${a.languages.map((l) => `${l.name} ${l.pct}%`).join(", ")}` : "",
+    `README excerpt (up to 1800 chars):\n${(a.readmeExcerpt ?? "").slice(0, 1800) || "none"}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -162,33 +162,33 @@ function repoDigest(a: AnalyzeResponse): string {
 
 // ---------- public API ----------
 
-/** דוח מודיעין AI למאגר בודד — מתוך תוצאת ניתוח קיימת */
+/** An AI intelligence report for a single repo — from an existing analysis result */
 export async function generateRepoIntel(a: AnalyzeResponse): Promise<RepoIntel> {
-  const prompt = `חבילת ראיות מהסריקה האוטומטית שלנו:
+  const prompt = `An evidence package from our automatic scan:
 
 ${repoDigest(a)}
 
-בנה דוח מודיעין תחרותי למוצר שלנו (ממשק AI). החזר JSON בדיוק במבנה הבא:
+Build a competitive-intelligence report for our product (an AI interface). Return JSON exactly in the following structure:
 {
-  "verdict": "פסק דין אסטרטגי ב-1-2 משפטים: האם ומה כדאי ללמוד מהפרויקט הזה",
-  "moneyVerdict": "שיפוט עומק ההשקעה בטוקנים ובמודלים יקרים, עם נימוק קצר המבוסס אך ורק על הראיות",
-  "moneyLevel": "אחד מדויק: בטוח | סביר | חלש | לא ידוע",
-  "whatTheyBuilt": ["3-5 עובדות על מה הפרויקט עושה, מהראיות בלבד"],
-  "brilliant": ["2-5 דברים גאוניים/מתוחכמים בגישה שלהם, או [] אם אין"],
-  "stealThis": [{"what": "מה לאמץ לממשק שלנו", "why": "למה זה עובד בשבילם", "how": "איך נממש אצלנו בקווים כלליים"}],
-  "doBetter": [{"gap": "חולשה/פער אמיתי שלהם", "ourMove": "איך אנחנו מנצחים שם"}],
-  "actionItems": ["3-6 צעדים קונקרטיים ומדידים לספרינט הקרוב שלנו"],
-  "riskNotes": ["הסתייגויות: מה הראיות לא מוכיחות, סיכוני העתקה, רישיון וכו'"]
+  "verdict": "A strategic verdict in 1-2 sentences: whether, and what, is worth learning from this project",
+  "moneyVerdict": "A judgment of the depth of investment in tokens and expensive models, with a short rationale based solely on the evidence",
+  "moneyLevel": "exactly one: certain | likely | weak | unknown",
+  "whatTheyBuilt": ["3-5 facts about what the project does, from the evidence only"],
+  "brilliant": ["2-5 brilliant/clever things in their approach, or [] if there are none"],
+  "stealThis": [{"what": "what to adopt into our interface", "why": "why it works for them", "how": "how we would implement it on our side, in general terms"}],
+  "doBetter": [{"gap": "a real weakness/gap of theirs", "ourMove": "how we win there"}],
+  "actionItems": ["3-6 concrete, measurable steps for our next sprint"],
+  "riskNotes": ["Caveats: what the evidence does not prove, copy risks, license, etc."]
 }
-אם אין מספיק ראיות לשדה — החזר מערך ריק או "לא ידוע", אל תמציא.`;
+If there is not enough evidence for a field — return an empty array or "unknown"; do not invent.`;
 
   const j = await llmJson(prompt);
-  const level = str(j.moneyLevel, "לא ידוע");
-  const levels = ["בטוח", "סביר", "חלש", "לא ידוע"] as const;
+  const level = str(j.moneyLevel, "unknown");
+  const levels = ["certain", "likely", "weak", "unknown"] as const;
   return {
-    verdict: str(j.verdict, "לא התקבל פסק דין"),
+    verdict: str(j.verdict, "No verdict received"),
     moneyVerdict: str(j.moneyVerdict),
-    moneyLevel: (levels as readonly string[]).includes(level) ? (level as RepoIntel["moneyLevel"]) : "לא ידוע",
+    moneyLevel: (levels as readonly string[]).includes(level) ? (level as RepoIntel["moneyLevel"]) : "unknown",
     whatTheyBuilt: strArr(j.whatTheyBuilt),
     brilliant: strArr(j.brilliant),
     stealThis: stealArr(j.stealThis),
@@ -199,12 +199,12 @@ ${repoDigest(a)}
   };
 }
 
-/** סינתזת קרב — מודיעין חוצת-ריפואים מכל רשימת המעקב */
+/** Battle synthesis — cross-repo intelligence from the entire watchlist */
 export async function generateBattleSynthesis(items: WatchItem[]): Promise<BattleSynthesis> {
   const list = items
     .slice(0, 20)
     .map((w, i) => {
-      const models = (w.models ?? "").split(",").filter(Boolean).join(", ") || "לא זוהו";
+      const models = (w.models ?? "").split(",").filter(Boolean).join(", ") || "none detected";
       let notes = "";
       if (w.evidence) {
         try {
@@ -215,35 +215,35 @@ export async function generateBattleSynthesis(items: WatchItem[]): Promise<Battl
         }
       }
       return [
-        `[${i + 1}] ${w.fullName} — ציון ${w.score}/100, ⭐${w.stars}`,
-        `תיאור: ${w.description ?? "אין"}`,
-        `מודלים שזוהו: ${models}`,
-        notes ? `ראיות: ${notes}` : "",
-        w.notes ? `הערות אנליסט שלנו: ${w.notes.slice(0, 400)}` : "",
+        `[${i + 1}] ${w.fullName} — score ${w.score}/100, ⭐${w.stars}`,
+        `Description: ${w.description ?? "none"}`,
+        `Models detected: ${models}`,
+        notes ? `Evidence: ${notes}` : "",
+        w.notes ? `Our analyst notes: ${w.notes.slice(0, 400)}` : "",
       ]
         .filter(Boolean)
         .join("\n");
     })
     .join("\n---\n");
 
-  const prompt = `רשימת המעקב שלנו (${items.length} מאגרים שזוהו כפרויקטי Claude בתשלום, סף מודלים 5.5+):
+  const prompt = `Our watchlist (${items.length} repos identified as paid-Claude projects, model threshold 5.5+):
 
 ${list}
 
-בצע סינתזת מודיעין חוצת-פרויקטים. אל תסתכל על כל ריפו בנפרד — מצא את החוט המקשר. החזר JSON בדיוק במבנה:
+Perform a cross-project intelligence synthesis. Do not look at each repo separately — find the connecting thread. Return JSON exactly in the structure:
 {
-  "execSummary": "תמונת מצב אסטרטגית ב-3-4 משפטים: לאן השוק של פרויקטי Claude הפרימיום זז לפי הדפוסים כאן",
-  "patterns": [{"pattern": "שם הדפוס", "repos": ["owner/name של הריפואים שבהם הופיע"], "insight": "מה המשמעות למוצר שלנו"}],
-  "stackConsensus": ["טכנולוגיות/גישות שחוזרות על עצמן חוצה פרויקטים"],
-  "topMoves": [{"move": "מהלך מומלץ למוצר שלנו", "why": "על בסיס אילו ראיות", "effort": "נמוך | בינוני | גבוה"}],
-  "differentiators": ["3-5 הזדמנויות להבדלות — מה אף אחד מהם עדיין לא עשה"],
-  "battlePlan": ["תוכנית פעולה מסודרת 4-7 סעיפים, מה ראשון ולמה"]
+  "execSummary": "A strategic situation picture in 3-4 sentences: where the premium Claude-projects market is heading according to the patterns here",
+  "patterns": [{"pattern": "the pattern's name", "repos": ["owner/name of the repos where it appeared"], "insight": "what it means for our product"}],
+  "stackConsensus": ["technologies/approaches that repeat across projects"],
+  "topMoves": [{"move": "a recommended move for our product", "why": "based on which evidence", "effort": "low | medium | high"}],
+  "differentiators": ["3-5 differentiation opportunities — what none of them has done yet"],
+  "battlePlan": ["an ordered action plan of 4-7 items, what comes first and why"]
 }
-אם הרשימה קטנה ולא מספיקה לדפוסים — היה כן לגבי זה ב-execSummary ואל תמציא דפוסים.`;
+If the list is small and insufficient for patterns — be honest about it in execSummary and do not invent patterns.`;
 
   const j = await llmJson(prompt);
   return {
-    execSummary: str(j.execSummary, "לא התקבל סיכום"),
+    execSummary: str(j.execSummary, "No summary received"),
     patterns: patternArr(j.patterns),
     stackConsensus: strArr(j.stackConsensus),
     topMoves: moveArr(j.topMoves),

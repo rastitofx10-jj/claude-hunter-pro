@@ -32,7 +32,7 @@ export function WatchlistPanel({
   const del = useMutation({
     mutationFn: (id: number) => apiFetch(`/api/watchlist?id=${id}`, token, { method: "DELETE" }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["watchlist"] }),
-    onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
   const saveNote = useMutation({
     mutationFn: (w: WatchItem) =>
@@ -47,13 +47,13 @@ export function WatchlistPanel({
       setEditing(null);
       void qc.invalidateQueries({ queryKey: ["watchlist"] });
     },
-    onError: (e: Error) => toast({ title: "שמירת ההערה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Saving the note failed", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> טוען רשימה…
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading watchlist…
       </div>
     );
   }
@@ -63,9 +63,9 @@ export function WatchlistPanel({
     return (
       <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-16 text-center text-muted-foreground">
         <BookmarkX className="h-10 w-10 opacity-40" />
-        <p className="font-medium">הרשימה ריקה</p>
+        <p className="font-medium">Your watchlist is empty</p>
         <p className="max-w-sm text-sm">
-          חפש פרויקטים, נתח אותם ולחץ "שמור" — כך תבנה מאגר מקורות ללמידה והשראה
+          Search for projects, analyze them, and hit "Save" — that's how you build a source library for learning and inspiration
         </p>
       </div>
     );
@@ -73,7 +73,7 @@ export function WatchlistPanel({
 
   return (
     <div className="space-y-4">
-      {/* 🕸️ סינתזת קרב AI — מודיעין חוצת-ריפואים */}
+      {/* 🕸️ AI battle synthesis — cross-repo intelligence */}
       <BattleSynthesis items={items} />
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -89,7 +89,7 @@ export function WatchlistPanel({
                   </a>
                   <Badge variant="outline" className="shrink-0 text-[10px]">⭐ {w.stars.toLocaleString()}</Badge>
                 </div>
-                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground" dir="auto">{w.description || "אין תיאור"}</p>
+                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground" dir="auto">{w.description || "No description"}</p>
               </div>
             </div>
 
@@ -106,14 +106,14 @@ export function WatchlistPanel({
                 <Textarea
                   value={noteDraft}
                   onChange={(e) => setNoteDraft(e.target.value)}
-                  placeholder="מה רוצים לחקור/להעתיק מהפרויקט הזה?"
+                  placeholder="What do you want to explore/copy from this project?"
                   className="min-h-20 text-sm"
                 />
                 <div className="flex gap-2">
                   <Button size="sm" onClick={() => saveNote.mutate(w)} disabled={saveNote.isPending} className="gap-1 text-xs">
-                    {saveNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <NotebookPen className="h-3.5 w-3.5" />} שמור דוח
+                    {saveNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <NotebookPen className="h-3.5 w-3.5" />} Save note
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)} className="text-xs">ביטול</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)} className="text-xs">Cancel</Button>
                 </div>
               </div>
             ) : (
@@ -124,7 +124,7 @@ export function WatchlistPanel({
 
             <div className="flex flex-wrap items-center gap-1.5">
               <Button size="sm" variant="outline" onClick={() => onAnalyze(w.fullName)} className="h-8 gap-1.5 text-xs">
-                <Search className="h-3.5 w-3.5" /> נתח מחדש
+                <Search className="h-3.5 w-3.5" /> Re-analyze
               </Button>
               <Button
                 size="sm"
@@ -135,10 +135,10 @@ export function WatchlistPanel({
                 }}
                 className="h-8 gap-1.5 text-xs"
               >
-                <NotebookPen className="h-3.5 w-3.5" /> {w.notes ? "ערוך דוח" : "הוסף דוח"}
+                <NotebookPen className="h-3.5 w-3.5" /> {w.notes ? "Edit note" : "Add note"}
               </Button>
               <Button size="sm" variant="ghost" asChild className="h-8 w-8 p-0">
-                <a href={w.url} target="_blank" rel="noreferrer" aria-label="פתח ב-GitHub">
+                <a href={w.url} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
                   <ExternalLink className="h-3.5 w-3.5" />
                 </a>
               </Button>
@@ -148,7 +148,7 @@ export function WatchlistPanel({
                 onClick={() => del.mutate(w.id)}
                 disabled={del.isPending}
                 className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
-                aria-label="הסר מהרשימה"
+                aria-label="Remove from watchlist"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>

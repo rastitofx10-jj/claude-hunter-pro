@@ -1,105 +1,88 @@
-# 🎯 Claude Hunter
+# Claude Hunter Pro
 
-מערכת מודיעין תחרותי לאיתור, ניתוח וצייד פרויקטים שנבנו עם מודלי Claude **פרימיום (5.5+)** ב-GitHub — עם מנוע DNA חי שמכרה יכולות אמיתיות מהאליטה העולמית ומשתפר מכל משימה שמבוצעת.
+Competitive-intelligence hunter for the Claude ecosystem. The app scans live GitHub for repositories built with **premium Claude models (5.5+)**, scores each candidate for genuine token-investment signals, mines their capability files (SKILL.md files, slash commands, agent definitions, CLAUDE.md) into a growing **DNA library**, and compiles that DNA into autonomous missions it then executes stage by stage. Every executed mission files a field report that is distilled back into the library, so the system accumulates a capability memory no ordinary Claude session ever has.
 
-> **חוק ברזל:** סף המודלים נעול בקוד — רק 5.5 ומעלה (Opus 5.5, Fable, Opus 6+). משפחת 4.x וכל מה שמתחת לסף חסומים בשרת, במסננים ובציון. לא ניתן לשינוי מה-UI.
+> **Iron rule:** the model threshold is locked in code — only 5.5 and above qualifies (Opus 5.5, Fable, Opus 6+). The entire 4.x family and anything else below the threshold is blocked server-side, in the filters and in scoring. It cannot be changed from the UI. See `src/lib/claude-models.ts` (`MIN_QUALIFYING_VERSION = 5.5`).
 
----
+## Key features
 
-## מה יש בפנים
+- **Premium-model detection (5.5+ gate, 4.x block)** — model identity is extracted from repo text, paths and code hits; qualifying models (>= 5.5) are separated from blocked ones (the whole 4.x family and below). Blocked-only candidates are disqualified, and blocked filter values are rejected server-side before they ever reach GitHub.
+- **Token-investment scoring** — every repo gets a 0-100 Claude-investment score from traction (stars/forks), recency, and qualifying-model evidence, mapped to tiers from `Elite` down to `Seed`. Evidence is split into hard (model string inside a real file) and soft (mention in a description — never promoted to elite).
+- **8-stage live hunt kill chain** — one click runs the full autonomous chain `hunt -> swarm -> attack -> mine -> compile -> execute -> grow -> verdict` (see below). One stage per call, state persisted in the DB, resumable from any point.
+- **Deep sweep** — a full intelligence operation: an auto-generated query arsenal (code + repos + topics, always in sync with the model registry), metadata enrichment, DNA mining, and an 8-prompt intelligence swarm (triage -> profiles -> patterns -> attack plan -> query evolution -> briefing).
+- **DNA library of mined capability genes** — every SKILL.md, command, agent, CLAUDE.md/AGENTS.md and MCP config mined from an elite repo is stored as a portable gene, ready for injection into any project (one-file Markdown export included).
+- **Mission compiler + autopilot** — a natural-language goal becomes a battle plan with phases, a ready-to-paste prompt sequence and an operational SKILL.md, with automatic selection of the most relevant DNA. The autopilot then executes one phase per beat — resumable, guarded against concurrent runs. Field reports are AI-distilled into **new, field-born DNA** that is automatically picked for the next mission.
+- **Genesis chimera synthesis** — merges the best-of-breed genes from several DNA-rich repos into a single chimera persona with principles, work orders and a breakthrough idea.
+- **Adversarial auditor** — the system audits itself: live re-verification of elite evidence against the actual repos (code search + raw grep for ground truth) and an anti-slop prompt that demands exact citations.
+- **Watchlist** — repos saved for tracking with detected models, evidence and notes, auto-saved from hunt verdicts.
+- **Rate-aware GitHub client** — per-request timeouts, rate-limit detection (403/429) with exponential backoff, quota snapshots, and throttled parallel enrichment. The LLM side goes through a global serial queue (concurrency 1) with gentle 429 retry, so concurrent operations never knock each other out.
 
-### סבב 4 — ממשק שנבנה מחדש (App Shell)
-
-- **פגז ניווט** צדדי עם גלילת מובייל, כותרת דביקה (מכסה חיה + סף 5.5+) ופוטר דביק
-- **בית (Overview)** — לוח מחוונים חי: ספריית DNA, משימות, צידים, מכסת GitHub, פעולות מהירות וזרם פעילות
-- **Command Palette‏ (Ctrl+K)** — ניווט, מתכוני חיפוש, ניתוח מהיר ומצב תצוגה; עברית ואנגלית
-- **מצב כהה/בהיר** — מתג אמיתי (next-themes); תיעוד הבטחה שהייתה קיימת רק על הנייר
-- **חדר מלחמה לציד החי** — מסלול 8-שלבים אופקי עם מצבים חיים, שושלת דורות ומסקנת מערכה
-- **היסטוריית דיווחים** במשימות מוצגת סוף סוף (הייתה נתון מת)
-- ראה את `reports/evolution/AUDIT-ROUND4.md` לרשימת 21 התיקונים ההנדסיים, לראיות האימות ולדוח הביקורת המלא
-- **סבב 5 (קיצוני)** — תור LLM גלובלי (מקביליות 1 + retry 429: כימרה בזמן סריקה כבר לא מפילה כלום), העשרת מטא-דאטה ב-GraphQL אחת במקום 25-30 קריאות REST, כיסוי קציר ×2.2 (6 שאילתות מהרישום), דוח קציר כן (כישלונות נראים במקום להיעלם), role:"system" אמיתי בכל 8 אתרי ה-AI, ו-58/58 בדיקות. ראה `reports/evolution/AUDIT-ROUND5.md`
-- **סבב 6 (העמוק ביותר)** — ארבעה מבצעי ביקורת מקבילים (85 ממצאים, ~70 תוקנו): לופ הניסיון-החוזר האינסופי של ציד כושל מת + המצב הכושל נלווה לתשובה (409), ציד ריק לא מייצר עוד משימה מאוויר, תקציב שאילתות מודע-קטגוריות (ארסנל מלא 26/26 בכל דור), חישוב מחדש אמיתי של ציונים אחרי העשרה, שגיאת API כבר לא נספרת כהפרכה, קצירת stuck-running בביקורות, captureTokenFrom חי (השוואה מול ה-DB), PAT גולמי ירד מהלקוח לסנטינל, שמירת דיווח אטומית + CAS נגד lost-update, DELETE מדלג DNA יתום, אלידוטנטיות compile/grow, כוכבים אמיתיים בחיפוש קוד (GraphQL), paidScore מתפצל לראיות תשלום בלבד, היסטוריה חכמה, איחוד STATUS_RANK, אינדקסים על סטטוס — 73/73 בדיקות + E2E חי עם הזרקת כשל. ראה `reports/evolution/AUDIT-ROUND6.md`
-
-| מודול | מה זה עושה |
-|---|---|
-| **חיפוש** | חיפוש repos + code ב-GitHub עם ניקוד Claude-Investment (0-100, טירות אליטה→נבט), זיהוי מודלים מהטקסט/נתיבים, וחסימת שרת למסנני 4.x |
-| **ניתוח עומק** | ניתוח ריפו בודד: עץ קבצים, קבצי `.claude/`, README, contributors, שפות, אזכורי מחירים/טוקנים → ציון השקעה מנומק |
-| **סריקת עומק (Deep Sweep)** | ארסנל שאילתות אוטומטי מרישום המודלים (קוד + repos + topics + market), העשרה, כרייה, ו-8 פרומפטים של להקת מודיעין (טריאז׳ה → פרופילים → דפוסים → תוכנית תקיפה → אבולוציית שאילתות → תדריך) |
-| **ביקורת אדברסרית** | המערכת בודקת את עצמה: אימות חי של ראיות elite מול המאגרים עצמם (code search + grep גולמי לקרקע-אמת), ופרומפט anti-slop שמחייב ציטוט מדויק |
-| **Genesis** | כריית DNA: SKILL.md, פקודות, סוכנים ו-CLAUDE.md מריפואי אליטה → ספריית יכולות ניידת; מיזוג כימרה (best-of-breed) + פקודות עבודה מוכנות |
-| **Mission Control** | מטרה בשפה טבעית → תוכנית קרב + רצף פרומפטים + SKILL.md, עם בחירת DNA אוטומטית; טייס אוטומטי שלב-אחר-שלב (resumable, נעול מפני תחרות); דיווח שדה → זיקוק AI → **לידת DNA חדש** שנבחר כבר במשימה הבאה |
-| **⚔️ ציד חי (Live Hunt)** | שרשרת הרג אוטונומית מלאה בלחיצה אחת: GitHub חי ← להקת פרומפטים ← כריית DNA ← הידור משימה מהגנים החדשים ← ביצוע אוטונומי ← זיקוק שדה ← מסקנת מערכה עם ראיות. שלב אחד לכל פעימה, מצב נשמר ב-DB, resumable מכל נקודה |
-
-## ⚔️ ציד חי — שרשרת ההרג האוטונומית
+## The live hunt kill chain
 
 ```
-hunt      26 שאילתות GitHub חיות עם הטוקן השמור → מועמדים מדורגים (סף 5.5+ נאכף בקוד)
-swarm     טריאז׳ה LLM ל-12 המובילים + פרופילי השקעה לאליטה
-attack    דפוסי שוק + תוכנית תקיפה + אבולוציית שאילתות + תדריך מנהלים
-mine      כריית DNA חיה מ-3 המטרות המובילות → גנים חדשים בספרייה
-compile   גזירת מטרה אוטומטית מתוכנית התקיפה → הידור משימה מהספרייה המוגדלת
-execute   טייס אוטומטי — שלב משימה אחד לכל פעימה, עד סיום כולם
-grow      זיקוק שדה ב-AI → לידת גן חדש (field:livehunt-<id>)
-verdict   מסקנת מערכה: הצמיחה מוכחת במספרים + ראיות מלאות לכל שלב
+hunt      26 live GitHub queries with the stored token -> ranked candidates (5.5+ threshold enforced in code)
+swarm     LLM triage of the top 12 candidates + investment profiles for the elites
+attack    market patterns + attack plan + query evolution + executive briefing
+mine      live DNA mining from the top targets -> new genes in the library
+compile   goal auto-derived from the attack plan -> mission compiled from the enlarged library
+execute   autopilot — one mission phase per beat until all phases complete
+grow      AI field refinement -> a new gene is born (field:livehunt-<id>)
+verdict   campaign verdict: growth proven in numbers + full per-stage evidence
 ```
 
-ריצה מאומתת אנד-טו-אנד (ציד #1): 26 שאילתות · 1,563 מועמדים (974 ראיה קשה) · 12 אליטה · 9 גנים נכרו
-· משימה #5 הודרה ובוצעה 4/4 שלבים · 14 קריאות LLM · 10 גנים נוספו (94→104) · 7:20 דקות.
+Generation 2+ hunts seed the previous hunt's evolved queries (up to 10) on top of the 26-query static arsenal, so every generation hunts beyond the last one's knowledge.
 
-## לולאת האבולוציה
+## Tech stack
 
-```
-דיווח שדה ──► זיקוק AI ללקחים ──► DNA חדש נולד (field:mission-N)
-     ▲                                      │
-     │                                      ▼
-משימה נשלחת לשדה ◄── הידור: דירוג DNA אוטומטי ◄── הספרייה חכמה יותר
-```
+- **Next.js 16** (App Router) + **React 19** + TypeScript 5
+- **Prisma + SQLite** — models: `Mission`, `DnaArtifact`, `SweepRun`, `LiveHunt`, `Chimera`, `SavedRepo`, `SearchHistory`, `Setting`
+- **z-ai-web-dev-sdk** — server-side-only LLM layer (JSON engine with a repair chain; global serial queue, concurrency 1, 429 retry)
+- **GitHub REST** — rate-aware client (timeouts, backoff, quota tracking, throttled parallel enrichment)
+- **Tailwind CSS 4 + shadcn/ui** — full RTL layout, light/dark theming
+- **TanStack Query + zustand** — server state and local UI state
 
-כל משימה שמבוצעת מזינה את הספרייה — זיכרון מצטבר שאף סשן Claude רגיל אין לו.
-
-## סטאק
-
-- **Next.js 16** (App Router) + TypeScript 5
-- **Prisma + SQLite** — Mission, DnaArtifact, SweepRun, LiveHunt, Chimera, SavedRepo, SearchHistory
-- **Tailwind CSS 4 + shadcn/ui** — RTL מלא, כהה/בהיר
-- **z-ai-web-dev-sdk** — שכבת LLM בצד שרת בלבד (מנוע JSON עם שרשרת תיקון 4-שלבית + timeout ללא retry)
-- **GitHub REST** — קצב מבוקש למכסות, backoff אקספוננציאלי, העשרה במקביל מרוסן
-
-## הרצה
+## Setup
 
 ```bash
 bun install
-# משתני סביבה: DATABASE_URL (SQLite) ב-.env — הנתיב יחסי לסכימה (prisma/), ראה הערה ב-.env.example
+# Environment: DATABASE_URL (SQLite) in .env — the file: path is resolved relative to
+# the schema directory (prisma/), see .env.example for the exact note
 bunx prisma db push
 bun run dev
-# אימות מלא: build אמיתי (בלי ignoreBuildErrors) + 52 בדיקות unit/API:
-bun run typecheck && bun run lint && bun run verify
 ```
 
-פתח את האפליקציה, הדבק Personal Access Token של GitHub בכרטיס בראש העמוד — הוא נבדק מול GitHub, נשמר בשרת (SQLite) ובדפדפן, ומוצג ממוסכם בלבד. שים לב: השמירה בשרת היא טקסט גלמי בטבלת Setting — המערכת מיועדת לריצה מקומית של משתמש אחד. אחר כך כל היכולות נפתחות: חיפוש מורחב, כרייה, סריקות עומק.
+**GitHub token (optional but recommended):** either set `GITHUB_TOKEN` in `.env`, or paste a Personal Access Token into the token card at the top of the app — it is validated against GitHub, stored server-side (SQLite `Setting` table) and in the browser, and only ever displayed masked. Note: server-side storage is raw text in the `Setting` table; this tool is designed for local, single-user use. With a token stored, all capabilities open up: extended search, mining, deep sweeps and live hunts.
 
-## מפת API
+**DNA restore:** if the database was wiped (e.g. an environment recycle), reseed it from the committed snapshot — idempotent, and the PAT is never in the snapshot:
 
-| נתיב | פעולה |
+```bash
+node scripts/dna-restore.mjs
+```
+
+## Scripts
+
+| Command | What it does |
 |---|---|
-| `POST /api/search` | חיפוש repos/code עם מסננים + חסימת 4.x בשרת |
-| `GET /api/analyze?owner&repo` | ניתוח עומק מלא של ריפו |
-| `GET/POST /api/sweep` · `GET/DELETE /api/sweep/[id]` · `POST /api/sweep/[id]/audit` | סריקות עומק + ביקורת אדברסרית |
-| `GET /api/dna-library` (`?full=1`, `?repo=`) · `GET /api/dna-library/[id]` | ספריית ה-DNA (מצב קל = substr ב-SQL) |
-| `POST /api/genesis/mine` · `POST /api/genesis/synthesize` · `GET /api/genesis/chimeras` | כרייה, כימרה, היסטוריה |
-| `GET/POST /api/mission` · `GET/PATCH/DELETE /api/mission/[id]` · `POST /api/mission/[id]/autopilot[/step]` · `POST /api/mission/report` | Mission Control מלא |
-| `GET/POST /api/live-hunt` | ציד חי: `start` / `next` (שלב אחד לקריאה) / `retry` · `GET ?id=N` למצב מלא |
-| `GET/DELETE /api/settings/token` | ניהול טוקן (מוסכם) |
-| `GET /api/export/pack` | קודקס ה-DNA — Markdown אחד להזרקה בכל פרויקט |
+| `bun run dev` | Dev server on port 3000 (output tee'd to `dev.log`) |
+| `bun run build` | Production build (standalone output) |
+| `bun run lint` | ESLint over the repo |
+| `bun run typecheck` | `tsc --noEmit` |
+| `bun run db:push` | `prisma db push --accept-data-loss` |
 
-## ארכיטקטורת הגנה
+Highlights from `scripts/` (all against the dev server on :3000):
 
-- **חסימת סף בשרת** — `isBlockedModelString` זורק מסנן 4.x לפני שהוא מגיע ל-GitHub
-- **ראיות מופרדות** — `contentEvidence` (מחרוזת מודל בתוך קובץ אמיתי = hard) מול `textEvidence` (אזכור בתיאור = soft שלא מקודם ל-elite)
-- **נעילות תחרות** — autopilot נעול פר-משימה, פתיחת סריקה נעולה מפני POST כפול
-- **ללא TOCTOU** — update/delete ישירים עם P2025 → 404
-- **טוקן לעולם לא נכנס ל-git** — `db/` ו-`*.db` מנוטרלים ב-.gitignore
+- `node scripts/hunt-live.mjs <phase>` — live population run: `token` (store a PAT server-side), `hunt` (start/resume a live hunt to done), `harvest` (autonomous elite-repo harvest), `sweep` (full deep sweep, polled to done), `status` (DB summary)
+- `node scripts/dna-snapshot.mjs` — export all non-secret hunter tables to `reports/state/dna-snapshot.json`
+- `node scripts/dna-restore.mjs` — reseed the DB from that snapshot after an environment recycle
+- `bun scripts/e2e-round6.ts <phase>` — live end-to-end verification: `search`, `hunt`, `report-cas` (lost-update test), `fail-inject`, `sweep`, `audit`, `assert`
+- `node scripts/run-gen7.mjs` — start a live hunt and pump stages until done
+- `node scripts/chimera-live.mjs [topN]` — synthesize a chimera from the top DNA-rich repos
+- `node scripts/audit-dna-quality.mjs` — DNA library quality audit (size distribution, misclassifications, duplicates, field DNA)
+
+## Documentation
+
+The full engineering history lives in [`reports/evolution/`](./reports/evolution/) — audit rounds 2-7, hunt-generation logs (gen 1-6) and chimera breakdowns, each with verification evidence. These are historical documents, originally written in Hebrew, and are kept as-is for provenance.
 
 ---
 
-כלי הצידה הזה הוא הציוד — לא מחליט ההחלטה.
+This hunting tool is the equipment — it is not the one making the decisions.

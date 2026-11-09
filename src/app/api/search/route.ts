@@ -7,9 +7,9 @@ import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
 
-/** אינטרזו ל-URL — בעבר הוכנס גולמי מהלקוח (אינדקס עלול להזריק qualifiers) */
+/** Input sanitization for the URL — previously inserted raw from the client (the index could inject qualifiers) */
 const SORT_ENUM = new Set(["stars", "forks", "updated", "best"]);
-const LANG_RE = /^[\w.+#-]{1,24}$/; // שמות שפות של GitHub: C++, C#, Objective-C
+const LANG_RE = /^[\w.+#-]{1,24}$/; // GitHub language names: C++, C#, Objective-C
 
 interface GhRepoItem {
   id: number;
@@ -74,17 +74,17 @@ export async function POST(req: NextRequest) {
   try {
     body = (await req.json()) as SearchBody;
   } catch {
-    return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
   const mode = body.mode === "code" ? "code" : "repos";
   const perPage = Math.min(Math.max(body.perPage ?? 24, 6), 60);
   const page = Math.max(body.page ?? 1, 1);
 
-  // ⛔ חסימת שרת מחמירה: מסנן מודל מתחת לסף (4.x ומטה) נדחה מיד
+  // ⛔ Strict server-side blocking: a model filter below the threshold (4.x and below) is rejected immediately
   if (body.model?.trim() && isBlockedModelString(body.model.trim())) {
     return NextResponse.json(
-      { error: `⛔ מודל חסום: ${THRESHOLD_RULE_TEXT}` },
+      { error: `⛔ Blocked model: ${THRESHOLD_RULE_TEXT}` },
       { status: 400 }
     );
   }
@@ -92,13 +92,13 @@ export async function POST(req: NextRequest) {
   const parts: string[] = [];
   const q = (body.query ?? "").trim();
   if (q) parts.push(q);
-  // topic: אינו נתמך בחיפוש קוד (422 מובטח) — בעבר הוזרק בשני המצבים
-  // ושבר את ה-UX של שילוב נפוץ: נושא + מצב קוד.
+  // topic: not supported in code search (guaranteed 422) — previously injected in both modes
+  // and it broke the UX of a common combo: topic + code mode.
   if (mode === "repos") {
     for (const t of body.topics ?? []) if (t.trim()) parts.push(`topic:${t.trim()}`);
   }
   if (body.model?.trim()) parts.push(`"${body.model.trim()}"`);
-  // שפה: ולידציה + הרכבה בטוחה — בעבר טקסט חופשי מהלקוח הוזרק ישר ל-URL
+  // Language: validation + safe assembly — previously free text from the client was injected straight into the URL
   const lang = body.language?.trim() ?? "";
   if (lang && LANG_RE.test(lang)) parts.push(`language:${lang}`);
 
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     if (body.hasClaudeMd) parts.push("filename:CLAUDE.md");
     if (!q && !body.model?.trim() && !body.hasClaudeMd) {
       return NextResponse.json(
-        { error: "בחיפוש קוד נדרש טקסט, מודל, או סימון CLAUDE.md" },
+        { error: "Code search requires text, a model, or the CLAUDE.md flag" },
         { status: 400 }
       );
     }
@@ -121,10 +121,10 @@ export async function POST(req: NextRequest) {
 
   const querySent = parts.join(" ").trim();
   if (!querySent) {
-    return NextResponse.json({ error: "נדרש תנאי חיפוש אחד לפחות" }, { status: 400 });
+    return NextResponse.json({ error: "At least one search condition is required" }, { status: 400 });
   }
 
-  // ולידציה במקום אמון עץ-בעץ — בעבר sort גולמי מהלקוח הוזרק ל-URL
+  // Validation instead of blind trust — previously a raw sort from the client was injected into the URL
   const sort = body.sort && SORT_ENUM.has(body.sort) ? body.sort : "best";
   const sortQ = mode === "repos" && sort !== "best" ? `&sort=${encodeURIComponent(sort)}&order=desc` : "";
 
@@ -134,9 +134,9 @@ export async function POST(req: NextRequest) {
         `/search/repositories?q=${encodeURIComponent(querySent)}&per_page=${perPage}&page=${page}${sortQ}`,
         token
       );
-      // הטוקן מהכותרת עבר אימות מול GitHub — נשמר לשימוש השרת
+      // The token from the header was validated against GitHub — saved for server use
       await captureTokenFrom(req);
-      // ⛔ חוק החסימה המלאה: מאגרים שמציגים *רק* מודלי 4.x ומטה — מוסתרים לחלוטין מהתוצאות
+      // ⛔ Full blocking rule: repos showing *only* 4.x and below models — completely hidden from the results
       let items: ScoredRepo[] = [];
       let blockedHidden = 0;
       for (const r of data.items) {
@@ -151,15 +151,15 @@ export async function POST(req: NextRequest) {
       if (body.ownerType && body.ownerType !== "any") {
         items = items.filter((i) => i.owner?.type === (body.ownerType === "user" ? "User" : "Organization"));
       }
-      // היסטוריה חכמה: דף חדש באותו חיפוש לא יוצר שורה חדשה — בעבר דפדוף בין
-      // 5 עמודים יצר 5 שורות זהות וההיסטוריה לא התכנסה אף פעם.
+      // Smart history: a new page in the same search does not create a new row — previously paging through
+      // 5 pages created 5 identical rows and the history never converged.
       const filtersKey = JSON.stringify({ ...body, page: undefined });
       try {
         const last = await db.searchHistory.findFirst({ orderBy: { id: "desc" }, select: { mode: true, query: true, filters: true } });
         const lastKey = last ? JSON.stringify({
           mode: last.mode,
           query: last.query,
-          // שורות ישנות נכתבו עם page בתוך ה-filters — מנרמל לפני ההשוואה
+          // Old rows were written with page inside the filters — normalize before comparing
           filters: last.filters ? JSON.stringify({ ...JSON.parse(last.filters), page: undefined }) : "",
         }) : "";
         const thisKey = JSON.stringify({ mode, query: querySent, filters: filtersKey });
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest) {
     // ---- code mode ----
     if (!token) {
       return NextResponse.json(
-        { error: "חיפוש קוד ב-GitHub דורש Personal Access Token. הוסף אותו בהגדרות (חינם, 30 שניות)." },
+        { error: "GitHub code search requires a Personal Access Token. Add one in Settings (free, 30 seconds)." },
         { status: 401 }
       );
     }
@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
       `/search/code?q=${encodeURIComponent(querySent)}&per_page=100&page=1`,
       token
     );
-    // הטוקן מהכותרת עבר אימות מול GitHub — נשמר לשימוש השרת
+    // The token from the header was validated against GitHub — saved for server use
     await captureTokenFrom(req);
 
     const groups = new Map<string, { repo: RepoCore; matches: CodeMatch[] }>();
@@ -207,10 +207,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // העשרת כוכבים לפי חיפוש-קוד: אובייקט ה-repository בתשובת REST אינו כולל
-    // stargazers_count ("minimal") — בעבר כל כרטיס מצב קוד הציג ⭐0, מדד ההשקעה
-    // קיבל 0 עלות-משיכה ומיון כוכבים היה חסר משמעות. עכשיו: 1-2 קריאות GraphQL
-    // (עלות 1 נקודה, אותו מנגנון שהוכח ב-harvester) מחזירות כוכבים אמיתיים.
+    // Star enrichment for code search: the repository object in the REST response does not include
+    // stargazers_count ("minimal") — previously every code-mode card showed ⭐0, the token investment score
+    // got 0 pull-cost and star sorting was meaningless. Now: 1-2 GraphQL calls
+    // (cost of 1 point, the same mechanism proven in the harvester) return real stars.
     const needStars = Array.from(groups.values()).filter((g) => (g.repo.stars ?? 0) === 0).map((g) => g.repo.fullName);
     if (needStars.length > 0) {
       const metaMap = await batchRepoMeta(needStars, token);
@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ⛔ חוק החסימה המלאה גם במצב קוד: מאגרים שמציגים רק 4.x — מוסתרים
+    // ⛔ Full blocking rule in code mode too: repos showing only 4.x — hidden
     let blockedHidden = 0;
     let items: ScoredRepo[] = [];
     for (const { repo, matches } of groups.values()) {
@@ -241,7 +241,7 @@ export async function POST(req: NextRequest) {
     else items.sort((a, b) => b.score - a.score);
     items = items.slice(0, 30);
 
-    // היסטוריה חכמה (זהה למצב מאגרים) — דף/ריצה חוזרת לא מכפילה שורות
+    // Smart history (same as repos mode) — a repeated page/run does not duplicate rows
     const codeFiltersKey = JSON.stringify({ ...body, page: undefined });
     try {
       const last = await db.searchHistory.findFirst({ orderBy: { id: "desc" }, select: { mode: true, query: true, filters: true } });
@@ -263,17 +263,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       mode,
       totalMatches: data.total_count,
-      // מה שהמשתמש באמת קיבל — בעבר נספרו גם מאגרים חסומים/מסוננים שהוסתרו ממנו
+      // What the user actually received — previously blocked/filtered repos hidden from them were also counted
       repoCount: items.length,
       items,
-      // ⚠️ code mode = עמוד אחד תמיד: GitHub code search מוגבל ל-100 תוצאות
-      // לשאילתה ללא עימוד אמיתי — ה-UI לא מציג עימוד במצב קוד כשהשדה הזה false
-      // (בעבר: עימוד פיקטיבי — עמודים 2-3 החזירו בדיוק את אותם מאגרים)
+      // ⚠️ code mode = always a single page: GitHub code search is limited to 100 results
+      // per query with no real pagination — the UI hides pagination in code mode when this field is false
+      // (previously: fake pagination — pages 2-3 returned exactly the same repos)
       canPaginate: false,
       incompleteResults: !!data.incomplete_results,
       note: data.incomplete_results
-        ? "אינדקס החיפוש חלקי לשאילתה זו (incomplete_results) — התוצאות עשויות להיות לא מלאות"
-        : "חיפוש קוד מחזיר עד 100 קבצים לשאילתה; התוצאות מקובצות לפי מאגר ומדורגות לפי מדד ההשקעה",
+        ? "The search index is partial for this query (incomplete_results) — results may be incomplete"
+        : "Code search returns up to 100 files per query; results are grouped by repo and ranked by the token investment score",
       querySent,
       blockedHidden,
     });
@@ -282,6 +282,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: e.message }, { status: e.status === 422 ? 400 : e.status });
     }
     console.error("search failed", e);
-    return NextResponse.json({ error: "החיפוש נכשל. נסה שוב." }, { status: 500 });
+    return NextResponse.json({ error: "Search failed. Try again." }, { status: 500 });
   }
 }

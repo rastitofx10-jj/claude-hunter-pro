@@ -1,5 +1,10 @@
 # Evolution Revolution — evidence log
 
+> **Note:** These are historical evolution reports (rounds 2-7) kept for provenance.
+> They were originally written in Hebrew and are preserved as-is below this header;
+> the linked audit, hunt and chimera documents remain in Hebrew.
+> For the current state of the project, see the root [README](../../README.md).
+
 Two fully autonomous generations of the live-hunt kill chain (hunt→swarm→attack→mine→compile→execute→grow→verdict).
 
 - DNA library: 94 → **104** (mined from 25+ elite sources + field-born)

@@ -34,18 +34,48 @@ export function ghHeaders(
   return h;
 }
 
+// ---------- quota-header awareness ----------
+
+/** Last quota snapshot seen on ANY GitHub response (module-level — process-wide).
+ *  GitHub stamps x-ratelimit-* on every reply, including the 403/429 that says
+ *  we ran out. Remembering them lets callers wait until the REAL window reset
+ *  instead of sleeping blind (the old fixed 8/16/32s ladder burned retries when
+ *  the reset was minutes away) and pace themselves before the cliff, not after. */
+const lastQuota = { remaining: null as number | null, reset: null as number | null, resource: null as string | null };
+
+export function getQuotaState() {
+  return { ...lastQuota };
+}
+
+/** Reads the quota headers into lastQuota. Must be called immediately after fetch
+ *  resolves — BEFORE res.json()/res.text() consumes the body — so the timing of the
+ *  read is obvious and can never drift behind a body-parse refactor. */
+function readQuotaHeaders(res: Response): void {
+  const remaining = parseInt(res.headers.get("x-ratelimit-remaining") ?? "", 10);
+  const reset = parseInt(res.headers.get("x-ratelimit-reset") ?? "", 10);
+  const resource = res.headers.get("x-ratelimit-resource");
+  // parseInt on a missing/garbage header yields NaN — only a parseable value may
+  // overwrite the known state, otherwise one bad reply would erase good intel.
+  if (Number.isFinite(remaining)) lastQuota.remaining = remaining;
+  if (Number.isFinite(reset)) lastQuota.reset = reset;
+  if (resource) lastQuota.resource = resource;
+}
+
 export async function ghFetch<T = unknown>(
   path: string,
   token?: string | null,
   accept?: string
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${GH_API}${path}`;
-  // timeout נגד חיבורים תלויים — בעבר: sweep/audit נתקעו לנצח על TCP מת
+  // timeout against hanging connections — previously: sweep/audit hung forever on a dead TCP
   const res = await fetch(url, {
     headers: ghHeaders(token, accept),
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
+  // Quota snapshot before anything else — even a 403 carries the headers that
+  // tell ghSearchWithBackoff how long the window REALLY takes to reset.
+  readQuotaHeaders(res);
   if (!res.ok) {
     let msg = `GitHub API error ${res.status}`;
     try {
@@ -55,15 +85,15 @@ export async function ghFetch<T = unknown>(
       // keep default message
     }
     // Rate-limit detection happens HERE (source of truth) and is exposed as a
-    // flag — the message shown to the user stays Hebrew, the machine-readable
-    // signal never depends on message language again.
+    // flag — the message shown to the user stays freely editable text, while
+    // the machine-readable signal never depends on message language again.
     const isRateLimit =
-      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection|מכסת/i.test(msg);
+      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection/i.test(msg);
     if (isRateLimit) {
-      msg = "מכסת GitHub API נגמרה (rate limit). הוסף Personal Access Token בהגדרות כדי להמשיך.";
+      msg = "GitHub API rate limit exhausted. Add a Personal Access Token in settings to continue.";
     }
     if (res.status === 401) {
-      msg = "הטוקן שסיפקת לא תקין או שפג תוקפו.";
+      msg = "The token you provided is invalid or has expired.";
     }
     throw new GhError(res.status, msg, isRateLimit);
   }
@@ -71,8 +101,8 @@ export async function ghFetch<T = unknown>(
 }
 
 /**
- * משיכת תוכן גלמי (raw) — קבצים, README, SKILL.md וכו'.
- * שונה מ-ghFetch: מחזיר טקסט ולא JSON.
+ * Fetch raw content — files, README, SKILL.md, etc.
+ * Different from ghFetch: returns text, not JSON.
  */
 export async function ghFetchRaw(
   path: string,
@@ -85,6 +115,8 @@ export async function ghFetchRaw(
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
+  // Same quota snapshot as ghFetch — raw downloads drain the same core pool
+  readQuotaHeaders(res);
   if (!res.ok) {
     let msg = `GitHub API error ${res.status}`;
     try {
@@ -94,12 +126,12 @@ export async function ghFetchRaw(
       // keep default message
     }
     const isRateLimit =
-      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection|מכסת/i.test(msg);
+      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection/i.test(msg);
     if (isRateLimit) {
-      msg = "מכסת GitHub API נגמרה (rate limit). הוסף Personal Access Token בהגדרות כדי להמשיך.";
+      msg = "GitHub API rate limit exhausted. Add a Personal Access Token in settings to continue.";
     }
     if (res.status === 401) {
-      msg = "הטוקן שסיפקת לא תקין או שפג תוקפו.";
+      msg = "The token you provided is invalid or has expired.";
     }
     throw new GhError(res.status, msg, isRateLimit);
   }
@@ -109,8 +141,9 @@ export async function ghFetchRaw(
 // ---------- input parsing ----------
 
 /**
- * נתיב קובץ יכולת (SKILL.md / .claude/commands / agents) — מקור יחיד.
- * בעבר הוגדר זהה-מילה-במילה בשני קבצים (deep-sweep + harvester) והתפצל בכל תיקון.
+ * A capability file path (SKILL.md / .claude/commands / agents) — single source.
+ * It used to be defined word-for-word identically in two files (deep-sweep + harvester)
+ * and drifted with every fix.
  */
 export function isCapabilityPath(path: string): boolean {
   const p = path.toLowerCase();
@@ -136,8 +169,8 @@ export function parseRepoInput(raw: string): { owner: string; repo: string } | n
   return { owner, repo };
 }
 
-// ---------- Claude model registry (סף מחמיר: 5.5+ בלבד) ----------
-// מקור האמת: src/lib/claude-models.ts — משפחת 4.x חסומה לחלוטין.
+// ---------- Claude model registry (strict threshold: 5.5+ only) ----------
+// Source of truth: src/lib/claude-models.ts — the 4.x family is completely blocked.
 export {
   MIN_QUALIFYING_VERSION,
   THRESHOLD_LABEL,
@@ -152,15 +185,15 @@ import { detectClaudeModels, type ClaudeModelDef } from "./claude-models";
 
 // ---------- tier system ----------
 
-import type { TierKey } from "./hunter-types"; // מקור יחיד — בעבר הוגדר זהה בשני קבצים
-export type { TierKey }; // re-export לצרכני github.ts הקיימים
+import type { TierKey } from "./hunter-types"; // single source — used to be defined identically in two files
+export type { TierKey }; // re-export for existing github.ts consumers
 
 export const TIERS: { min: number; key: TierKey; label: string; emoji: string }[] = [
-  { min: 80, key: "elite", label: "אליטה", emoji: "💎" },
-  { min: 60, key: "gold", label: "זהב", emoji: "🥇" },
-  { min: 40, key: "silver", label: "כסף", emoji: "🥈" },
-  { min: 20, key: "bronze", label: "ארד", emoji: "🥉" },
-  { min: 0, key: "seed", label: "נבט", emoji: "🌱" },
+  { min: 80, key: "elite", label: "Elite", emoji: "💎" },
+  { min: 60, key: "gold", label: "Gold", emoji: "🥇" },
+  { min: 40, key: "silver", label: "Silver", emoji: "🥈" },
+  { min: 20, key: "bronze", label: "Bronze", emoji: "🥉" },
+  { min: 0, key: "seed", label: "Seed", emoji: "🌱" },
 ];
 
 export function tierOf(score: number): { key: TierKey; label: string; emoji: string } {
@@ -188,6 +221,8 @@ export async function ghGraphql<T = unknown>(
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
   });
+  // Same quota snapshot as ghFetch — GraphQL shares the 5000/hour core pool
+  readQuotaHeaders(res);
   if (!res.ok) {
     let msg = `GitHub API error ${res.status}`;
     try {
@@ -197,9 +232,9 @@ export async function ghGraphql<T = unknown>(
       // keep default
     }
     const isRateLimit =
-      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection|מכסת/i.test(msg);
-    if (isRateLimit) msg = "מכסת GitHub API נגמרה (rate limit). הוסף Personal Access Token בהגדרות כדי להמשיך.";
-    if (res.status === 401) msg = "הטוקן שסיפקת לא תקין או שפג תוקפו.";
+      (res.status === 403 || res.status === 429) && /rate limit|secondary rate|abuse detection/i.test(msg);
+    if (isRateLimit) msg = "GitHub API rate limit exhausted. Add a Personal Access Token in settings to continue.";
+    if (res.status === 401) msg = "The token you provided is invalid or has expired.";
     throw new GhError(res.status, msg, isRateLimit);
   }
   const body = (await res.json()) as { data?: T; errors?: { message?: string }[] };
@@ -241,8 +276,10 @@ const ghSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * deep-sweep and auditor — one copy had a dead backoff because it matched the
  * English "rate limit" inside a message that was already translated to Hebrew).
  * Policy: 403/429 marked as rate-limit by ghFetch (GhError.rateLimited) → wait
- * 8s/16s/32s and retry; any other error (private repo, bad token…) is thrown
- * immediately so we don't burn a minute on a query that can never succeed.
+ * until the quota window actually resets (from the x-ratelimit-reset header the
+ * rate-limited response itself carried — see readQuotaHeaders) and retry; any
+ * other error (private repo, bad token…) is thrown immediately so we don't burn
+ * a minute on a query that can never succeed.
  */
 export async function ghSearchWithBackoff<T>(path: string, token: string | null): Promise<T> {
   const delays = [8_000, 16_000, 32_000];
@@ -252,9 +289,20 @@ export async function ghSearchWithBackoff<T>(path: string, token: string | null)
       return await ghFetch<T>(path, token);
     } catch (e) {
       lastErr = e;
-      const rl = e instanceof GhError && (e.status === 403 || e.status === 429) && (e.rateLimited === true || /rate limit|secondary|מכסת/i.test(e.message));
+      const rl = e instanceof GhError && (e.status === 403 || e.status === 429) && (e.rateLimited === true || /rate limit|secondary/i.test(e.message));
       if (!rl || attempt === delays.length) throw e;
-      await ghSleep(delays[attempt]);
+      // Header-aware wait: sleep exactly until the window resets (+1s of grace).
+      // The fixed ladder is kept as the fallback when no reset epoch was ever
+      // seen (e.g. a proxy stripped the headers). Clamped to [8s, 120s]: a reset
+      // already in the past still gets the minimum breather, and a corrupt
+      // future epoch can never hang the sweep for hours. Retry-count semantics
+      // are unchanged — still at most 3 retries.
+      let waitMs = delays[attempt];
+      if (lastQuota.reset != null) {
+        const tillResetMs = (lastQuota.reset - Math.floor(Date.now() / 1000) + 1) * 1000;
+        waitMs = Math.min(120_000, Math.max(8_000, tillResetMs));
+      }
+      await ghSleep(waitMs);
     }
   }
   throw lastErr;
@@ -279,8 +327,8 @@ export interface RepoLike {
 }
 
 /**
- * זיהוי מודלים מזכים בלבד (≥5.5). מודלי 4.x ומטה לא מוחזרים מכאן —
- * השתמשו ב-detectClaudeModels לקבלת ההפרדה המלאה כולל חסומים.
+ * Detects only qualifying models (≥5.5). 4.x-and-below models are not returned
+ * here — use detectClaudeModels for the full separation including blocked ones.
  */
 export function detectModelsInText(text: string): ClaudeModelDef[] {
   return detectClaudeModels(text).qualifying;
@@ -295,7 +343,7 @@ export function computeListScore(repo: RepoLike): {
   score: number;
   tier: TierKey;
   reasons: string[];
-  /** true אם זוהו רק מודלים חסומים (4.x ומטה) ואף מזכה — פסול לפי חוק הסף */
+  /** true if only blocked models (4.x and below) were detected and no qualifying one — disqualified under the threshold rule */
   blockedOnly: boolean;
 } {
   const reasons: string[] = [];
@@ -303,29 +351,29 @@ export function computeListScore(repo: RepoLike): {
 
   const traction = satScore(repo.stars, 20, 10000) + satScore(repo.forks, 6, 1000);
   score += traction;
-  if (repo.stars > 0) reasons.push(`⭐ ${repo.stars.toLocaleString()} כוכבים`);
+  if (repo.stars > 0) reasons.push(`⭐ ${repo.stars.toLocaleString()} stars`);
 
   if (repo.pushedAt) {
     const days = (Date.now() - new Date(repo.pushedAt).getTime()) / 86400000;
-    if (days < 7) { score += 8; reasons.push("פעיל מאוד (7 ימים)"); }
-    else if (days < 30) { score += 6; reasons.push("מעודכן החודש"); }
-    else if (days < 90) { score += 4; reasons.push("מעודכן ברבעון האחרון"); }
+    if (days < 7) { score += 8; reasons.push("Very active (7 days)"); }
+    else if (days < 30) { score += 6; reasons.push("Updated this month"); }
+    else if (days < 90) { score += 4; reasons.push("Updated in the last quarter"); }
     else if (days < 365) { score += 2; }
   }
 
   const hay = [repo.fullName, repo.description, (repo.topics ?? []).join(" ")].filter(Boolean).join(" ");
   let hints = 0;
-  if (/\bclaude\b|claude[-_ ]?code/i.test(hay)) { hints += 6; reasons.push("מזוהה Claude"); }
-  if (/anthropic/i.test(hay)) { hints += 5; reasons.push("מזוהה Anthropic"); }
-  if (MCP_HINT.test(hay)) { hints += 3; reasons.push("אזכור MCP"); }
-  if (AGENT_HINT.test(hay)) { hints += 3; reasons.push("אזכור סוכנים"); }
+  if (/\bclaude\b|claude[-_ ]?code/i.test(hay)) { hints += 6; reasons.push("Claude detected"); }
+  if (/anthropic/i.test(hay)) { hints += 5; reasons.push("Anthropic detected"); }
+  if (MCP_HINT.test(hay)) { hints += 3; reasons.push("MCP mention"); }
+  if (AGENT_HINT.test(hay)) { hints += 3; reasons.push("Agents mention"); }
   const detection = detectClaudeModels(hay);
   if (detection.qualifying.length > 0) {
     hints += 6;
-    reasons.push(`🧠 מודל 5.5+: ${detection.qualifying.map((m) => m.label).join(", ")}`);
+    reasons.push(`🧠 5.5+ model: ${detection.qualifying.map((m) => m.label).join(", ")}`);
   } else if (detection.blockedOnly) {
-    // ⛔ רק מודלי 4.x ומטה — אפס נקודות מודל + תיוג חסימה
-    reasons.push(`⛔ רק מודלי ${detection.blocked.map((b) => b.label).join(", ")} (מתחת לסף 5.5 — חסום)`);
+    // ⛔ Only 4.x-and-below models — zero model points + a block tag
+    reasons.push(`⛔ Only ${detection.blocked.map((b) => b.label).join(", ")} models (below the 5.5 threshold — blocked)`);
   }
   score += Math.min(hints, 18);
 

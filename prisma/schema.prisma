@@ -7,7 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// מאגרים שנשמרו למעקב (Watchlist)
+// Repos saved for tracking (Watchlist)
 model SavedRepo {
   id          Int      @id @default(autoincrement())
   fullName    String   @unique // owner/name
@@ -17,39 +17,39 @@ model SavedRepo {
   description String?
   stars       Int      @default(0)
   score       Int      @default(0)
-  models      String?  // רשימת מודלים שזוהו, מופרדת בפסיקים
-  evidence    String?  // JSON של ראיות
+  models      String?  // Comma-separated list of detected models
+  evidence    String?  // JSON of evidence
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
 
-// היסטוריית חיפושים
+// Search history
 model SearchHistory {
   id          Int      @id @default(autoincrement())
   mode        String   // repos | code
   query       String
-  filters     String?  // JSON של המסננים
+  filters     String?  // JSON of filters
   resultCount Int      @default(0)
   createdAt   DateTime @default(now())
 }
 
-// הגדרות מערכת (key-value) — בין היתר: טוקן GitHub לשימוש השרת
+// System settings (key-value) — includes the GitHub token used by the server, among other things
 model Setting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
 }
 
-// ארטיפקט DNA — קובץ יכולת שנכרה מריפו אליטה (skill/command/agent/CLAUDE.md)
+// DNA artifact — a capability file mined from an elite repo (skill/command/agent/CLAUDE.md)
 model DnaArtifact {
   id          Int      @id @default(autoincrement())
   sourceRepo  String   // owner/name
-  path        String   // נתיב מלא בריפו
+  path        String   // Full path inside the repo
   kind        String   // skill | command | agent | claude-md | agents-md | mcp-config
-  name        String   // שם היכולת
+  name        String   // Capability name
   description String?
-  content     String?  // תוכן הקובץ (מלא או קטע)
+  content     String?  // File content (full or excerpt)
   rawUrl      String?
   size        Int      @default(0)
   createdAt   DateTime @default(now())
@@ -59,84 +59,84 @@ model DnaArtifact {
   @@index([kind])
 }
 
-// כימרה — יצירת AI ממוזגת מכמה ריפואי אליטה + פקודות עבודה למוצר שלנו
+// Chimera — a merged AI creation synthesized from several elite repos + work orders for our product
 model Chimera {
   id          Int      @id @default(autoincrement())
   name        String
-  // תקציר במשפט אחד — בעבר לא נשמר בכלל וההיסטוריה זייפה אותו מ-breakthrough
+  // One-sentence summary — previously not stored at all, and the history view faked it from breakthrough
   oneLiner    String?
-  sources     String   // רשימת ריפואי מקור, מופרדת בפסיקים
-  skillMd     String   // SKILL.md מלא מוכן להזרקה
-  principles  String?  // JSON מערך עקרונות
-  workOrders  String?  // JSON מערך פקודות עבודה
-  breakthrough String? // הרעיון הפורץ הבודד
+  sources     String   // Comma-separated list of source repos
+  skillMd     String   // Full SKILL.md ready for injection
+  principles  String?  // JSON array of principles
+  workOrders  String?  // JSON array of work orders
+  breakthrough String? // The single breakthrough idea
   createdAt   DateTime @default(now())
 }
 
-// משימה מרוכבת — מטרה בשפה טבעית שהופכת לתוכנית קרב ניתנת לביצוע
-// עם בחירת DNA רלוונטי אוטומטית + לולאת דיווח שדה שמולידה DNA חדש
+// Compiled mission — a natural-language goal turned into an executable battle plan
+// with automatic selection of relevant DNA + a field-report loop that births new DNA
 model Mission {
   id              Int      @id @default(autoincrement())
-  goal            String   // המטרה בשפה טבעית
-  context         String?  // הקשר נוסף מהמשתמש
-  status          String   @default("compiled") // compiled | in_progress | partial | done | failed (partial נוסף בסבב 6 — בעבר ההערה השמיטה אותו וסתרה את הקוד)
-  missionName     String   // שם קוד למשימה
-  plan            String   // JSON: מערך שלבים (phases) עם צעדים
-  dnaRefs         String?  // JSON: מזהי DnaArtifact שנבחרו + נימוקים
-  promptSequence  String?  // JSON: רצף פרומפטים מוכנים להדבקה ב-Claude Code
-  skillMd         String?  // SKILL.md מבצעי מלא להזרקה
-  risks           String?  // JSON מערך סיכונים
-  successCriteria String?  // JSON מערך קריטריוני הצלחה
-  report          String?  // JSON: תוצאה, לקחים מזוקקים
-  autopilot       String?  // JSON: מערך תוצרי ריצה אוטונומית לכל שלב
+  goal            String   // The goal in natural language
+  context         String?  // Additional context from the user
+  status          String   @default("compiled") // compiled | in_progress | partial | done | failed (partial was added in round 6 — the old comment omitted it and contradicted the code)
+  missionName     String   // Codename for the mission
+  plan            String   // JSON: array of phases with steps
+  dnaRefs         String?  // JSON: selected DnaArtifact ids + rationales
+  promptSequence  String?  // JSON: ready-to-paste prompt sequence for Claude Code
+  skillMd         String?  // Full operational SKILL.md for injection
+  risks           String?  // JSON array of risks
+  successCriteria String?  // JSON array of success criteria
+  report          String?  // JSON: outcome, distilled lessons
+  autopilot       String?  // JSON: per-phase autonomous-run outputs
   autopilotAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
-// סריקת עומק — מבצע מודיעין מלא: ארסנל שאילתות ← כרייה ← להקת פרומפטים
-// נשמרת כריצה שלמה כדי שניתן יהיה לעקוב, לשחזר ולהשוות בין סבבים.
+// Deep sweep — a full intelligence operation: query arsenal -> mining -> prompt swarm
+// Stored as a complete run so it can be tracked, replayed and compared across rounds.
 model SweepRun {
   id        Int       @id @default(autoincrement())
   status    String    @default("running") // running | done | failed
   phase     String    @default("queries") // queries | enrich | mine | swarm | done
   progress  Int       @default(0) // 0-100
-  queries   String?   // JSON: כל שאילתה שבוצעה + מספר תוצאות
+  queries   String?   // JSON: every query executed + result count
   stats     String?   // JSON: candidatesFound, reposMined, dnaAdded, llmCalls, elapsedMs...
-  findings  String?   // JSON: מועמדים מדורגים עם פסקי דין
-  briefing  String?   // JSON: תוצרי להקת הפרומפטים (דפוסים, תוכנית תקיפה, שאילתות הבאות)
-  audit     String?   // JSON: ביקורת אדברסרית — אימות ראיות חי + ציון anti-slop
+  findings  String?   // JSON: ranked candidates with verdicts
+  briefing  String?   // JSON: prompt-swarm outputs (patterns, attack plan, next queries)
+  audit     String?   // JSON: adversarial audit — live evidence verification + anti-slop score
   error     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  // סטטוס נשאל בכל start/step/reap — בעבר סריקה מלאה ללא אינדקס
+  // Status is queried on every start/step/reap — previously a full scan without an index
   @@index([status])
 }
 
 // ============================================================
-// ציד חי — שרשרת הרג אוטונומית מלאה בלחיצה אחת:
-// איתור GitHub חי ← להקת פרומפטים ← כריית DNA ← הידור משימה
-// ← ביצוע אוטונומי ← זיקוק שדה (הספרייה גדלה) ← מסקנת מערכה.
-// שלב אחד לכל קריאה — מצב נשמר ב-DB, ניתן לחזור מכל נקודה.
+// Live hunt — a fully autonomous kill chain in one click:
+// live GitHub discovery -> prompt swarm -> DNA mining -> mission compile
+// -> autonomous execution -> field refinement (the library grows) -> campaign verdict.
+// One stage per call — state is persisted in the DB, resumable from any point.
 // ============================================================
 model LiveHunt {
   id        Int       @id @default(autoincrement())
   status    String    @default("running") // running | done | failed
-  stageKey  String    @default("hunt") // hunt | swarm | attack | mine | compile | execute | grow | verdict (attack נוסף להערה — בעבר ההערה השמיטה אותו)
-  stages    String    @default("[]") // JSON: רשומות שלבים שהושלמו [{key,title,summary,ms,evidence}]
-  goal      String    @default("") // המטרה שנגזרה אוטומטית מהממצאים (מתמלאת בשלב ההידור)
-  missionId Int? // המשימה שנוצרה בשלב ההידור
-  generation Int      @default(1) // דור הציד — דור 2+ זורע את שאילתות האבולוציה של הציד הקודם
-  seededFrom Int? // מזהה הציד שממנו נזרעו השאילתות המתפתחות (null = דור 1)
-  dnaBefore Int       @default(0) // גודל הספרייה בפתיחה — להוכחת צמיחה
-  dnaAfter  Int       @default(0) // גודל הספרייה בסיום
-  llmCalls  Int       @default(0) // סך קריאות LLM בשרשרת
-  elapsedMs Int       @default(0) // זמן מצטבר של השלבים
+  stageKey  String    @default("hunt") // hunt | swarm | attack | mine | compile | execute | grow | verdict (attack was added to this comment — the old comment omitted it)
+  stages    String    @default("[]") // JSON: completed stage records [{key,title,summary,ms,evidence}]
+  goal      String    @default("") // Goal auto-derived from the findings (filled in at the compile stage)
+  missionId Int? // The mission created at the compile stage
+  generation Int      @default(1) // Hunt generation — generation 2+ seeds the evolved queries of the previous hunt
+  seededFrom Int? // Id of the hunt from which the evolved queries were seeded (null = generation 1)
+  dnaBefore Int       @default(0) // Library size at the start — to prove growth
+  dnaAfter  Int       @default(0) // Library size at the end
+  llmCalls  Int       @default(0) // Total LLM calls in the chain
+  elapsedMs Int       @default(0) // Cumulative stage time
   error     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  // סטטוס נשאל בכל start/step/previousKnownRepos — בעבר סריקה מלאה ללא אינדקס
+  // Status is queried on every start/step/previousKnownRepos — previously a full scan without an index
   @@index([status])
 }

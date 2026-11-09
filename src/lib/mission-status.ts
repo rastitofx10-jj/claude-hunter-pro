@@ -1,11 +1,11 @@
 // ============================================================
-// חוק הסטטוסים של משימות — מקור יחיד.
-// בעבר היה מוגדר-מחדש בשלושה קבצים (autopilot, report route, live-hunt)
-// ואחד מהם כבר סטה מהשאר — חוק אחד, מקור אחד.
-// פועל בצד שרת בלבד.
+// The law of mission statuses — a single source.
+// It used to be redefined in three files (autopilot, report route, live-hunt)
+// and one of them had already drifted from the rest — one law, one source.
+// Server-side only.
 // ============================================================
 
-/** דירוג סטטוס: המספר גבוה יותר = מתקדם יותר. מעבר סטטוס מותר רק קדימה. */
+/** Status ranking: the higher the number, the more advanced. Status transitions are allowed forward only. */
 export const STATUS_RANK: Record<string, number> = {
   compiled: 0,
   in_progress: 1,
@@ -14,7 +14,7 @@ export const STATUS_RANK: Record<string, number> = {
   failed: 1,
 };
 
-/** מיפוי תוצאת-שדה → סטטוס משימה */
+/** Field-result → mission status mapping */
 export const OUTCOME_STATUS: Record<string, string> = {
   success: "done",
   partial: "partial",
@@ -22,8 +22,8 @@ export const OUTCOME_STATUS: Record<string, string> = {
 };
 
 /**
- * קידום סטטוס חד-כיווני: מחזיר את `next` רק אם הוא לא מדרג אחורה מ-`current`.
- * (בעבר: כל אתר היה מממש את ההשוואה בעצמו — ואחת מהן כבר סטתה)
+ * One-way status advancement: returns `next` only if it does not rank backwards from `current`.
+ * (Previously: every call site implemented the comparison on its own — and one of them had already drifted)
  */
 export function advanceStatus(current: string, next: string): string {
   return (STATUS_RANK[next] ?? 0) >= (STATUS_RANK[current] ?? 0) ? next : current;

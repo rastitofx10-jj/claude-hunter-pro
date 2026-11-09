@@ -63,11 +63,11 @@ export interface SearchResponse {
   items: ScoredRepo[];
   note?: string;
   querySent: string;
-  /** מספר מאגרים שהוסתרו כי זוהו בהם רק מודלי 4.x ומטה (חוק החסימה המלאה) */
+  /** Number of repos hidden because only 4.x-and-below models were detected in them (the full blocking rule) */
   blockedHidden?: number;
-  /** false במצב קוד — GitHub code search לא מאפשר עימוד אמיתי (100 תוצאות לשאילתה) */
+  /** false in code mode — GitHub code search does not support real pagination (100 results per query) */
   canPaginate?: boolean;
-  /** אינדקס החיפוש חלקי לשאילתה (incomplete_results=true מ-GitHub) */
+  /** The search index is partial for this query (incomplete_results=true from GitHub) */
   incompleteResults?: boolean;
 }
 
@@ -78,7 +78,7 @@ export interface ModelHit {
   sources: string[];
   hits?: number;
   version?: number;
-  /** false = מודל חסום (מתחת לסף 5.5, כולל משפחת 4.x) — משקל 0 ולא נכלל בציון */
+  /** false = blocked model (below the 5.5 threshold, including the 4.x family) — weight 0, not counted in the score */
   qualifying: boolean;
 }
 
@@ -101,11 +101,11 @@ export interface AnalyzeResponse {
   score: {
     total: number;
     tier: TierKey;
-    modelScore: number; // max 45 — רק מודלים מזכים (5.5+)
+    modelScore: number; // max 45 — qualifying models only (5.5+)
     paidScore: number; // max 30
     tractionScore: number; // max 25
     usageScore: number; // max 15
-    /** true רק אם זוהה לפחות מודל אחד ≥5.5 */
+    /** true only if at least one model ≥5.5 was detected */
     meetsModelThreshold: boolean;
   };
   models: ModelHit[];
@@ -163,29 +163,29 @@ export interface RateInfo {
 }
 
 // ============================================================
-// שכבת מודיעין AI — סוגרת את הלולאה מ"מציאה" ל"החלטה"
+// AI intelligence layer — closes the loop from "finding" to "decision"
 // ============================================================
 
-/** רעיון "מה לגנוב" — יתרון מוכח שכדאי לאמץ בממשק שלנו */
+/** A "what to steal" idea — a proven advantage worth adopting into our interface */
 export interface StealIdea {
   what: string;
   why: string;
   how?: string;
 }
 
-/** פער שלהם = הזדמנות שלנו */
+/** Their gap = our opportunity */
 export interface BetterMove {
   gap: string;
   ourMove: string;
 }
 
-/** דוח מודיעין AI עבור מאגר בודד */
+/** AI intelligence report for a single repo */
 export interface RepoIntel {
-  /** פסק דין אסטרטגי במשפט-שניים */
+  /** A strategic verdict in 1-2 sentences */
   verdict: string;
-  /** הערכת עומק ההשקעה: בטוח / סביר / חלש + נימוק */
+  /** Investment-depth assessment: certain / likely / weak + rationale */
   moneyVerdict: string;
-  moneyLevel: "בטוח" | "סביר" | "חלש" | "לא ידוע";
+  moneyLevel: "certain" | "likely" | "weak" | "unknown";
   whatTheyBuilt: string[];
   brilliant: string[];
   stealThis: StealIdea[];
@@ -195,21 +195,21 @@ export interface RepoIntel {
   generatedAt: string;
 }
 
-/** דפוס חוצה-פרויקטים שה-AI זיהה בסינתזה */
+/** A cross-project pattern the AI identified in the synthesis */
 export interface SynthPattern {
   pattern: string;
   repos: string[];
   insight: string;
 }
 
-/** מהלך אסטרטגי מומלץ למוצר שלנו */
+/** A recommended strategic move for our product */
 export interface TopMove {
   move: string;
   why: string;
-  effort: "נמוך" | "בינוני" | "גבוה" | "לא ידוע";
+  effort: "low" | "medium" | "high" | "unknown";
 }
 
-/** סינתזת קרב — מודיעין חוצה-ריפואים מכל רשימת המעקב */
+/** Battle synthesis — cross-repo intelligence from the entire watchlist */
 export interface BattleSynthesis {
   execSummary: string;
   patterns: SynthPattern[];

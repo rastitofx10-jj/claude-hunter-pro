@@ -15,7 +15,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
-  ChevronLeft,
+  ChevronRight,
   Brain,
   Clock,
   FlaskConical,
@@ -33,6 +33,8 @@ import { useHydrated } from "@/hooks/use-hydrated";
 
 interface MissionListResponse {
   items: { id: number; missionName: string; goal: string; status: string; createdAt: string; hasReport: boolean }[];
+  /** Real mission count — the list itself is capped at 50 rows by the API */
+  total?: number;
   stats: { totalDna: number; fieldDna: number };
 }
 interface HuntListResponse {
@@ -52,6 +54,8 @@ interface HuntListResponse {
     createdAt: string;
     stagesCount: number;
   }[];
+  /** Real hunt count — the list itself is capped at 12 rows by the API */
+  total?: number;
 }
 
 function fmtMs(ms: number): string {
@@ -68,11 +72,11 @@ const STATUS_STYLE: Record<string, string> = {
   failed: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
 };
 const STATUS_LABEL: Record<string, string> = {
-  done: "הושלמה",
-  in_progress: "בביצוע",
-  compiled: "הודרה",
-  partial: "חלקית",
-  failed: "נכשלה",
+  done: "Completed",
+  in_progress: "In progress",
+  compiled: "Compiled",
+  partial: "Partial",
+  failed: "Failed",
 };
 
 const fadeUp: Variants = {
@@ -83,7 +87,7 @@ const fadeUp: Variants = {
 export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
   const token = useHunterStore((s) => s.token);
   const mounted = useHydrated();
-  // (בעבר: !!token || token === SERVER_TOKEN — הפסקה השנייה תמיד-אמת כשהראשונה אמיתית)
+  // (previously: !!token || token === SERVER_TOKEN — the second clause is always true when the first is true)
   const hasToken = mounted && !!token;
 
   const { data: missionData } = useQuery({
@@ -102,6 +106,12 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
 
   const hunts = huntData?.items ?? [];
   const missions = missionData?.items ?? [];
+  // Honest KPI totals: the lists are display-capped (50 missions / 12 hunts), so
+  // items.length froze the cards at the cap once the history outgrew it. The APIs
+  // now ship the real count; the items.length fallback only covers an older
+  // cached response that predates the field.
+  const missionsTotal = missionData?.total ?? missions.length;
+  const huntsTotal = huntData?.total ?? hunts.length;
   const lastHunt = hunts[0] ?? null;
   const runningHunt = hunts.find((h) => h.status === "running") ?? null;
   const totalDna = missionData?.stats?.totalDna ?? 0;
@@ -121,8 +131,8 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
             className="flex w-full items-center gap-2 rounded-lg p-2 text-start transition-colors hover:bg-muted/50"
           >
             <Swords className="h-4 w-4 shrink-0 text-orange-600" />
-            <span className="shrink-0 text-xs font-semibold">ציד #{h.id}</span>
-            {h.generation > 1 && <Badge variant="secondary" className="text-[10px]">דור {h.generation}</Badge>}
+            <span className="shrink-0 text-xs font-semibold">Hunt #{h.id}</span>
+            {h.generation > 1 && <Badge variant="secondary" className="text-[10px]">Generation {h.generation}</Badge>}
             {h.status === "done" ? (
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
             ) : h.status === "running" ? (
@@ -169,33 +179,33 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
 
   const kpis = [
     {
-      label: "ספריית DNA",
+      label: "DNA library",
       value: totalDna.toLocaleString(),
-      sub: `${fieldDna} נולדו מהשדה`,
+      sub: `${fieldDna} field-born`,
       icon: Dna,
       cls: "from-violet-500/15 text-violet-600 dark:text-violet-300",
       tab: "genesis" as TabKey,
     },
     {
-      label: "משימות",
-      value: missions.length.toLocaleString(),
-      sub: `${doneMissions} הושלמו`,
+      label: "Missions",
+      value: missionsTotal.toLocaleString(),
+      sub: `${doneMissions} completed`,
       icon: Target,
       cls: "from-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-300",
       tab: "mission" as TabKey,
     },
     {
-      label: "צידים חיים",
-      value: hunts.length.toLocaleString(),
-      sub: lastHunt ? `אחרון: #${lastHunt.id} · דור ${lastHunt.generation}` : "טרם צדת",
+      label: "Live hunts",
+      value: huntsTotal.toLocaleString(),
+      sub: lastHunt ? `Latest: #${lastHunt.id} · Generation ${lastHunt.generation}` : "No hunts yet",
       icon: Swords,
       cls: "from-orange-500/15 text-orange-600 dark:text-orange-300",
       tab: "live" as TabKey,
     },
     {
-      label: "מכסת GitHub",
+      label: "GitHub quota",
       value: rate?.core ? `${rate.core.remaining}/${rate.core.limit}` : "—",
-      sub: rate?.error ? "שגיאת טוקן" : hasToken ? "מחובר" : "ללא טוקן — מוגבל",
+      sub: rate?.error ? "Token error" : hasToken ? "Connected" : "No token — limited",
       icon: Gauge,
       cls: "from-emerald-500/15 text-emerald-600 dark:text-emerald-300",
       tab: "search" as TabKey,
@@ -203,7 +213,7 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
   ];
 
   return (
-    <div className="space-y-5" dir="rtl">
+    <div className="space-y-5">
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {kpis.map((k, i) => (
@@ -233,20 +243,20 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
         <Card className="border-orange-200/70 bg-gradient-to-l from-orange-50/70 via-card to-card dark:border-orange-900 dark:from-orange-950/20">
           <CardContent className="flex flex-wrap items-center gap-2 p-4">
             <p className="flex items-center gap-1.5 text-sm font-bold">
-              <Rocket className="h-4 w-4 text-orange-600" /> פעולות מהירות
+              <Rocket className="h-4 w-4 text-orange-600" /> Quick actions
             </p>
             <div className="flex flex-1 flex-wrap justify-end gap-2">
               <Button size="sm" className="gap-1.5 bg-gradient-to-l from-orange-600 to-amber-500 text-white hover:from-orange-700 hover:to-amber-600" onClick={() => onNavigate("live")}>
-                <Swords className="h-3.5 w-3.5" /> {runningHunt ? `ציד #${runningHunt.id} רץ כרגע` : "ציד חי חדש"}
+                <Swords className="h-3.5 w-3.5" /> {runningHunt ? `Hunt #${runningHunt.id} is running` : "New live hunt"}
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onNavigate("mission")}>
-                <Target className="h-3.5 w-3.5" /> הדר משימה
+                <Target className="h-3.5 w-3.5" /> Compile a mission
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onNavigate("sweep")}>
-                <Satellite className="h-3.5 w-3.5" /> שגר סריקת עומק
+                <Satellite className="h-3.5 w-3.5" /> Launch a deep sweep
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onNavigate("search")}>
-                <Search className="h-3.5 w-3.5" /> חיפוש 5.5+
+                <Search className="h-3.5 w-3.5" /> Search 5.5+
               </Button>
             </div>
           </CardContent>
@@ -260,20 +270,20 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
             <CardContent className="p-4">
               <div className="mb-2 flex items-center justify-between">
                 <p className="flex items-center gap-1.5 text-sm font-bold">
-                  <Clock className="h-4 w-4" /> פעילות אחרונה
+                  <Clock className="h-4 w-4" /> Recent activity
                 </p>
                 {runningHunt && (
                   <Badge className="gap-1 bg-amber-500/90 text-white">
-                    <Loader2 className="h-3 w-3 animate-spin" /> ציד #{runningHunt.id} בשלב {runningHunt.stageKey}
+                    <Loader2 className="h-3 w-3 animate-spin" /> Hunt #{runningHunt.id} at stage {runningHunt.stageKey}
                   </Badge>
                 )}
               </div>
               {activity.length === 0 ? (
                 <div className="rounded-xl border border-dashed p-8 text-center">
                   <p className="text-3xl">🏹</p>
-                  <p className="mt-2 font-medium">עוד לא צדת אף צייד</p>
+                  <p className="mt-2 font-medium">You haven't hunted anything yet</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    התחל בחיפוש או בציד חי — הפעילות תתעדכן כאן בזמן אמת
+                    Start with a search or a live hunt — activity will update here in real time
                   </p>
                 </div>
               ) : (
@@ -288,38 +298,38 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
           <Card className="h-full border-violet-200/70 bg-gradient-to-b from-violet-50/60 to-card dark:border-violet-900 dark:from-violet-950/20">
             <CardContent className="space-y-4 p-4">
               <p className="flex items-center gap-1.5 text-sm font-bold">
-                <FlaskConical className="h-4 w-4 text-violet-600" /> דוקטרינת המערכת
+                <FlaskConical className="h-4 w-4 text-violet-600" /> System doctrine
               </p>
               <div className="space-y-2.5 text-xs leading-relaxed text-muted-foreground">
                 <p className="flex gap-2">
                   <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
                   <span>
-                    <strong className="text-foreground">חוק ברזל:</strong> סף מודלים {THRESHOLD_LABEL} בלבד, נעול בקוד.{" "}
+                    <strong className="text-foreground">Iron law:</strong> {THRESHOLD_LABEL} models only, locked in code.{" "}
                     <span title={THRESHOLD_RULE_TEXT} className="cursor-help underline decoration-dotted">
-                      משפחת 4.x חסומה בשרת, במסננים ובציון.
+                      The 4.x family is blocked in the server, the filters, and the scoring.
                     </span>
                   </span>
                 </p>
                 <p className="flex gap-2">
                   <Brain className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-500" />
                   <span>
-                    <strong className="text-foreground">לולאת האבולוציה:</strong> כל משימה שמדווחת מהשדה מזוקקת לגן DNA חדש —
-                    הספרייה מחכימה מכל הרצה.
+                    <strong className="text-foreground">Evolution loop:</strong> every mission that reports back from the
+                    field is distilled into a new DNA gene — the library gets smarter with every run.
                   </span>
                 </p>
                 <p className="flex gap-2">
                   <Swords className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-500" />
                   <span>
-                    <strong className="text-foreground">שרשרת ההרג:</strong> hunt → swarm → attack → mine → compile → execute →
-                    grow → verdict. שלב אחד לכל קריאה, resumable מכל נקודה.
+                    <strong className="text-foreground">Kill chain:</strong> hunt → swarm → attack → mine → compile →
+                    execute → grow → verdict. One stage per call, resumable from any point.
                   </span>
                 </p>
                 {lastHunt && (
                   <p className="flex gap-2">
                     <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
                     <span>
-                      <strong className="text-foreground">מסע האחרון:</strong> {fmtMs(lastHunt.elapsedMs)} · {lastHunt.llmCalls}{" "}
-                      קריאות LLM · ספרייה {lastHunt.dnaBefore}
+                      <strong className="text-foreground">Last expedition:</strong> {fmtMs(lastHunt.elapsedMs)} · {lastHunt.llmCalls}{" "}
+                      LLM calls · library {lastHunt.dnaBefore}
                       {lastHunt.dnaAfter > lastHunt.dnaBefore ? ` → ${lastHunt.dnaAfter}` : ""}
                     </span>
                   </p>
@@ -331,7 +341,7 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
                 className="w-full gap-1.5"
                 onClick={() => onNavigate("live")}
               >
-                לחדר המלחמה <ChevronLeft className="h-3.5 w-3.5" />
+                To the war room <ChevronRight className="h-3.5 w-3.5" />
               </Button>
             </CardContent>
           </Card>

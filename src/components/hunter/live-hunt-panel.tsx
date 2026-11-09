@@ -78,12 +78,14 @@ interface HuntListItem {
 interface HuntResponse {
   hunt?: HuntState;
   items?: HuntListItem[];
+  /** Real hunt count — the list itself is capped at 12 rows by the API */
+  total?: number;
   stageOrder?: readonly string[];
   stageTitles?: Record<string, string>;
   error?: string;
 }
 
-/** שגיאה שנזרקה מ-apiFetch ונושאת את גוף התשובה (payload.hunt) — ראה api-client.ts */
+/** An error thrown by apiFetch that carries the response body (payload.hunt) — see api-client.ts */
 interface FetchErrorWithPayload extends Error {
   payload?: HuntResponse;
 }
@@ -131,7 +133,7 @@ function EvidenceView({ evidence }: { evidence: Record<string, unknown> }) {
       const label = prefix ? `${prefix}.${k}` : k;
       if (v === null || v === undefined) continue;
       if (typeof v === "boolean") {
-        chips.push({ label, value: v ? "כן" : "לא" });
+        chips.push({ label, value: v ? "yes" : "no" });
       } else if (typeof v === "number") {
         chips.push({ label, value: String(v) });
       } else if (typeof v === "string") {
@@ -222,7 +224,7 @@ function StageRail({
   failed: boolean;
 }) {
   return (
-    <div className="overflow-x-auto pb-1" aria-label="צינור השלבים">
+    <div className="overflow-x-auto pb-1" aria-label="Stage pipeline">
       <ol className="flex min-w-max items-center gap-0 px-1">
         {order.map((key, idx) => {
           const rec = doneMap.get(key) ?? null;
@@ -252,7 +254,7 @@ function StageRail({
                   {titles[key] ?? key}
                 </p>
                 {rec && <span className="text-[10px] tabular-nums text-muted-foreground">{fmtMs(rec.ms)}</span>}
-                {visual === "active" && <span className="text-[10px] font-medium text-amber-600 dark:text-amber-300">מתבצע כעת</span>}
+                {visual === "active" && <span className="text-[10px] font-medium text-amber-600 dark:text-amber-300">running now</span>}
               </div>
               {!last && (
                 <div
@@ -318,7 +320,7 @@ function StageCard({ stageKey, title, visual, rec }: { stageKey: string; title: 
             <CollapsibleTrigger asChild>
               <Button variant="ghost" size="sm" className="mt-2 h-7 gap-1 px-2 text-xs text-muted-foreground">
                 <Zap className="h-3 w-3" />
-                ראיות ({Object.keys(rec.evidence).length} שדות)
+                Evidence ({Object.keys(rec.evidence).length} fields)
                 <ChevronDown className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`} />
               </Button>
             </CollapsibleTrigger>
@@ -342,8 +344,8 @@ export function LiveHuntPanel() {
   const [hunt, setHunt] = useState<HuntState | null>(null);
   const pumpingRef = useRef(false);
   const [autoPilot, setAutoPilot] = useState(true);
-  // כותרות שלבים שהגיעו בתשובות start/next/retry — ממלאות את המסלול עוד לפני שרשימת
-  // ההיסטוריה נטענה (בעבר: מפתחות אנגלית גולמיים הופיעו ברגע הראשון אחרי "התחל")
+  // Stage titles that arrived in start/next/retry responses — they populate the rail even before
+  // the history list loads (before: raw English keys showed up right after pressing "start").
   const [respTitles, setRespTitles] = useState<Record<string, string>>({});
 
   const listQuery = useQuery({
@@ -354,7 +356,7 @@ export function LiveHuntPanel() {
   const applyResponse = useCallback((data: HuntResponse) => {
     if (data.hunt) setHunt(data.hunt);
     if (data.stageTitles) setRespTitles((prev) => ({ ...prev, ...data.stageTitles! }));
-    // data.error ב-2xx אינו קורה לעולם — apiFetch זורק חריגה לפני שמגיעים לכאן (הערה בלבד; הוסר בניקוי 2026-11)
+    // data.error on a 2xx never happens — apiFetch throws before we ever get here (note only; removed in the 2026-11 cleanup)
   }, []);
 
   const startMutation = useMutation({
@@ -368,7 +370,7 @@ export function LiveHuntPanel() {
       void queryClient.invalidateQueries({ queryKey: ["live-hunt-list"] });
     },
     onError: (e: Error) => {
-      toast({ title: "פתיחת הציד נכשלה", description: e.message, variant: "destructive" });
+      toast({ title: "Failed to open the hunt", description: e.message, variant: "destructive" });
     },
   });
 
@@ -384,12 +386,12 @@ export function LiveHuntPanel() {
     },
     onError: (e: Error) => {
       pumpingRef.current = false;
-      // לב התיקון: השרת מצרף את מצב הציד הכושל בגוף התשובה (payload.hunt).
-      // בעבר: המשאבה לא ראתה אותו, המצב נשאר "running" והיא המשיכה להצית את
-      // השלב הכושל בלולאה אינסופית — שריפת מכסת GitHub/LLM ללא השגחה.
+      // Heart of the fix: the server attaches the failed hunt state in the response body (payload.hunt).
+      // Before: the pump never saw it, the state stayed "running", and it kept firing the
+      // failed stage in an infinite loop — burning GitHub/LLM quota unsupervised.
       const failedHunt = (e as FetchErrorWithPayload).payload?.hunt;
       if (failedHunt) setHunt(failedHunt);
-      toast({ title: "שלב נכשל — אפשר לנסות שוב", description: e.message, variant: "destructive" });
+      toast({ title: "Stage failed — you can retry", description: e.message, variant: "destructive" });
     },
   });
 
@@ -406,11 +408,11 @@ export function LiveHuntPanel() {
     onError: (e: Error) => {
       const failedHunt = (e as FetchErrorWithPayload).payload?.hunt;
       if (failedHunt) setHunt(failedHunt);
-      toast({ title: "הניסיון החוזר נכשל", description: e.message, variant: "destructive" });
+      toast({ title: "Retry failed", description: e.message, variant: "destructive" });
     },
   });
 
-  // המשאבה האוטומטית: כל עוד הציד רץ — מדליק את השלב הבא אחרי השהיה קצרה
+  // The automatic pump: as long as the hunt is running — it fires the next stage after a short delay
   useEffect(() => {
     if (!autoPilot) return;
     if (!hunt || hunt.status !== "running") return;
@@ -429,7 +431,7 @@ export function LiveHuntPanel() {
         const res = await apiFetch<HuntResponse>(`/api/live-hunt?id=${id}`, token);
         applyResponse(res);
       } catch (e) {
-        toast({ title: "טעינת הציד נכשלה", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+        toast({ title: "Failed to load the hunt", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
       }
     },
     [applyResponse, token]
@@ -439,13 +441,13 @@ export function LiveHuntPanel() {
   const titles: Record<string, string> = { ...(listQuery.data?.stageTitles ?? {}), ...respTitles };
   const items = listQuery.data?.items ?? [];
 
-  // (ממוקם אחרי ההצהרות של items/loadHunt — בעבר היה לפניהן וקרא משתנה ב-TDZ)
-  // בעבר: המשתמש ראה כפתור "התחל" פנוי שהחזיר 409 עד שלחץ ידנית על השורה בהיסטוריה.
+  // (Placed after the items/loadHunt declarations — it used to sit before them and read a TDZ variable)
+  // Before: the user saw an idle "start" button that returned 409 until they manually clicked a history row.
   useEffect(() => {
-    if (hunt) return; // המשתמש כבר בחר ציד לתצוגה
+    if (hunt) return; // the user already picked a hunt to view
     const active = items.find((i) => i.status === "running");
     if (!active) return;
-    // דחייה ל-microtask — setState ישיר מתוך אפקט אסור (react-hooks/set-state-in-effect)
+    // Defer to a microtask — direct setState from inside an effect is forbidden (react-hooks/set-state-in-effect)
     const t = setTimeout(() => {
       void loadHunt(active.id);
     }, 0);
@@ -462,19 +464,20 @@ export function LiveHuntPanel() {
   const hasRailData = stageOrder.length > 0;
 
   return (
-    <div className="space-y-5" dir="rtl">
+    <div className="space-y-5">
       {/* ---------- hero ---------- */}
       <Card className="border-primary/30 bg-gradient-to-bl from-orange-500/10 via-transparent to-transparent">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-lg">
             <Swords className="h-5 w-5 text-primary" />
-            ציד חי — חדר המלחמה
+            Live Hunt — The War Room
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm leading-relaxed text-muted-foreground">
-            לחיצה אחת. המערכת צדה לבד ב-GitHub, שופטת מועמדים בלהקת פרומפטים, כורה DNA חי מהמטרות, מהדרת משימה
-            מהגנים החדשים, מבצעת אותה אוטונומית, מזקקת את לקחי השדה לגן חדש — ומסכמת בראיות מלאות.
+            One click. The system hunts GitHub on its own, judges candidates with a prompt swarm, mines fresh DNA
+            from the targets, compiles a mission from the new genes, executes it autonomously, distills the field
+            lessons into a new gene — and wraps up with full evidence.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -488,12 +491,12 @@ export function LiveHuntPanel() {
               ) : (
                 <Play className="h-4 w-4" />
               )}
-              {running ? "הציד רץ — מתקדם לבד" : "התחל ציד חי אוטונומי"}
+              {running ? "Hunt is running — advancing on its own" : "Start an autonomous live hunt"}
             </Button>
             {failed && hunt && (
               <Button variant="destructive" onClick={() => retryMutation.mutate(hunt.id)} className="gap-2">
                 <RotateCcw className="h-4 w-4" />
-                נסה שוב מהשלב הנוכחי
+                Retry from the current stage
               </Button>
             )}
             <Button
@@ -501,21 +504,21 @@ export function LiveHuntPanel() {
               size="sm"
               onClick={() => setAutoPilot((v) => !v)}
               className="gap-1.5"
-              title="המשאבה האוטומטית ממשיכה לשלב הבא לבד"
+              title="The automatic pump advances to the next stage on its own"
             >
               {autoPilot ? <Zap className="h-3.5 w-3.5 text-amber-500" /> : <Circle className="h-3.5 w-3.5" />}
-              {autoPilot ? "משאבה אוטומטית: פועלת" : "משאבה אוטומטית: כבויה"}
+              {autoPilot ? "Auto-pump: on" : "Auto-pump: off"}
             </Button>
           </div>
           {hunt && !finished && (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant="outline">ציד #{hunt.id}</Badge>
+              <Badge variant="outline">Hunt #{hunt.id}</Badge>
               {hunt.generation > 1 ? (
                 <Badge className="gap-1 bg-amber-500/90 text-white">
-                  <Dna className="h-3 w-3" /> דור {hunt.generation} — זריעה מציד #{hunt.seededFrom}
+                  <Dna className="h-3 w-3" /> Generation {hunt.generation} — seeded from hunt #{hunt.seededFrom}
                 </Badge>
               ) : (
-                <Badge variant="secondary">דור 1 — ארסנל בסיסי</Badge>
+                <Badge variant="secondary">Generation 1 — base arsenal</Badge>
               )}
               {hunt.goal && (
                 <span className="max-w-full truncate" dir="auto">
@@ -526,7 +529,7 @@ export function LiveHuntPanel() {
           )}
           {failed && hunt?.error && (
             <div className="rounded-md border border-red-300/60 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400" dir="auto">
-              <span className="font-semibold">כשל: </span>
+              <span className="font-semibold">Failure: </span>
               {hunt.error}
             </div>
           )}
@@ -539,12 +542,12 @@ export function LiveHuntPanel() {
           <CardContent className="p-4">
             <div className="mb-3 flex items-center justify-between">
               <p className="flex items-center gap-1.5 text-sm font-bold">
-                <Zap className="h-4 w-4 text-amber-500" /> שרשרת ההרג — {stageOrder.length} שלבים
+                <Zap className="h-4 w-4 text-amber-500" /> The kill chain — {stageOrder.length} stages
               </p>
               {hunt && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="tabular-nums">{doneKeys.size}/{stageOrder.length}</span>
-                  <span>הושלמו</span>
+                  <span>completed</span>
                 </div>
               )}
             </div>
@@ -560,45 +563,45 @@ export function LiveHuntPanel() {
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Sparkles className="h-5 w-5 text-emerald-500" />
-                מסקנת מערכה — ציד #{hunt.id} הושלם
+                Campaign Summary — Hunt #{hunt.id} Completed
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-lg border p-3">
                 <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <Dna className="h-3 w-3" /> צמיחת ספרייה
+                  <Dna className="h-3 w-3" /> Library growth
                 </p>
                 <p className="mt-1 text-lg font-bold tabular-nums">
                   {hunt.dnaBefore} <span className="text-xs font-normal">→</span> {hunt.dnaAfter}
                 </p>
-                {bornDna > 0 && <Badge className="mt-1 bg-emerald-500 text-white">+{bornDna} גנים נולדו 🧬</Badge>}
+                {bornDna > 0 && <Badge className="mt-1 bg-emerald-500 text-white">+{bornDna} genes born 🧬</Badge>}
               </div>
               <div className="rounded-lg border p-3">
                 <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <Brain className="h-3 w-3" /> קריאות LLM
+                  <Brain className="h-3 w-3" /> LLM calls
                 </p>
                 <p className="mt-1 text-lg font-bold tabular-nums">{hunt.llmCalls}</p>
               </div>
               <div className="rounded-lg border p-3">
                 <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <Clock className="h-3 w-3" /> זמן מצטבר
+                  <Clock className="h-3 w-3" /> Total time
                 </p>
                 <p className="mt-1 text-lg font-bold tabular-nums">{fmtMs(hunt.elapsedMs)}</p>
               </div>
               <div className="rounded-lg border p-3">
                 <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <Target className="h-3 w-3" /> משימה שנוצרה
+                  <Target className="h-3 w-3" /> Mission created
                 </p>
                 <p className="mt-1 text-lg font-bold tabular-nums">#{hunt.missionId ?? "—"}</p>
                 {hunt.missionId && (
                   <Button variant="link" size="sm" className="mt-1 h-6 p-0 text-xs" onClick={() => setActiveTab("mission")}>
-                    פתח במבצעים ←
+                    Open in Mission Control →
                   </Button>
                 )}
               </div>
               {hunt.goal && (
                 <div className="col-span-2 rounded-lg border p-3 sm:col-span-4">
-                  <p className="text-[11px] text-muted-foreground">המטרה שנגזרה אוטומטית</p>
+                  <p className="text-[11px] text-muted-foreground">Auto-derived goal</p>
                   <p className="mt-1 text-sm leading-relaxed" dir="auto">
                     {hunt.goal}
                   </p>
@@ -615,10 +618,10 @@ export function LiveHuntPanel() {
           {stageOrder.map((key) => {
             const rec = doneKeys.get(key) ?? null;
             const isCurrent = hunt?.stageKey === key && running;
-            // שלב חוזר (execute) חייב להראות "פעיל" כשהוא באמצע ריצה — בעבר הרשומה
-            // מהפעם הקודמת ניצחה (rec ? done) והצינור הראה וי לא ירוק בזמן שהמשימה באוויר.
+            // A repeating stage (execute) must show "active" while it's mid-run — the record
+            // from the previous pass used to win (rec ? done) and the rail showed no green check while the mission was live.
             const visual: StageVisual = failed && hunt?.stageKey === key ? "failed" : isCurrent ? "active" : rec ? "done" : "pending";
-            if (!rec && !isCurrent && !(failed && hunt?.stageKey === key)) return null; // רק שלבים רלוונטיים — לא 8 כרטיסים אפורים
+            if (!rec && !isCurrent && !(failed && hunt?.stageKey === key)) return null; // only relevant stages — not 8 gray cards
             return <StageCard key={key} stageKey={key} title={titles[key] ?? key} visual={visual} rec={rec} />;
           })}
         </div>
@@ -629,7 +632,11 @@ export function LiveHuntPanel() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
-              <History className="h-4 w-4" /> צידים קודמים
+              <History className="h-4 w-4" /> Past Hunts
+              {/* items is capped at 12 — show the real total so the truncation is visible, not silent */}
+              {listQuery.data?.total != null && listQuery.data.total > items.length && (
+                <span className="font-normal text-muted-foreground">· {listQuery.data.total} total</span>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -644,21 +651,21 @@ export function LiveHuntPanel() {
                     <span className="text-xs font-semibold">#{item.id}</span>
                     {item.generation > 1 && (
                       <Badge variant="secondary" className="text-[10px]">
-                        דור {item.generation}
+                        Generation {item.generation}
                       </Badge>
                     )}
                     {item.status === "done" && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
                     {item.status === "failed" && <XCircle className="h-3.5 w-3.5 text-red-500" />}
                     {item.status === "running" && <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />}
                     <Badge variant="outline" className="text-[10px]">
-                      {item.stagesCount} שלבים
+                      {item.stagesCount} stages
                     </Badge>
                     {item.dnaAfter > item.dnaBefore && (
                       <Badge className="bg-emerald-500 text-white text-[10px]">+{item.dnaAfter - item.dnaBefore} DNA</Badge>
                     )}
                     {item.missionId && (
                       <Badge variant="secondary" className="text-[10px]">
-                        משימה #{item.missionId}
+                        Mission #{item.missionId}
                       </Badge>
                     )}
                     <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" dir="auto">

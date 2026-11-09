@@ -72,16 +72,16 @@ interface HarvestResult {
   totalLibrary: number;
   fieldDna: number;
   skippedAlreadyMined: number;
-  /** סבב 5 — שקיפות מלאה: מה קרה בגילוי ומה נכשל */
+  /** Round 5 — full transparency: what happened in discovery and what failed */
   queriesRun?: { q: string; count: number }[];
   queriesFailed?: { q: string; error: string }[];
   reposFailed?: { repo: string; error: string }[];
 }
 
 const KIND_META: Record<string, { label: string; emoji: string; color: string }> = {
-  skill: { label: "סקיל", emoji: "🧩", color: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300" },
-  command: { label: "פקודה", emoji: "⌨️", color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
-  agent: { label: "סוכן", emoji: "🤖", color: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
+  skill: { label: "Skill", emoji: "🧩", color: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300" },
+  command: { label: "Command", emoji: "⌨️", color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
+  agent: { label: "Agent", emoji: "🤖", color: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
   "claude-md": { label: "CLAUDE.md", emoji: "📘", color: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
   "agents-md": { label: "AGENTS.md", emoji: "📗", color: "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300" },
   "mcp-config": { label: "MCP", emoji: "🔌", color: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300" },
@@ -92,14 +92,14 @@ export function GenesisPanel() {
   const qc = useQueryClient();
   const [mineInput, setMineInput] = useState("");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  // תוכן מלא נטען עם-הצורך בלבד (הרשימה קלה — 40KB במקום 692KB)
+  // Full content is loaded on demand only (the list stays light — 40KB instead of 692KB)
   const [fullContents, setFullContents] = useState<Map<number, string>>(new Map());
   const [loadingContent, setLoadingContent] = useState<Set<number>>(new Set());
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(new Set());
   const [productContext, setProductContext] = useState("");
   const [chimera, setChimera] = useState<ChimeraResponse | null>(null);
   const [harvestResult, setHarvestResult] = useState<HarvestResult | null>(null);
-  // טיימר חי לקציר — פידבק שהצינור חי (בעבר: ספינר אילם למשך דקה שנראה כתקוע)
+  // Live harvest timer — feedback that the pipeline is alive (before: a mute spinner for a minute that looked stuck)
   const [harvestElapsed, setHarvestElapsed] = useState(0);
 
   // ---------- queries ----------
@@ -145,12 +145,12 @@ export function GenesisPanel() {
       void qc.invalidateQueries({ queryKey: ["dna-library"] });
       setSelectedRepos((s) => new Set([...s, data.repo]));
       if (data.note) {
-        toast({ title: "לא נמצא DNA", description: data.note });
+        toast({ title: "No DNA found", description: data.note });
       } else {
-        toast({ title: `DNA נכרה! 🧬`, description: `${data.repo}: ${data.artifacts.length} ארטיפקטים נשמרו לספרייה` });
+        toast({ title: `DNA mined! 🧬`, description: `${data.repo}: ${data.artifacts.length} artifacts saved to the library` });
       }
     },
-    onError: (e: Error) => toast({ title: "הכרייה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Mining failed", description: e.message, variant: "destructive" }),
   });
 
   const synthesize = useMutation({
@@ -162,13 +162,13 @@ export function GenesisPanel() {
     onSuccess: (data) => {
       setChimera(data);
       void qc.invalidateQueries({ queryKey: ["chimeras"] });
-      toast({ title: "הכימרה נוצרה! 🧬⚡", description: data.chimeraName });
+      toast({ title: "Chimera created! 🧬⚡", description: data.chimeraName });
     },
-    onError: (e: Error) => toast({ title: "יצירת הכימרה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Chimera creation failed", description: e.message, variant: "destructive" }),
   });
 
   const clearRepo = useMutation({
-    // ?all=1 מפורש למחיקת הכל — בעבר מחיקה בלי פרמטר נחשבה "הכל", ו-?repo= ריק דלף לשם
+    // ?all=1 is explicit for deleting everything — a delete without params used to mean "all", and an empty ?repo= leaked into it
     mutationFn: (repo: string | null) =>
       apiFetch(
         `/api/dna-library${repo ? `?repo=${encodeURIComponent(repo)}` : "?all=1"}`,
@@ -176,10 +176,10 @@ export function GenesisPanel() {
         { method: "DELETE" }
       ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["dna-library"] }),
-    onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
-  // ---------- קציר אוטונומי ----------
+  // ---------- autonomous harvest ----------
   const harvest = useMutation({
     mutationFn: () =>
       apiFetch<HarvestResult>("/api/harvest", token, {
@@ -191,14 +191,14 @@ export function GenesisPanel() {
       void qc.invalidateQueries({ queryKey: ["dna-library"] });
       void qc.invalidateQueries({ queryKey: ["missions"] });
       toast({
-        title: data.artifactsAdded > 0 ? `קציר מושלם! ⚡🧬 +${data.artifactsAdded} גנים` : "הקציר הסתיים",
-        description: `נכרו ${data.reposMined.length} מאגרים · הספרייה: ${data.totalLibrary} גנים`,
+        title: data.artifactsAdded > 0 ? `Harvest complete! ⚡🧬 +${data.artifactsAdded} genes` : "Harvest finished",
+        description: `${data.reposMined.length} repos mined · library: ${data.totalLibrary} genes`,
       });
     },
-    onError: (e: Error) => toast({ title: "הקציר נכשל", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Harvest failed", description: e.message, variant: "destructive" }),
   });
 
-  // טיימר חי בזמן קציר — אחרי ההגדרה (מונע TDZ) · פידבק שהצינור חי
+  // Live timer during harvest — defined after the mutation (avoids TDZ) · feedback that the pipeline is alive
   useEffect(() => {
     if (!harvest.isPending) {
       setHarvestElapsed(0);
@@ -217,9 +217,9 @@ export function GenesisPanel() {
         token
       );
       downloadFile(data.filename, data.content, "text/markdown");
-      toast({ title: "הקודקס יורד 📦", description: `${data.stats.artifacts} גנים מ-${data.stats.sources} מקורות` });
+      toast({ title: "Codex downloading 📦", description: `${data.stats.artifacts} genes from ${data.stats.sources} sources` });
     } catch (e) {
-      toast({ title: "הייצוא נכשל", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: "Export failed", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
 
@@ -240,7 +240,7 @@ export function GenesisPanel() {
       const row = await apiFetch<DnaArtifactRow>(`/api/dna-library/${id}`, token);
       setFullContents((m) => new Map(m).set(id, row.content ?? ""));
     } catch {
-      toast({ title: "טעינת התוכן נכשלה", variant: "destructive" });
+      toast({ title: "Failed to load content", variant: "destructive" });
     } finally {
       setLoadingContent((s) => {
         const n = new Set(s);
@@ -280,24 +280,24 @@ export function GenesisPanel() {
     if (!chimera) return;
     const bundle = [
       `# 🧬 Genesis Inject Bundle — ${chimera.chimeraName}`,
-      `> מקורות: ${chimera.sources.join(", ")} · ${new Date(chimera.generatedAt).toLocaleString("he-IL")}`,
+      `> Sources: ${chimera.sources.join(", ")} · ${new Date(chimera.generatedAt).toLocaleString("en-US")}`,
       ``,
-      `## התקנה`,
-      `העתק את הקובץ הבא אל: \`.claude/skills/${chimera.chimeraName}/SKILL.md\``,
+      `## Installation`,
+      `Copy the following file to: \`.claude/skills/${chimera.chimeraName}/SKILL.md\``,
       ``,
       `## SKILL.md`,
       ``,
       chimera.skillMd,
       ``,
-      chimera.principles.length ? `## עקרונות\n\n${chimera.principles.map((p) => `- ${p}`).join("\n")}` : "",
+      chimera.principles.length ? `## Principles\n\n${chimera.principles.map((p) => `- ${p}`).join("\n")}` : "",
       ``,
       chimera.workOrders.length
-        ? `## פקודות עבודה\n\n${chimera.workOrders
-            .map((w, i) => `### ${i + 1}. ${w.title} (${w.effort})\n${w.spec}\n\nפרומפט ל-Claude Code:\n\n${w.claudePrompt}`)
+        ? `## Work Orders\n\n${chimera.workOrders
+            .map((w, i) => `### ${i + 1}. ${w.title} (${w.effort})\n${w.spec}\n\nClaude Code prompt:\n\n${w.claudePrompt}`)
             .join("\n\n---\n\n")}`
         : "",
       ``,
-      chimera.breakthrough ? `## 🚀 הפריצה הבאה\n\n${chimera.breakthrough}` : "",
+      chimera.breakthrough ? `## 🚀 The Next Breakthrough\n\n${chimera.breakthrough}` : "",
     ].join("\n");
     downloadFile(`genesis-${chimera.chimeraName}.md`, bundle, "text/markdown");
   };
@@ -311,24 +311,24 @@ export function GenesisPanel() {
             <Dna className="h-6 w-6" aria-hidden />
           </div>
           <div>
-            <h2 className="text-lg font-bold">🧬 Genesis — מנוע העליונות</h2>
+            <h2 className="text-lg font-bold">🧬 Genesis — The Superiority Engine</h2>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              כורה את קבצי היכולות האמיתיים (<code dir="ltr" className="font-mono text-xs">.claude/skills</code>, פקודות, סוכנים, CLAUDE.md) מריפואי האליטה שזוהו,
-              שומר אותם בספריית DNA, וממזג אותם עם AI ל<strong>כימרה אחת עדיפה</strong> + פקודות עבודה מוכנות להרצה על המוצר שלנו.
-              זו הלולאה שהופכת מודיעין לכוח: <strong>כרה → מזג → הזרק → נצח</strong>.
+              Mines the real capability files (<code dir="ltr" className="font-mono text-xs">.claude/skills</code>, commands, agents, CLAUDE.md) from the elite repos it identifies,
+              stores them in the DNA library, and fuses them with AI into <strong>one superior chimera</strong> + work orders ready to run on our product.
+              This is the loop that turns intelligence into power: <strong>Mine → Merge → Inject → Win</strong>.
             </p>
           </div>
         </div>
       </section>
 
       {/* mine */}
-      <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="כריית DNA">
+      <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="DNA mining">
         <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-          <Hammer className="h-4 w-4" /> כרה DNA מריפו
+          <Hammer className="h-4 w-4" /> Mine DNA from a repo
         </p>
         <div className="flex flex-wrap gap-2">
           <Input
-            placeholder="github.com/owner/repo או owner/repo"
+            placeholder="github.com/owner/repo or owner/repo"
             value={mineInput}
             onChange={(e) => setMineInput(e.target.value)}
             onKeyDown={(e) => {
@@ -337,13 +337,13 @@ export function GenesisPanel() {
             }}
             dir="ltr"
             className="min-w-56 flex-1 font-mono text-sm"
-            aria-label="כתובת ריפו לכרייה"
+            aria-label="Repo URL to mine"
           />
           <Button
             onClick={() => {
               const full = parseInput(mineInput);
               if (!full) {
-                toast({ title: "כתובת לא תקינה", description: "הדבק github.com/owner/repo", variant: "destructive" });
+                toast({ title: "Invalid URL", description: "Paste github.com/owner/repo", variant: "destructive" });
                 return;
               }
               mine.mutate(full);
@@ -352,12 +352,12 @@ export function GenesisPanel() {
             className="gap-1.5 bg-gradient-to-l from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"
           >
             {mine.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Dna className="h-4 w-4" />}
-            כרה עכשיו
+            Mine now
           </Button>
         </div>
         {quickTargets.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <span>מהמעקב:</span>
+            <span>From watchlist:</span>
             {quickTargets.map((r) => (
               <button
                 key={r}
@@ -374,15 +374,15 @@ export function GenesisPanel() {
           </div>
         )}
 
-        {/* קציר אוטונומי */}
+        {/* autonomous harvest */}
         <div className="mt-3 rounded-lg border border-amber-300/70 bg-gradient-to-l from-amber-50 via-orange-50/60 to-background p-3 dark:border-amber-800 dark:from-amber-950/20">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="flex items-center gap-1.5 text-sm font-bold text-amber-700 dark:text-amber-300">
-                <Zap className="h-4 w-4" /> קציר אוטונומי — לחיצה אחת, הספרייה מתפוצצת
+                <Zap className="h-4 w-4" /> Autonomous harvest — one click and the library explodes
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                המנוע מגלה לבד מאגרי אליטה מחיפושי קוד 5.5+ (opus-5-5 · fable · opus-6 · 6-5 · 7), מדרג לפי עושר סקילים, וכורה את 6 העשירים ביותר
+                The engine discovers elite repos on its own from 5.5+ code searches (opus-5-5 · fable · opus-6 · 6-5 · 7), ranks them by skill richness, and mines the 6 richest
               </p>
             </div>
             <Button
@@ -392,11 +392,11 @@ export function GenesisPanel() {
             >
               {harvest.isPending ? (
                 <>
-                  <Loader2 className="ml-1.5 h-4 w-4 animate-spin" /> קוצר מהאליטה… <span className="tabular-nums opacity-80">{harvestElapsed}s</span>
+                  <Loader2 className="ml-1.5 h-4 w-4 animate-spin" /> Harvesting the elite… <span className="tabular-nums opacity-80">{harvestElapsed}s</span>
                 </>
               ) : (
                 <>
-                  <Zap className="ml-1.5 h-4 w-4" /> הרץ קציר אוטונומי
+                  <Zap className="ml-1.5 h-4 w-4" /> Run autonomous harvest
                 </>
               )}
             </Button>
@@ -404,7 +404,7 @@ export function GenesisPanel() {
           {harvestResult && (
             <div className="mt-3 rounded-md border bg-background p-3 text-xs">
               <p className="font-bold text-amber-700 dark:text-amber-300">
-                נתגלו {harvestResult.candidatesFound} מאגרי אליטה · נכרו {harvestResult.reposMined.length} · +{harvestResult.artifactsAdded} גנים חדשים · סה"כ {harvestResult.totalLibrary} בספרייה
+                {harvestResult.candidatesFound} elite repos discovered · {harvestResult.reposMined.length} mined · +{harvestResult.artifactsAdded} new genes · {harvestResult.totalLibrary} total in library
               </p>
               <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto">
                 {harvestResult.reposMined.map((r) => (
@@ -418,14 +418,14 @@ export function GenesisPanel() {
                   </li>
                 ))}
               </ul>
-              {/* שקיפות מלאה — שקודם נעלם בשקט (סבב 5) */}
+              {/* Full transparency — previously vanished silently (round 5) */}
               {(harvestResult.reposFailed?.length ?? 0) > 0 && (
                 <div className="mt-2 rounded border border-red-200 bg-red-50/50 p-2 dark:border-red-900 dark:bg-red-950/30">
-                  <p className="font-semibold text-red-700 dark:text-red-300">כרייה שנכשלה ({harvestResult.reposFailed?.length}):</p>
+                  <p className="font-semibold text-red-700 dark:text-red-300">Failed mining ({harvestResult.reposFailed?.length}):</p>
                   <ul className="mt-1 space-y-0.5">
                     {harvestResult.reposFailed?.map((f) => (
                       <li key={f.repo} className="font-mono text-[11px] text-red-700 dark:text-red-300" dir="ltr">
-                        {f.repo} — <span dir="rtl" className="font-sans">{f.error}</span>
+                        {f.repo} — <span className="font-sans">{f.error}</span>
                       </li>
                     ))}
                   </ul>
@@ -433,7 +433,7 @@ export function GenesisPanel() {
               )}
               {(harvestResult.queriesFailed?.length ?? 0) > 0 && (
                 <div className="mt-2 rounded border border-amber-200 bg-amber-50/50 p-2 dark:border-amber-900 dark:bg-amber-950/30">
-                  <p className="font-semibold text-amber-700 dark:text-amber-300">שאילתות גילוי שנפלו ({harvestResult.queriesFailed?.length}):</p>
+                  <p className="font-semibold text-amber-700 dark:text-amber-300">Failed discovery queries ({harvestResult.queriesFailed?.length}):</p>
                   <ul className="mt-1 space-y-0.5">
                     {harvestResult.queriesFailed?.map((f) => (
                       <li key={f.q} className="text-[11px] text-amber-800 dark:text-amber-300">
@@ -449,10 +449,10 @@ export function GenesisPanel() {
       </section>
 
       {/* DNA library */}
-      <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="ספריית DNA">
+      <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="DNA library">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <p className="flex items-center gap-1.5 text-sm font-semibold">
-            <BookOpen className="h-4 w-4" /> ספריית ה-DNA
+            <BookOpen className="h-4 w-4" /> DNA Library
             <Badge variant="secondary" className="font-mono">{lib?.items.length ?? 0}</Badge>
           </p>
           {(lib?.items.length ?? 0) > 0 && (
@@ -462,22 +462,22 @@ export function GenesisPanel() {
                 size="sm"
                 className="h-8 gap-1 border-violet-300 text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300"
                 onClick={() => void exportCodex()}
-                title="הורדת כל הספרייה כקודקס אחד מוכן להזרקה"
+                title="Download the whole library as one injection-ready codex"
               >
-                <Download className="h-3.5 w-3.5" /> ייצוא קודקס DNA
+                <Download className="h-3.5 w-3.5" /> Export DNA codex
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-8 gap-1 text-red-600 hover:bg-red-50 hover:text-red-700"
                 onClick={() => {
-                  // דרישת אישור — מחיקת כל הספרייה בלחיצה אחת בלי בקשת אישור הייתה אסון נתונים בהמתנה
-                  if (!window.confirm("למחוק את כל ספריית ה-DNA? כל הגנים מכל הריפואי יימחקו לצמיתות.")) return;
+                  // Confirmation required — deleting the whole library in one click with no confirmation was a data disaster waiting to happen
+                  if (!window.confirm("Delete the entire DNA library? Every gene from every repo will be permanently deleted.")) return;
                   clearRepo.mutate(null);
                   setSelectedRepos(new Set());
                 }}
               >
-                <Trash2 className="h-3.5 w-3.5" /> נקה הכל
+                <Trash2 className="h-3.5 w-3.5" /> Clear all
               </Button>
             </div>
           )}
@@ -488,8 +488,8 @@ export function GenesisPanel() {
         {!libLoading && grouped.size === 0 && (
           <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
             <p className="text-3xl">🧬</p>
-            <p className="mt-2 font-medium">הספרייה ריקה</p>
-            <p className="mt-1">כרה ריפו אליטה (למשל storytold/craft-anything) והגנים שלו ינחתו כאן</p>
+            <p className="mt-2 font-medium">The library is empty</p>
+            <p className="mt-1">Mine an elite repo (e.g. storytold/craft-anything) and its genes will land here</p>
           </div>
         )}
 
@@ -503,10 +503,10 @@ export function GenesisPanel() {
                     checked={selectedRepos.has(repo)}
                     onChange={() => toggleRepo(repo)}
                     className="h-4 w-4 accent-violet-600"
-                    aria-label={`בחר ${repo} לכימרה`}
+                    aria-label={`Select ${repo} for the chimera`}
                   />
                   <span className="font-mono">{repo}</span>
-                  <Badge variant="secondary" className="text-[10px]">{artifacts.length} גנים</Badge>
+                  <Badge variant="secondary" className="text-[10px]">{artifacts.length} genes</Badge>
                 </label>
                 <Button
                   variant="ghost"
@@ -514,7 +514,7 @@ export function GenesisPanel() {
                   className="h-7 gap-1 text-xs text-muted-foreground"
                   onClick={() => clearRepo.mutate(repo)}
                 >
-                  <Trash2 className="h-3 w-3" /> הסר ריפו
+                  <Trash2 className="h-3 w-3" /> Remove repo
                 </Button>
               </div>
               <div className="grid gap-2 md:grid-cols-2">
@@ -533,7 +533,7 @@ export function GenesisPanel() {
                             {a.path}
                           </p>
                         </div>
-                        <button onClick={() => toggleExpand(a.id)} className="shrink-0 rounded p-1 hover:bg-muted" aria-label={isOpen ? "סגור תוכן" : "הצג תוכן"}>
+                        <button onClick={() => toggleExpand(a.id)} className="shrink-0 rounded p-1 hover:bg-muted" aria-label={isOpen ? "Hide content" : "Show content"}>
                           {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                         </button>
                       </div>
@@ -547,8 +547,8 @@ export function GenesisPanel() {
                           className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-2.5 font-mono text-[10px] leading-relaxed text-emerald-100"
                         >
                           {loadingContent.has(a.id)
-                            ? "טוען תוכן מלא…"
-                            : (fullContents.get(a.id) ?? a.contentPreview ?? a.content ?? "אין תוכן שנשמר").slice(0, 4000)}
+                            ? "Loading full content…"
+                            : (fullContents.get(a.id) ?? a.contentPreview ?? a.content ?? "No saved content").slice(0, 4000)}
                         </pre>
                       )}
                     </div>
@@ -561,12 +561,12 @@ export function GenesisPanel() {
       </section>
 
       {/* chimera forge */}
-      <section className="rounded-xl border-2 border-violet-400/60 bg-gradient-to-b from-violet-50/60 to-background p-4 shadow-sm dark:border-violet-700 dark:from-violet-950/20" aria-label="פעולת כימרה">
+      <section className="rounded-xl border-2 border-violet-400/60 bg-gradient-to-b from-violet-50/60 to-background p-4 shadow-sm dark:border-violet-700 dark:from-violet-950/20" aria-label="Chimera operation">
         <p className="mb-1 flex items-center gap-1.5 text-sm font-bold">
-          <FlaskConical className="h-4 w-4 text-violet-600" /> פעולת הכימרה — מזג את הטוב מכולם
+          <FlaskConical className="h-4 w-4 text-violet-600" /> The chimera operation — merge the best of all of them
         </p>
         <p className="mb-3 text-xs text-muted-foreground">
-          בחר ריפואי מקור מהספרייה ({selectedRepos.size} נבחרו) → ה-AI ממזג את ה-DNA לסקיל על אחד + פקודות עבודה למוצר שלנו.
+          Select source repos from the library ({selectedRepos.size} selected) → the AI fuses their DNA into one superior skill + work orders for our product.
         </p>
 
         {grouped.size > 0 && (
@@ -591,9 +591,9 @@ export function GenesisPanel() {
         <textarea
           value={productContext}
           onChange={(e) => setProductContext(e.target.value)}
-          placeholder="הקשר המוצר שלנו (אופציונלי) — למשל: אנחנו בונים ממשק AI לניתוח נתונים, Next.js + Prisma…"
+          placeholder="Our product context (optional) — e.g.: we're building an AI data-analysis interface, Next.js + Prisma…"
           className="mb-3 min-h-16 w-full rounded-md border bg-background p-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-400"
-          aria-label="הקשר מוצר לכימרה"
+          aria-label="Product context for the chimera"
         />
 
         <Button
@@ -604,11 +604,11 @@ export function GenesisPanel() {
         >
           {synthesize.isPending ? (
             <>
-              <Loader2 className="h-5 w-5 animate-spin" /> ממזג גנים… (עד דקה)
+              <Loader2 className="h-5 w-5 animate-spin" /> Fusing genes… (up to a minute)
             </>
           ) : (
             <>
-              <Sparkles className="h-5 w-5" /> צור כימרה מ-{selectedRepos.size} ריפואים
+              <Sparkles className="h-5 w-5" /> Create chimera from {selectedRepos.size} repos
             </>
           )}
         </Button>
@@ -629,14 +629,14 @@ export function GenesisPanel() {
                   <Download className="h-3.5 w-3.5" /> SKILL.md
                 </Button>
                 <Button size="sm" className="gap-1.5 bg-violet-600 text-white hover:bg-violet-700" onClick={exportBundle}>
-                  <Download className="h-3.5 w-3.5" /> חבילת הזרקה מלאה
+                  <Download className="h-3.5 w-3.5" /> Full injection bundle
                 </Button>
               </div>
             </div>
 
             {chimera.principles.length > 0 && (
               <div>
-                <p className="mb-1.5 text-sm font-semibold">🧭 עקרונות שחולצו</p>
+                <p className="mb-1.5 text-sm font-semibold">🧭 Extracted Principles</p>
                 <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
                   {chimera.principles.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
@@ -644,7 +644,7 @@ export function GenesisPanel() {
             )}
 
             <div>
-              <p className="mb-1.5 text-sm font-semibold">📜 SKILL.md — מוכן להזרקה ל-.claude/skills/{chimera.chimeraName}/</p>
+              <p className="mb-1.5 text-sm font-semibold">📜 SKILL.md — ready to inject into .claude/skills/{chimera.chimeraName}/</p>
               <pre dir="ltr" className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-emerald-100">
                 {chimera.skillMd}
               </pre>
@@ -652,7 +652,7 @@ export function GenesisPanel() {
 
             {chimera.workOrders.length > 0 && (
               <div>
-                <p className="mb-1.5 text-sm font-semibold">🔨 פקודות עבודה — מוכנות להדבקה ב-Claude Code</p>
+                <p className="mb-1.5 text-sm font-semibold">🔨 Work Orders — ready to paste into Claude Code</p>
                 <div className="grid gap-2">
                   {chimera.workOrders.map((w, i) => (
                     <div key={i} className="rounded-lg border p-3">
@@ -674,7 +674,7 @@ export function GenesisPanel() {
 
             {chimera.breakthrough && (
               <div className="rounded-lg border-2 border-amber-400/60 bg-amber-50/60 p-3 dark:border-amber-700 dark:bg-amber-950/30">
-                <p className="text-sm font-bold text-amber-700 dark:text-amber-300">🚀 הפריצה הבאה</p>
+                <p className="text-sm font-bold text-amber-700 dark:text-amber-300">🚀 The Next Breakthrough</p>
                 <p className="mt-1 text-sm leading-relaxed">{chimera.breakthrough}</p>
               </div>
             )}
@@ -684,7 +684,7 @@ export function GenesisPanel() {
         {/* chimera history */}
         {(chimeraHistory?.items.length ?? 0) > 0 && (
           <div className="mt-4">
-            <p className="mb-1.5 text-xs font-semibold text-muted-foreground">כימרות קודמות:</p>
+            <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Past chimeras:</p>
             <div className="flex flex-wrap gap-1.5">
               {chimeraHistory!.items.map((c) => (
                 <button

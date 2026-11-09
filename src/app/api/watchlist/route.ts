@@ -17,8 +17,8 @@ interface WatchBody {
   notes?: string | null;
 }
 
-// הגבלות קלט — בעבר ללא תקרית: מחרוזות ארוכות ללא גבול נכנסו ל-DB וזו היתה
-// נקודת שחיתות פוטנציאלית (payload גדול מהלקוח לצמיתות ב-DB).
+// Input limits — previously uncapped: long unbounded strings entered the DB and this was a
+// potential corruption point (a large payload from the client permanently in the DB).
 const MAX_TEXT = 1000;
 const cap = (v: string | null | undefined, max = MAX_TEXT): string | null =>
   typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
@@ -29,7 +29,7 @@ export async function GET() {
     return NextResponse.json({ items });
   } catch (e) {
     console.error("watchlist GET failed", e);
-    return NextResponse.json({ error: "טעינת הרשימה נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load the list" }, { status: 500 });
   }
 }
 
@@ -37,11 +37,11 @@ export async function POST(req: NextRequest) {
   try {
     const b = (await req.json()) as WatchBody;
     if (!b.fullName || !b.owner || !b.name || !b.url) {
-      return NextResponse.json({ error: "חסרים שדות חובה (fullName/owner/name/url)" }, { status: 400 });
+      return NextResponse.json({ error: "Required fields are missing (fullName/owner/name/url)" }, { status: 400 });
     }
-    // אימות בסיסי של ה-URL — הוא מוצג כ-<a href> ב-UI; בעבר התקבל כל ערך.
+    // Basic URL validation — it is rendered as an <a href> in the UI; previously any value was accepted.
     if (!/^https:\/\/github\.com\//.test(b.url)) {
-      return NextResponse.json({ error: "url חייב להיות קישור github.com (https)" }, { status: 400 });
+      return NextResponse.json({ error: "url must be a github.com link (https)" }, { status: 400 });
     }
     const safe: WatchBody = {
       ...b,
@@ -50,9 +50,9 @@ export async function POST(req: NextRequest) {
       name: b.name.slice(0, 200),
       url: b.url.slice(0, 500),
     };
-    // עדכון סלקטיבי אמיתי: שדה שלא נשלח — לא נדרס. וגם: ערך null מפורש לא מוחק
-    // נתונים קיימים — בעבר הלקוח שלח models: null (מסלול חיפוש) ומחק בשקט מודלים
-    // שנשמרו מהניתוח. רק ערך אמיתי (לא ריק/לא null) מעדכן.
+    // A truly selective update: a field that was not sent — is not overwritten. And also: an explicit null value
+    // does not delete existing data — previously the client sent models: null (search flow) and silently deleted
+    // models saved from the analysis. Only a real value (non-empty/non-null) updates.
     const item = await db.savedRepo.upsert({
       where: { fullName: safe.fullName },
       update: {
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ item });
   } catch (e) {
     console.error("watchlist POST failed", e);
-    return NextResponse.json({ error: "השמירה נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Save failed" }, { status: 500 });
   }
 }
 
@@ -87,17 +87,17 @@ export async function DELETE(req: NextRequest) {
   try {
     const id = Number(req.nextUrl.searchParams.get("id"));
     if (!Number.isFinite(id) || id <= 0) {
-      return NextResponse.json({ error: "נדרש id תקין" }, { status: 400 });
+      return NextResponse.json({ error: "A valid id is required" }, { status: 400 });
     }
     await db.savedRepo.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (e) {
-    // P2025 = הרשומה לא נמצאה → 404 אמיתי. כל דבר אחר = 500 עם לוג — בעבר כל שגיאה
-    // הוחזרה כ-400 שקרי ובלי לוג.
+    // P2025 = entry not found → a real 404. Anything else = 500 with a log — previously every error
+    // was returned as a false 400 and without a log.
     if (isPrismaNotFound(e)) {
-      return NextResponse.json({ error: "הפריט לא נמצא" }, { status: 404 });
+      return NextResponse.json({ error: "Item not found" }, { status: 404 });
     }
     console.error("watchlist DELETE failed", e);
-    return NextResponse.json({ error: "המחיקה נכשלה" }, { status: 500 });
+    return NextResponse.json({ error: "Deletion failed" }, { status: 500 });
   }
 }

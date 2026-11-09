@@ -47,14 +47,14 @@ export async function GET(req: NextRequest) {
   const owner = req.nextUrl.searchParams.get("owner")?.trim();
   const repo = req.nextUrl.searchParams.get("repo")?.trim();
   if (!owner || !repo || !/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) {
-    return NextResponse.json({ error: "נדרש owner ו-repo תקינים" }, { status: 400 });
+    return NextResponse.json({ error: "Valid owner and repo are required" }, { status: 400 });
   }
   const full = `${owner}/${repo}`;
   const warnings: string[] = [];
 
   try {
     const meta = await ghFetch<GhRepoMeta>(`/repos/${full}`, token);
-    // הטוקן מהכותרת עבר אימות מול GitHub — נשמר לשימוש השרת
+    // The token from the header was validated against GitHub — saved for server use
     await captureTokenFrom(req);
 
     const [languagesR, contribR, readmeR, treeR] = await Promise.allSettled([
@@ -71,9 +71,9 @@ export async function GET(req: NextRequest) {
     const treeOk = treeR.status === "fulfilled";
     const tree = treeOk ? treeR.value.tree ?? [] : [];
     if (!treeOk) {
-      warnings.push("קריאת עץ הקבצים נכשלה (מכסה/מאגר ענק) — מופעלת סריקת נתיבים סטנדרטיים");
+      warnings.push("Failed to read the file tree (rate limit/huge repo) — falling back to standard path scanning");
     } else if (treeR.value.truncated) {
-      warnings.push("עץ הקבצים חלקי (מאגר ענק מאוד) — ייתכן שחסרים קבצים מהסריקה");
+      warnings.push("File tree is partial (very large repo) — some files may be missing from the scan");
     }
     const paths = tree.map((t) => t.path);
 
@@ -86,8 +86,8 @@ export async function GET(req: NextRequest) {
         claudeFiles.push({
           path: p,
           kind,
-          // קידוד נתיב — בעבר הוכנס גולמי; רווחים/#/? בשמות קבצים שברו את הקישור
-          // (אותו תיקון שכבר קיים ב-dna-miner.ts, כאן הוחל גם על הניתוח)
+          // Path encoding — previously inserted raw; spaces/#/? in file names broke the link
+          // (same fix already present in dna-miner.ts, now applied to analysis too)
           url: `https://github.com/${full}/blob/${meta.default_branch}/${p.split("/").map(encodeURIComponent).join("/")}`,
         });
       }
@@ -109,9 +109,9 @@ export async function GET(req: NextRequest) {
     }
 
     // ---------- sequential content fetcher (avoids secondary rate limits) ----------
-    // ghFetchRaw ולא ghFetch — ghFetch מפעיל res.json() על קבצים גלמיים:
-    // markdown זרק SyntaxError → null, ו-JSON התרגם ל-"[object Object]".
-    // זה הרג את כל זיהוי המודלים-מתוכן (CLAUDE.md/settings/package.json) לחלוטין.
+    // ghFetchRaw instead of ghFetch — ghFetch runs res.json() on raw files:
+    // markdown threw SyntaxError → null, and JSON became "[object Object]".
+    // That killed all content-based model detection (CLAUDE.md/settings/package.json) entirely.
     const fetchRaw = async (path: string): Promise<string | null> => {
       try {
         const raw = await ghFetchRaw(
@@ -146,7 +146,7 @@ export async function GET(req: NextRequest) {
       { key: "requirements", guesses: ["requirements.txt"] },
       { key: "envExample", guesses: [".env.example"] },
     ];
-    // (בעבר: כאן מולא w.path מ-guesses[0] בלבד — הלולאה שלמטה מיישמת את כל הניחושים)
+    // (Previously: w.path was filled from guesses[0] only — the loop below applies all the guesses)
     const contents: Record<string, string> = {};
     for (const w of wanted) {
       if (w.path) {
@@ -157,8 +157,8 @@ export async function GET(req: NextRequest) {
         }
         continue;
       }
-      // העץ החטיא את הקובץ — בעבר נוסתה רק הניחוש הראשון (guesses[0]);
-      // CLAUDE.local.md ו-claude.md לא נוסו לעולם למרות שהוגדרו בתוכנית.
+      // The tree missed the file — previously only the first guess (guesses[0]) was tried;
+      // CLAUDE.local.md and claude.md were never tried despite being defined in the plan.
       const plan = guessPlan.find((g) => g.key === w.key);
       if (!plan) continue;
       for (const g of plan.guesses) {
@@ -204,38 +204,38 @@ export async function GET(req: NextRequest) {
       try {
         const pkg = JSON.parse(contents.pkg) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
         const all = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-        if (all.includes("@anthropic-ai/sdk")) { depsFound.push("@anthropic-ai/sdk"); evidence.push({ kind: "dep", label: "SDK רשמי של Anthropic (@anthropic-ai/sdk)", weight: 12 }); }
-        if (all.includes("@anthropic-ai/claude-code")) { depsFound.push("@anthropic-ai/claude-code"); evidence.push({ kind: "dep", label: "תלות ב-Claude Code", weight: 15 }); }
+        if (all.includes("@anthropic-ai/sdk")) { depsFound.push("@anthropic-ai/sdk"); evidence.push({ kind: "dep", label: "Official Anthropic SDK (@anthropic-ai/sdk)", weight: 12 }); }
+        if (all.includes("@anthropic-ai/claude-code")) { depsFound.push("@anthropic-ai/claude-code"); evidence.push({ kind: "dep", label: "Claude Code dependency", weight: 15 }); }
         if (all.includes("@anthropic-ai/claude-agent-sdk")) { depsFound.push("@anthropic-ai/claude-agent-sdk"); evidence.push({ kind: "dep", label: "Claude Agent SDK", weight: 15 }); }
-        if (all.includes("@ai-sdk/anthropic")) { depsFound.push("@ai-sdk/anthropic"); evidence.push({ kind: "dep", label: "Vercel AI SDK עם פרוביידר Anthropic", weight: 10 }); }
+        if (all.includes("@ai-sdk/anthropic")) { depsFound.push("@ai-sdk/anthropic"); evidence.push({ kind: "dep", label: "Vercel AI SDK with Anthropic provider", weight: 10 }); }
         if (all.includes("@langchain/anthropic")) { depsFound.push("@langchain/anthropic"); evidence.push({ kind: "dep", label: "LangChain Anthropic", weight: 10 }); }
       } catch { /* invalid package.json */ }
     }
     const pyHay = `${contents.pyproject ?? ""}\n${contents.requirements ?? ""}`.toLowerCase();
     if (/\banthropic\b/.test(pyHay) && !/langchain-anthropic/.test(pyHay)) {
       depsFound.push("anthropic (python)");
-      evidence.push({ kind: "dep", label: "ספריית anthropic בפייתון", weight: 12 });
+      evidence.push({ kind: "dep", label: "anthropic Python library", weight: 12 });
     }
-    if (pyHay.includes("langchain-anthropic")) { depsFound.push("langchain-anthropic"); evidence.push({ kind: "dep", label: "LangChain Anthropic (פייתון)", weight: 10 }); }
-    if (pyHay.includes("claude-code-sdk") || pyHay.includes("claude_agent_sdk")) { depsFound.push("claude-code-sdk"); evidence.push({ kind: "dep", label: "Claude Code SDK (פייתון)", weight: 15 }); }
+    if (pyHay.includes("langchain-anthropic")) { depsFound.push("langchain-anthropic"); evidence.push({ kind: "dep", label: "LangChain Anthropic (Python)", weight: 10 }); }
+    if (pyHay.includes("claude-code-sdk") || pyHay.includes("claude_agent_sdk")) { depsFound.push("claude-code-sdk"); evidence.push({ kind: "dep", label: "Claude Code SDK (Python)", weight: 15 }); }
 
     // ---------- structure evidence ----------
-    if (contents.claudeMd) evidence.push({ kind: "claude-md", label: "קובץ CLAUDE.md — הוראות פיתוח סריאלי עם Claude", weight: 8, url: claudeFiles.find((f) => f.kind === "claude-md")?.url });
-    if (contents.settings) evidence.push({ kind: "settings", label: ".claude/settings.json — הגדרות Claude Code", weight: 4 });
-    if (commands.length > 0) evidence.push({ kind: "commands", label: `${commands.length} פקודות מותאמות ב-.claude/commands`, weight: Math.min(10, commands.length * 2) });
-    if (agents.length > 0) evidence.push({ kind: "agents", label: `${agents.length} סוכני משנה ב-.claude/agents`, weight: 5 });
+    if (contents.claudeMd) evidence.push({ kind: "claude-md", label: "CLAUDE.md file — serial development instructions with Claude", weight: 8, url: claudeFiles.find((f) => f.kind === "claude-md")?.url });
+    if (contents.settings) evidence.push({ kind: "settings", label: ".claude/settings.json — Claude Code settings", weight: 4 });
+    if (commands.length > 0) evidence.push({ kind: "commands", label: `${commands.length} custom commands in .claude/commands`, weight: Math.min(10, commands.length * 2) });
+    if (agents.length > 0) evidence.push({ kind: "agents", label: `${agents.length} subagents in .claude/agents`, weight: 5 });
 
     let mcpServers: string[] = [];
     if (contents.mcp) {
       try {
         const mcp = JSON.parse(contents.mcp) as { mcpServers?: Record<string, unknown> };
         mcpServers = Object.keys(mcp.mcpServers ?? {});
-        if (mcpServers.length > 0) evidence.push({ kind: "mcp", label: `שרתי MCP: ${mcpServers.join(", ")}`, weight: 6 });
+        if (mcpServers.length > 0) evidence.push({ kind: "mcp", label: `MCP servers: ${mcpServers.join(", ")}`, weight: 6 });
       } catch { /* invalid */ }
     }
     if (contents.envExample && /ANTHROPIC_API_KEY\s*=/.test(contents.envExample)) {
-      // הידוק: בעבר די היה ב-/anthropic|claude/i — שורת CLAUDE_CODE_PORT= זכתה ב-12 נקודות "חיבור API בתשלום"
-      evidence.push({ kind: "env", label: "ANTHROPIC_API_KEY ב-.env.example — חיבור API בתשלום", weight: 12 });
+      // Tightened: previously /anthropic|claude/i was enough — a CLAUDE_CODE_PORT= line earned 12 points for "paid API connection"
+      evidence.push({ kind: "env", label: "ANTHROPIC_API_KEY in .env.example — paid API connection", weight: 12 });
     }
 
     // ---------- settings.json model scan ----------
@@ -252,8 +252,8 @@ export async function GET(req: NextRequest) {
     const tokenMentions = [...readme.matchAll(/\b\d[\d,.]*\s?[km]?\s?(?:tokens|token)\b/gi)].map((m) => m[0]).slice(0, 5);
     const claudeCodeMentions = (readme.match(/claude[ -]?code/gi) ?? []).length;
     const builtWithClaude = /built with claude|powered by claude|developed with claude|created with claude|written with claude/i.test(readme);
-    if (builtWithClaude) evidence.push({ kind: "readme", label: "ה-README מצהיר: נבנה עם Claude", weight: 6 });
-    if (priceMentions.length > 0) evidence.push({ kind: "cost", label: `אזכורי עלות ב-README: ${priceMentions.slice(0, 3).join(", ")}`, weight: 5 });
+    if (builtWithClaude) evidence.push({ kind: "readme", label: "README declares: built with Claude", weight: 6 });
+    if (priceMentions.length > 0) evidence.push({ kind: "cost", label: `Cost mentions in README: ${priceMentions.slice(0, 3).join(", ")}`, weight: 5 });
 
     // ---------- in-repo code search for model strings ----------
     const models = new Map<string, ModelHit>();
@@ -276,21 +276,21 @@ export async function GET(req: NextRequest) {
     };
 
     if (token) {
-      // רק מודלים מזכים (5.5+) — משפחת 4.x לא נסרקת ולא נחשבת כלל.
-      // סדר ארוך-קודם + דילוג מזהים שנכללו: חיפוש מזוהה הוא תת-מחרוזת —
-      // "claude-opus-6" תפס גם מאגרים של 6-5 בלבד, ודיווח שקרי על Opus 6.
+      // Only qualifying models (5.5+) — the 4.x family is not scanned or counted at all.
+      // Longest-first order + skipping subsumed identifiers: a searched identifier is a substring —
+      // "claude-opus-6" also caught repos with only 6-5 (claude-opus-6-5), falsely reporting Opus 6.
       const kws: [string, string, number][] = QUALIFYING_MODELS.map((m) => [
         m.searchStrings[0],
         m.label,
         m.weight,
       ] as [string, string, number]).sort((a, b) => b[0].length - a[0].length);
-      const foundLong: string[] = []; // מזהים שנמצאו באמת — מזהה קצר יותר שהוא תת-מחרוזת שלהם לא ייחפש
+      const foundLong: string[] = []; // identifiers actually found — a shorter identifier that is their substring will not be searched
       for (let i = 0; i < kws.length; i++) {
         const [kw, label, weight] = kws[i];
         const lowerKw = kw.toLowerCase();
-        if (foundLong.some((f) => f.toLowerCase().includes(lowerKw))) continue; // מיוצג כבר ע"י מזהה ארוך יותר
+        if (foundLong.some((f) => f.toLowerCase().includes(lowerKw))) continue; // already represented by a longer identifier
         try {
-          // backoff מובנה במקום טיפול-403 ידני + 1.5s קבוע גם אחרי השאילתה האחרונה
+          // Built-in backoff instead of manual 403 handling + a fixed 1.5s even after the last query
           const r = await ghSearchWithBackoff<{ total_count: number }>(
             `/search/code?q=${encodeURIComponent(`repo:${full} "${kw}"`)}&per_page=1`,
             token
@@ -301,7 +301,7 @@ export async function GET(req: NextRequest) {
           }
         } catch (e) {
           if (e instanceof GhError && [403, 429].includes(e.status)) {
-            warnings.push("חיפוש הקוד הושהה — מכסת החיפוש נגמרה זמנית");
+            warnings.push("Code search paused — search rate limit temporarily exhausted");
             break;
           }
           // 422 = qualifier problem etc — continue silently
@@ -309,10 +309,10 @@ export async function GET(req: NextRequest) {
         if (i < kws.length - 1) await new Promise((res) => setTimeout(res, 1500));
       }
     } else {
-      warnings.push("ללא טוקן לא מבוצע חיפוש קוד פנימי-מאגרי (רק סריקת קבצים מטא-נתונים)");
+      warnings.push("Without a token, no in-repo code search is performed (metadata file scanning only)");
     }
 
-    // זיהוי מטקסטים: settings / CLAUDE.md / README — הפרדה מלאה בין מזכים (5.5+) לחסומים (4.x ומטה)
+    // Text-based detection: settings / CLAUDE.md / README — full separation between qualifying (5.5+) and blocked (4.x and below)
     const textDetection = detectClaudeModels(
       `${settingsModelText} ${contents.claudeMd ?? ""} ${readme.slice(0, 4000)}`
     );
@@ -320,7 +320,7 @@ export async function GET(req: NextRequest) {
       const source = settingsModelText.toLowerCase().includes(m.id) ? "settings" : contents.claudeMd?.toLowerCase().includes(m.id) ? "claude-md" : "readme";
       addModel(m.id, m.label, m.weight, source, undefined, true, m.version);
     }
-    // חסומים (4.x ומטה): מוצגים לשקיפות בלבד — משקל 0, לא נכללים בציון
+    // Blocked (4.x and below): shown for transparency only — weight 0, not counted in the score
     for (const b of textDetection.blocked) {
       const source = settingsModelText.toLowerCase().includes(b.id) ? "settings" : contents.claudeMd?.toLowerCase().includes(b.id) ? "claude-md" : "readme";
       addModel(b.id, b.label, 0, source, undefined, false, b.version);
@@ -331,11 +331,11 @@ export async function GET(req: NextRequest) {
     const blockedList = modelList.filter((m) => !m.qualifying);
 
     // ---------- scoring ----------
-    // ציון מודלים: מזכים בלבד. אין 5.5+ → אפס נקודות מודל.
+    // Model score: qualifying only. No 5.5+ → zero model points.
     const modelScore = qualifyingList.length > 0 ? Math.min(45, qualifyingList[0].weight) : 0;
-    // ראיות תשלום אמיתיות בלבד: תלות-SDK (dep), מפתח API (env), שרתי MCP, אזכורי עלות.
-    // בעבר: כל הראיות — כולל מבניות (CLAUDE.md/פקודות/סוכנים/README) — נספרו לעמודה
-    // "ראיות תשלום ו-API", ומאגר מבני טהור הגיע ל-30/30 בלי שום חיבור בתשלום.
+    // Only genuine payment evidence: SDK dependencies (dep), API key (env), MCP servers, cost mentions.
+    // Previously: all evidence — including structural (CLAUDE.md/commands/agents/README) — counted toward the
+    // "payment & API evidence" column, and a purely structural repo reached 30/30 with no paid connection at all.
     const paidKinds = new Set(["dep", "env", "mcp", "cost"]);
     const paidScore = Math.min(30, evidence.filter((e) => paidKinds.has(e.kind)).reduce((s, e) => s + e.weight, 0));
     const tractionScore = Math.min(
@@ -343,9 +343,9 @@ export async function GET(req: NextRequest) {
       satScore(meta.stargazers_count, 15, 10000) + satScore(meta.forks_count, 5, 1000) + satScore(contributors, 5, 30)
     );
     const usageScore = Math.min(15, priceMentions.length * 3 + tokenMentions.length * 2 + Math.min(claudeCodeMentions, 4) + (builtWithClaude ? 3 : 0));
-    // חוק הסף — רק ריפו שמוכיח 5.5+ יכול להגיע לטירות הפרימיום (זהב/אליטה):
-    // בלי מודל מזכה הציון מוגבל ל-35 (מתחת לכסף) — ריפו עם רק 4.x לא יכול להיראות "זהב"
-    // (בעבר: paid+traction+usage הגיעו ל-70/100 על ריפו של 4.x בלבד)
+    // Threshold rule — only a repo that proves 5.5+ can reach the premium tiers (gold/elite):
+    // without a qualifying model the score is capped at 35 (below the money) — a repo with only 4.x cannot look "gold"
+    // (Previously: paid+traction+usage reached 70/100 on a 4.x-only repo)
     const meetsModelThreshold = qualifyingList.length > 0;
     const rawTotal = Math.max(0, modelScore + paidScore + tractionScore + usageScore);
     const total = Math.min(100, meetsModelThreshold ? rawTotal : Math.min(rawTotal, 35));
@@ -361,30 +361,30 @@ export async function GET(req: NextRequest) {
     // ---------- insights (what can we learn / take) ----------
     const insights: string[] = [];
     if (!meetsModelThreshold) {
-      // פסיקה מחמירה: אין מודל 5.5+ → לא פרויקט פרימיום לפי הקריטריון
+      // Strict verdict: no 5.5+ model → not a premium project per the criterion
       insights.push(
         blockedList.length > 0
-          ? `⛔ לא עומד בסף: זוהו רק מודלים חסומים (${blockedList.map((b) => b.label).join(", ")}) — הקריטריון מחייב 5.5 ומעלה (Opus 5.5, Fable, Opus 6+)`
-          : `⛔ לא עומד בסף: לא זוהה אף מודל 5.5+ — הקריטריון מחייב Opus 5.5, Fable או חדש יותר`
+          ? `⛔ Does not meet the threshold: only blocked models detected (${blockedList.map((b) => b.label).join(", ")}) — the criterion requires 5.5 and above (Opus 5.5, Fable, Opus 6+)`
+          : `⛔ Does not meet the threshold: no 5.5+ model detected — the criterion requires Opus 5.5, Fable, or newer`
       );
-      // שקיפות: מה בדיוק חתך את הציון
-      insights.push(`ציון גולמי ${rawTotal} חתוך ל-${total} — בלי הוכחת מודל 5.5+ לא מוענקות טירות פרימיום`);
+      // Transparency: what exactly cut the score
+      insights.push(`Raw score ${rawTotal} cut to ${total} — without proof of a 5.5+ model, premium tiers are not granted`);
     } else {
-      insights.push(`✅ עומד בסף המודלים (5.5+): ${qualifyingList.map((m) => m.label).join(", ")}${blockedList.length > 0 ? ` — וגם אזכורים חסומים של ${blockedList.map((b) => b.label).join(", ")} (לא נחשבים)` : ""}`);
+      insights.push(`✅ Meets the model threshold (5.5+): ${qualifyingList.map((m) => m.label).join(", ")}${blockedList.length > 0 ? ` — plus blocked mentions of ${blockedList.map((b) => b.label).join(", ")} (not counted)` : ""}`);
     }
-    if (contents.claudeMd) insights.push("יש CLAUDE.md — שווה ללמוד את מבנה ההוראות, הגבולות וזרימות העבודה שהוגדרו שם ולהתאים אותם לממשק שלנו");
-    if (commands.length > 0) insights.push(`${commands.length} פקודות מותאמות (${commands.slice(0, 5).join(", ")}) — אפשר לאמץ את הרעיונות לפקודות דומות`);
-    if (agents.length > 0) insights.push(`${agents.length} סוכני משנה מוגדרים (${agents.slice(0, 5).join(", ")}) — ארכיטקטורת multi-agent מוכחה לחיקוי`);
-    if (mcpServers.length > 0) insights.push(`שרתי MCP פעילים (${mcpServers.join(", ")}) — אינטגרציות כלים שאפשר לחבר גם אצלנו`);
-    if (qualifyingList.some((m) => m.weight >= 40)) insights.push("משתמש במודל דגל 5.5+ (Opus 5.5/Fable ומעלה) — הפרויקט מוכיח שהמשימות מצדיקות מודל יקר; כדאי לבחון אילו זרימות מנצלות את זה");
-    if (depsFound.length > 0) insights.push(`ערימת SDK: ${depsFound.join(", ")} — נקודת פתיחה טובה להבנת האינטגרציה`);
-    if (priceMentions.length > 0 || tokenMentions.length > 0) insights.push("יש אזכורי עלות/טוקנים ב-README — אינדיקציה לשימוש אמיתי בתשלום בהיקף משמעותי");
+    if (contents.claudeMd) insights.push("Has a CLAUDE.md — worth studying its instruction structure, boundaries, and defined workflows and adapting them to our interface");
+    if (commands.length > 0) insights.push(`${commands.length} custom commands (${commands.slice(0, 5).join(", ")}) — the ideas can be adopted for similar commands`);
+    if (agents.length > 0) insights.push(`${agents.length} subagents defined (${agents.slice(0, 5).join(", ")}) — a proven multi-agent architecture worth imitating`);
+    if (mcpServers.length > 0) insights.push(`Active MCP servers (${mcpServers.join(", ")}) — tool integrations we could hook up as well`);
+    if (qualifyingList.some((m) => m.weight >= 40)) insights.push("Uses a flagship 5.5+ model (Opus 5.5/Fable and above) — the project proves its tasks justify an expensive model; worth examining which workflows exploit this");
+    if (depsFound.length > 0) insights.push(`SDK stack: ${depsFound.join(", ")} — a good starting point for understanding the integration`);
+    if (priceMentions.length > 0 || tokenMentions.length > 0) insights.push("Cost/token mentions in the README — an indication of real paid usage at significant scale");
     if (contributors > 5) {
-      // ה-API חותך ב-100 — בעבר מאגר עם 500 תורמים דווח כ"100 תורמים"
+      // The API caps at 100 — previously a repo with 500 contributors was reported as "100 contributors"
       insights.push(
         contributors >= 100
-          ? "100+ תורמים (חיתוך של ה-API) — פרויקט חי עם קהילה, לא ניסוי אישי"
-          : `${contributors} תורמים — פרויקט חי עם קהילה, לא ניסוי אישי`
+          ? "100+ contributors (API cap) — a living project with a community, not a personal experiment"
+          : `${contributors} contributors — a living project with a community, not a personal experiment`
       );
     }
 
@@ -428,10 +428,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(resp);
   } catch (e) {
     if (e instanceof GhError) {
-      const friendly = e.status === 404 ? `המאגר ${full} לא נמצא ב-GitHub (404) — בדוק את הכתובת` : e.message;
+      const friendly = e.status === 404 ? `Repository ${full} not found on GitHub (404) — check the address` : e.message;
       return NextResponse.json({ error: friendly }, { status: e.status });
     }
     console.error("analyze failed", e);
-    return NextResponse.json({ error: "הניתוח נכשל. נסה שוב." }, { status: 500 });
+    return NextResponse.json({ error: "Analysis failed. Try again." }, { status: 500 });
   }
 }

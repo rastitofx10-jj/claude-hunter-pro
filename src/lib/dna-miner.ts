@@ -1,7 +1,7 @@
 // ============================================================
-// כורה DNA — חילוץ יכולות Claude חיות מריפואי אליטה
-// סורק .claude/, CLAUDE.md, AGENTS.md ומוריד את התוכן האמיתי.
-// זו השכבה שהופכת "ריפו מוצלח" לגנים ניידים להשתלה.
+// DNA miner — extracting live Claude capabilities from elite repos
+// Scans .claude/, CLAUDE.md, AGENTS.md and downloads the real content.
+// This is the layer that turns a "successful repo" into portable genes for transplantation.
 // ============================================================
 
 import { ghFetch, ghFetchRaw, mapLimit } from "./github";
@@ -22,7 +22,7 @@ export interface DnaPackage {
   defaultBranch: string;
   artifacts: MinedArtifact[];
   scannedAt: string;
-  /** true אם עץ הקבצים נחתך (ריפו ענק) — הכרייה הייתה חלקית בשקט; עכשיו מדווח */
+  /** true if the file tree was truncated (a giant repo) — the mine used to be silently partial; now it's reported */
   treeTruncated: boolean;
 }
 
@@ -31,25 +31,25 @@ interface GhTree {
   tree: { path: string; type: string; size?: number }[];
 }
 
-const MAX_FILE_BYTES = 12_000; // חיתוך תוכן לקובץ — מספיק ל-AI, חוסך מכסה
+const MAX_FILE_BYTES = 12_000; // per-file content truncation — enough for the AI, saves quota
 
 /**
- * נתיבי בדיקות/פיקסטורות אינם קבצי-יכולת. ראיה מהשטח: Gen 6 כרה את
- * mcp_config_test.go (קובץ בדיקות Go) כ-"mcp-config" (גן #155) ואת
- * e2e/fixtures/.../SKILL.md (פיקסטורת e2e) כ-"skill" (גן #108) — שניהם נכנסו
- * לספרייה עם תיוג שקרי. מעכשיו: נתיבי test/spec/fixture נפסלים לכרייה.
+ * Test/fixture paths are not capability files. Field evidence: Gen 6 mined
+ * mcp_config_test.go (a Go test file) as "mcp-config" (gene #155) and
+ * e2e/fixtures/.../SKILL.md (an e2e fixture) as "skill" (gene #108) — both entered
+ * the library with false labeling. From now on: test/spec/fixture paths are rejected for mining.
  */
 const TEST_PATH_RE =
   /(^|\/)(tests?|__tests__|spec|specs|fixtures)(\/|$)|[._-]test\.[a-z]+$|\.spec\.[a-z]+$/i;
 
-/** סיווג נתיב לסוג DNA */
+/** Classify a path into a DNA kind */
 function classify(path: string): MinedArtifact["kind"] | null {
   const p = path.toLowerCase();
   if (TEST_PATH_RE.test(p)) return null;
   if (p === "claude.md") return "claude-md";
   if (p === "agents.md") return "agents-md";
-  // SKILL.md בדיוק (בכל עומק תיקייה) — בעבר p.includes("skill") סיווג בטעות
-  // גם קבצים כמו docs/my-skill.md כסקיל; עכשיו רק שם-קובץ skill.md בדיוק.
+  // Exactly SKILL.md (at any folder depth) — before, p.includes("skill") mistakenly
+  // classified files like docs/my-skill.md as skills; now only the exact skill.md filename.
   if (/(^|\/)skill\.md$/.test(p)) return "skill";
   if (p.includes(".claude/commands/") && /\.md$/.test(p)) return "command";
   if (p.includes(".claude/agents/") && /\.md$/.test(p)) return "agent";
@@ -57,10 +57,10 @@ function classify(path: string): MinedArtifact["kind"] | null {
   return null;
 }
 
-/** חילוץ שם מפורמט frontmatter או מהנתיב */
+/** Extract the name from frontmatter or from the path */
 function extractName(path: string, content: string | null, kind: MinedArtifact["kind"]): string {
   if (content) {
-    // \r?\n — ריפואים שנכתבו ב-Windows עם CRLF לא נתפסו כלל כ-frontmatter
+    // \r?\n — repos written on Windows with CRLF were never detected as frontmatter at all
     const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (m) {
       const nameLine = m[1].match(/^name:\s*(.+)$/m)?.[1]?.trim();
@@ -77,7 +77,7 @@ function extractName(path: string, content: string | null, kind: MinedArtifact["
   return base.replace(/\.(md|json)$/i, "");
 }
 
-/** חילוץ description מ-frontmatter */
+/** Extract the description from frontmatter */
 function extractDescription(content: string | null): string | null {
   if (!content) return null;
   const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -89,9 +89,9 @@ function extractDescription(content: string | null): string | null {
 }
 
 /**
- * כריית DNA מלאה מריפו: סריקת עץ → סינון קבצי יכולת → הורדת תכנים במקביל.
- * defaultBranch אופציונלי: כשמגיע מה-GraphQL של שלב הגילוי — חוסך קריאת
- * /repos נוספת לכל ריפו (בקציר של 6 ריפואים זה 6 קריאות פחות).
+ * Full DNA mining from a repo: tree scan → capability-file filtering → parallel content download.
+ * defaultBranch is optional: when it comes from the discovery stage's GraphQL — it saves an
+ * extra /repos call per repo (in a 6-repo harvest, that's 6 fewer calls).
  */
 export async function mineDna(
   owner: string,
@@ -115,12 +115,12 @@ export async function mineDna(
     .filter((t) => t.type === "blob")
     .map((t) => ({ path: t.path, size: t.size ?? 0, kind: classify(t.path) }))
     .filter((t): t is { path: string; size: number; kind: NonNullable<ReturnType<typeof classify>> } => !!t.kind)
-    // עדיפות: skills ופקודות קודם, ואז CLAUDE.md; הגבלת גודל סבירה
+    // Priority: skills and commands first, then CLAUDE.md; a reasonable size cap
     .sort((a, b) => rank(a.kind) - rank(b.kind))
     .slice(0, 12);
 
-  // מקביליות מרוסנת (6) — 12 הורדות בבת אחת × 2 ריפואים במקביל = 24 קריאות
-  // פתוחות שיכולות להפיל מגבלת-משנה של GitHub. מנוע pool משותף מ-github.ts.
+  // Throttled parallelism (6) — 12 downloads at once × 2 repos in parallel = 24 open
+  // calls that could take down a GitHub secondary limit. A shared pool engine from github.ts.
   const results = await mapLimit(
     candidates,
     6,
@@ -133,12 +133,12 @@ export async function mineDna(
           `/repos/${full}/contents/${c.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`,
           token
         );
-        rawUrl = `https://github.com/${full}/blob/${branch}/${c.path.split("/").map(encodeURIComponent).join("/")}`; // קידוד נתיב — רווחים/#/? בשמות קבצים שוברים קישור גולמי
+        rawUrl = `https://github.com/${full}/blob/${branch}/${c.path.split("/").map(encodeURIComponent).join("/")}`; // path encoding — spaces/#/? in file names break the raw link
       } catch {
         content = null;
       }
       if (content && content.length > MAX_FILE_BYTES) {
-        content = content.slice(0, MAX_FILE_BYTES) + "\n\n… [נחתך לכרייה]";
+        content = content.slice(0, MAX_FILE_BYTES) + "\n\n… [truncated for mining]";
         truncated = true;
       }
       return {
@@ -155,8 +155,8 @@ export async function mineDna(
   );
 
   const artifacts = results;
-  // (mapLimit זורק רק אם קריאה בודדת זרקה — אבל ה-catch הפנימי מבטיח שהורדה
-  // שנכשלה מחזירה content=null ולא מפילה את כל הכרייה)
+  // (mapLimit throws only if a single call threw — but the inner catch guarantees that a failed
+  // download returns content=null and doesn't take down the whole mine)
 
   return { repo: full, defaultBranch: branch, artifacts, scannedAt: new Date().toISOString(), treeTruncated: tree.truncated === true };
 }

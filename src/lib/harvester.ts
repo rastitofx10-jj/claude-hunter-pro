@@ -1,18 +1,18 @@
 // ============================================================
-// קוצר אוטונומי (Auto-Harvester) — הצינור שמחבר את הצייד לספרייה:
-// חיפוש קוד 5.5+ ב-GitHub ← דירוג מאגרים עשירים בסקילים ← כריית DNA ← עדכון ספרייה
-// לחיצה אחת ← הספרייה מתפוצצת בגנים אמיתיים מהאליטה העולמית.
-// פועל בצד שרת בלבד.
+// Autonomous harvester (Auto-Harvester) — the pipeline connecting the hunter to the library:
+// GitHub 5.5+ code search ← ranking skill-rich repos ← DNA mining ← library update
+// One click ← the library explodes with real genes from the global elite.
+// Runs server-side only.
 //
-// שיפורי סבב 5 (נמדדו חי):
-// - העשרת מטא-דאטה: 25 קריאות REST ← קריאת GraphQL אחת (עלות 1 נקודה)
-// - השאילתות נגזרות מרישום המודלים (6 מזהי 5.5+) במקום 2 קבועות —
-//   כיסוי רחב פי 3 לכל קציר
-// - כל כישלון נראה: שאילתה שנפלה / ריפו שנכשל בכרייה — מדווחים בתוצאה,
-//   אף לא נבלע בשקט (בעבר: "הקציר הסתיים · נכרו 0" בלי הסבר)
-// - ghSearchWithBackoff לכל שאילתת קוד — שרד מכסת 10/דקה במקום ליפול
-// - mineDna מקבל את הענף ברירת המחדל מה-GraphQL ← חוסך קריאת /repos נוספת
-//   לכל ריפו שנכרה
+// Round 5 improvements (measured live):
+// - Metadata enrichment: 25 REST calls ← a single GraphQL call (cost: 1 point)
+// - Queries derived from the model registry (6 ids of 5.5+) instead of 2 hardcoded —
+//   3x wider coverage per harvest
+// - Every failure is visible: a failed query / a repo that failed to mine — reported in the result,
+//   nothing is silently swallowed (before: "harvest finished · 0 mined" with no explanation)
+// - ghSearchWithBackoff for every code query — survived the 10/min quota instead of failing
+// - mineDna receives the default branch from GraphQL ← saves an extra /repos call
+//   for every mined repo
 // ============================================================
 
 import { ghFetch, ghSearchWithBackoff, ghGraphql, mapLimit, GhError, isCapabilityPath } from "./github";
@@ -22,15 +22,15 @@ import { db } from "./db";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** מזהה החיפוש המדויק ביותר של כל מודל מזכה (kebab-case — מה שמופיע בקוד אמיתי).
- *  נגזר מהרישום, לא מקודד ידנית — סף חדש ברישום = כיסוי אוטומטי בקציר. */
+/** The most precise search identifier of every qualifying model (kebab-case — what appears in real code).
+ *  Derived from the registry, not hardcoded — a new threshold in the registry = automatic harvest coverage. */
 function harvestQueries(): string[] {
   const qs: string[] = [];
   for (const m of QUALIFYING_MODELS) {
     const primary = m.searchStrings.find((s) => /^claude-[a-z0-9-]+$/.test(s)) ?? m.searchStrings[0];
     if (primary && !qs.includes(primary)) qs.push(primary);
   }
-  return qs.slice(0, 6); // מכסת חיפוש-קוד 10/דקה — 6 שאילתות עם ריווח 6.5s = בטוח
+  return qs.slice(0, 6); // code-search quota 10/min — 6 queries with 6.5s spacing = safe
 }
 
 interface GhCodeItem {
@@ -61,14 +61,14 @@ export interface HarvestResult {
   totalLibrary: number;
   fieldDna: number;
   skippedAlreadyMined: number;
-  /** שקיפות מלאה: מה באמת קרה בשלב הגילוי */
+  /** Full transparency: what actually happened at the discovery stage */
   queriesRun: { q: string; count: number }[];
   queriesFailed: { q: string; error: string }[];
-  /** ריפואים שנבחרו לכרייה ונכשלו — עם הסיבה (בעבר נעלמו בשקט) */
+  /** Repos selected for mining that failed — with the reason (previously they vanished silently) */
   reposFailed: { repo: string; error: string }[];
 }
 
-/** מטא-דאטה מה-GraphQL: כוכבים + ענף ברירת מחדל לכל ריפו שייתכן שנכרה */
+/** Metadata from GraphQL: stars + default branch for every repo that might be mined */
 interface RepoMeta {
   stars: number;
   defaultBranch: string | null;
@@ -83,9 +83,9 @@ interface Candidate {
 }
 
 /**
- * העשרת מטא-דאטה בקריאת GraphQL אחת: עד 40 ריפואים בבת אחת
- * (כוכבים + ענף ברירת מחדל). מחליף 25-30 קריאות REST + מרווחי המתנה.
- * עלות: נקודה אחת ממכסת 5000/שעה. מחזיר מפה fullName → מטא.
+ * Metadata enrichment in a single GraphQL call: up to 40 repos at once
+ * (stars + default branch). Replaces 25-30 REST calls + wait gaps.
+ * Cost: one point from the 5000/hour quota. Returns a fullName → meta map.
  */
 export async function batchRepoMeta(
   fullNames: string[],
@@ -93,7 +93,7 @@ export async function batchRepoMeta(
 ): Promise<Map<string, RepoMeta>> {
   const out = new Map<string, RepoMeta>();
   if (fullNames.length === 0) return out;
-  // מקטעים של 40 — גודל בטוח לשאילתת aliases
+  // Chunks of 40 — a safe size for an aliased query
   for (let i = 0; i < fullNames.length; i += 40) {
     const chunk = fullNames.slice(i, i + 40);
     const aliases = chunk
@@ -114,13 +114,13 @@ export async function batchRepoMeta(
         if (r) out.set(name, { stars: r.stargazerCount ?? 0, defaultBranch: r.defaultBranchRef?.name ?? null });
       });
     } catch {
-      // העשרה היא אופטימיזציה — ריפו בלי מטא פשוט נכרה בלי כוכבים מדויקים
+      // Enrichment is an optimization — a repo without meta is simply mined without exact stars
     }
   }
   return out;
 }
 
-/** גילוי מאגרי אליטה מחיפושי קוד 5.5+ ודירוג לפי עושר סקילים וכוכבים */
+/** Discover elite repos from 5.5+ code searches and rank by skill richness and stars */
 export async function discoverEliteRepos(
   token: string | null,
   opts?: { enrichCount?: number }
@@ -133,7 +133,7 @@ export async function discoverEliteRepos(
   for (let i = 0; i < queries.length; i++) {
     const q = queries[i];
     try {
-      // backoff 8/16/32s על מכסת חיפוש — בעבר ghFetch ישיר נפל לנצח על 403
+      // 8/16/32s backoff on the search quota — before, a direct ghFetch failed forever on 403
       const resp = await ghSearchWithBackoff<GhSearchResp>(
         `/search/code?q=${encodeURIComponent(q)}&per_page=100&page=1`,
         token
@@ -151,9 +151,9 @@ export async function discoverEliteRepos(
         }
       }
     } catch (e) {
-      queriesFailed.push({ q, error: e instanceof Error ? e.message : "שגיאה" });
+      queriesFailed.push({ q, error: e instanceof Error ? e.message : "error" });
     }
-    if (i < queries.length - 1) await sleep(6_500); // מכסת חיפוש-קוד: 10/דקה
+    if (i < queries.length - 1) await sleep(6_500); // code-search quota: 10/min
   }
 
   const candidates = Array.from(byName.values());
@@ -168,10 +168,10 @@ export async function discoverEliteRepos(
   );
   for (const c of candidates) c.alreadyMined = minedNames.has(c.fullName);
 
-  // דירוג מקדים (בלי כוכבים): עושר-סקילים קודם — זה הסמן החזק ביותר ל-DNA
+  // Preliminary ranking (without stars): skill richness first — the strongest marker for DNA
   candidates.sort((a, b) => b.skillRichness - a.skillRichness);
 
-  // העשרה ב-GraphQL: רק מי שיש סיכוי שנכרה (fresh ראשונים) — לא 25 עיוורים
+  // GraphQL enrichment: only those with a chance of being mined (fresh first) — not a blind 25
   const freshSorted = candidates.filter((c) => !c.alreadyMined);
   const enrichCount = Math.min(opts?.enrichCount ?? 12, freshSorted.length);
   const toEnrich = freshSorted.slice(0, enrichCount).map((c) => c.fullName);
@@ -184,7 +184,7 @@ export async function discoverEliteRepos(
     }
   }
 
-  // דירוג סופי: צירוף עושר-סקילים עם פופולריות — כך מאגרי הענק עולים ראשונים
+  // Final ranking: combining skill richness with popularity — that way the giant repos surface first
   const score = (c: Candidate) => c.skillRichness * 5 + Math.log10(c.stars + 1) * 3;
   candidates.sort((a, b) => {
     if (a.alreadyMined !== b.alreadyMined) return a.alreadyMined ? 1 : -1;
@@ -193,7 +193,7 @@ export async function discoverEliteRepos(
   return { candidates, queriesRun, queriesFailed };
 }
 
-/** כריית מאגר בודד + upsert לספרייה. מחזיר דוח. */
+/** Mine a single repo + upsert into the library. Returns a report. */
 export async function harvestRepo(
   fullName: string,
   token: string | null,
@@ -201,9 +201,9 @@ export async function harvestRepo(
 ): Promise<HarvestRepoReport & { updatedCount: number }> {
   const [owner, ...rest] = fullName.split("/");
   const repo = rest.join("/");
-  if (!owner || !repo) throw new Error(`שם מאגר לא תקין: ${fullName}`);
+  if (!owner || !repo) throw new Error(`Invalid repo name: ${fullName}`);
 
-  // הענף מה-GraphQL של הגילוי חוסך קריאת /repos נוספת לכל ריפו
+  // The branch from the discovery GraphQL saves an extra /repos call per repo
   const pkg = await mineDna(owner, repo, token, { defaultBranch: pre?.defaultBranch });
 
   let newCount = 0;
@@ -211,8 +211,8 @@ export async function harvestRepo(
   let skippedStubs = 0;
   const kinds = new Set<string>();
 
-  // שער איכות — גן סתם (תוכן קצר מ-200 בייטים) לא נכנס לספרייה.
-  // (בעבר: DNA #133 נכנס עם 11 בייטים — CLAUDE.md ריק נחשב "גן")
+  // Quality gate — a stub gene (content under 200 bytes) never enters the library.
+  // (Before: DNA #133 entered with 11 bytes — an empty CLAUDE.md counted as a "gene")
   const MIN_GENE_BYTES = 200;
   const artifacts = pkg.artifacts.filter((a) => {
     if ((a.content ?? "").length >= MIN_GENE_BYTES) return true;
@@ -220,8 +220,8 @@ export async function harvestRepo(
     return false;
   });
 
-  // שליפה אחת של השורות הקיימות לריפו (במקום findUnique לכל ארטיפקט — N+1).
-  // משמשת גם לספירה אמינה של "חדש מול עודכן" וגם לדילוג על כתיבות זהות.
+  // A single fetch of the repo's existing rows (instead of findUnique per artifact — N+1).
+  // Used both for a reliable "new vs updated" count and for skipping identical writes.
   const existingRows = await db.dnaArtifact.findMany({
     where: { sourceRepo: fullName },
     select: { path: true, content: true },
@@ -231,10 +231,10 @@ export async function harvestRepo(
   for (const a of artifacts) {
     const prev = existingByPath.get(a.path);
     if (prev !== undefined && prev === (a.content ?? "")) {
-      kinds.add(a.kind); // קיים וזהה — לא נוגעים, לא נספר כעדכון
+      kinds.add(a.kind); // exists and identical — untouched, not counted as an update
       continue;
     }
-    // upsert אטומי על המפתח המורכב (בעבר: findUnique+update/create — חלון מרוץ)
+    // Atomic upsert on the composite key (before: findUnique+update/create — a race window)
     await db.dnaArtifact.upsert({
       where: { sourceRepo_path: { sourceRepo: fullName, path: a.path } },
       update: {
@@ -271,8 +271,8 @@ export async function harvestRepo(
 }
 
 /**
- * הקציר המלא: גילוי ← בחירת top-N חדשים ← כרייה במקביל מרוסן ← דוח.
- * שום דבר לא נבלע: שאילתות שנפלו, ריפואים שנכשלו — הכל בדוח.
+ * The full harvest: discovery ← top-N fresh selection ← throttled parallel mining ← report.
+ * Nothing is swallowed: failed queries, failed repos — all in the report.
  */
 export async function harvest(token: string | null, maxRepos = 6): Promise<HarvestResult> {
   const { candidates, queriesRun, queriesFailed } = await discoverEliteRepos(token, {
@@ -285,7 +285,7 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
   const reports: (HarvestRepoReport & { updatedCount: number })[] = [];
   const reposFailed: { repo: string; error: string }[] = [];
 
-  // ריצה במקביל מרוסן (2 בכל פעם) — מהיר אך עדין למכסה
+  // Throttled parallel run (2 at a time) — fast yet gentle on the quota
   for (let i = 0; i < fresh.length; i += 2) {
     const batch = fresh.slice(i, i + 2);
     const results = await Promise.allSettled(
@@ -296,8 +296,8 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
       if (r.status === "fulfilled") {
         reports.push({ ...r.value, stars: r.value.stars || c.stars });
       } else {
-        // בעבר: דחייה נעלמה בשקט והמשתמש ראה "נכרו 0" בלי סיבה
-        reposFailed.push({ repo: c.fullName, error: r.reason instanceof Error ? r.reason.message : "כרייה נכשלה" });
+        // Before: a rejection vanished silently and the user saw "0 mined" with no reason
+        reposFailed.push({ repo: c.fullName, error: r.reason instanceof Error ? r.reason.message : "mining failed" });
       }
     });
   }
@@ -321,5 +321,5 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
   };
 }
 
-/** re-export לנוחות הקריאה מ-sweep — טיפוס השגיאה של GitHub לזיהוי מכסה */
+/** re-export for convenience when called from sweep — the GitHub error type for quota detection */
 export { GhError };

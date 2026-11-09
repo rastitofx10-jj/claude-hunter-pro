@@ -29,7 +29,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
   const [draft, setDraft] = useState("");
   const [test, setTest] = useState<{ loading: boolean; ok?: boolean; info?: RateInfo }>({ loading: false });
   const [saveError, setSaveError] = useState<string | null>(null);
-  // מסוכם מהשרת — הלקוח מחזיק רק סנטינל; בעבר הוצגו 8 תווים ראשונים של ה-PAT הגולמי מה-store
+  // Masked from the server — the client holds only the sentinel; previously the first 8 characters of the raw PAT were shown from the store
   const { data: serverInfo } = useQuery({
     queryKey: ["server-token"],
     queryFn: () => apiFetch<ServerTokenInfo>("/api/settings/token", ""),
@@ -37,8 +37,8 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
     retry: 1,
   });
 
-  // איפוס מצב מקומי בסגירה — בעבר draft/test נשארו בין פתיחות דיאלוג
-  // (ב-onOpenChange ולא ב-effect — אין rerender מדורג)
+  // Reset local state on close — previously draft/test persisted between dialog openings
+  // (in onOpenChange, not an effect — no cascading rerender)
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (!next) {
@@ -56,7 +56,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
       setTest({ loading: false, ok, info });
       return ok;
     } catch (e) {
-      setTest({ loading: false, ok: false, info: { hasToken: false, error: e instanceof Error ? e.message : "שגיאה" } });
+      setTest({ loading: false, ok: false, info: { hasToken: false, error: e instanceof Error ? e.message : "Error" } });
       return false;
     }
   };
@@ -67,17 +67,17 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
         {trigger ?? (
           <Button variant="outline" size="sm" className="gap-1.5">
             <KeyRound className="h-4 w-4" />
-            טוקן GitHub
+            GitHub token
           </Button>
         )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>טוקן GitHub — נדרש לעוצמה מלאה</DialogTitle>
+          <DialogTitle>GitHub Token — Required for Full Power</DialogTitle>
           <DialogDescription asChild>
             <div className="space-y-2 text-sm leading-relaxed">
               <p>
-                ללא טוקן: 60 בקשות/שעה בלבד, ו<b>חיפוש קוד לא זמין בכלל</b>. עם טוקן (חינם): 5,000 בקשות/שעה + חיפוש קוד + ניתוח מעמיק.
+                Without a token: only 60 requests/hour, and <b>code search is completely unavailable</b>. With a (free) token: 5,000 requests/hour + code search + deep analysis.
               </p>
               <a
                 href="https://github.com/settings/tokens?type=beta"
@@ -85,10 +85,10 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 font-medium text-orange-600 hover:underline"
               >
-                יצירת טוקן ב-GitHub (30 שניות) <ExternalLink className="h-3.5 w-3.5" />
+                Create a token on GitHub (30 seconds) <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <p className="text-xs text-muted-foreground">
-                אין צורך בהרשאות מיוחדות למאגרים ציבוריים. הטוקן נשמר בשרת המקומי בלבד — לא בדפדפן — ומועבר רק ל-GitHub.
+                No special permissions are needed for public repos. The token is stored only on the local server — not in the browser — and is sent only to GitHub.
               </p>
             </div>
           </DialogDescription>
@@ -107,16 +107,16 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
-              // בדיקה ראשונה ורק אז שמירה — טוקן שגוי לא נכנס ל-store ולא מזהם את
-              // כל הבקשות הבאות (בעבר: setToken מיידי לפני אימות כלשהו)
+              // Test first, save only then — a bad token never enters the store and doesn't pollute
+              // all subsequent requests (previously: an immediate setToken before any validation)
               onClick={async () => {
                 const t = draft.trim();
                 if (!t) return;
                 const ok = await runTest(t);
                 if (!ok) return;
-                // בדיקה עברה = הטוקן עובד מול GitHub. שמירה מפורשת בשרת
-                // (ה-bug ב-captureTokenFrom תוקן, אך כאן זה מפורש וחד-משמעי).
-                // הלקוח עובר לסנטינל בלבד — PAT גולמי לעולם לא נכנס ל-state/localStorage.
+                // Test passed = the token works against GitHub. Explicit save on the server
+                // (the captureTokenFrom bug was fixed, but here it's explicit and unambiguous).
+                // The client switches to the sentinel only — the raw PAT never enters state/localStorage.
                 try {
                   const res = await fetch("/api/settings/token", {
                     method: "POST",
@@ -129,17 +129,17 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                     setSaveError(null);
                     setDraft("");
                   } else {
-                    setSaveError("אימות עבר אך השמירה בשרת נכשלה — נסה שוב");
+                    setSaveError("Verification passed but saving to the server failed — try again");
                   }
                 } catch {
-                  setSaveError("אימות עבר אך השמירה בשרת נכשלה — נסה שוב");
+                  setSaveError("Verification passed but saving to the server failed — try again");
                 }
               }}
               disabled={test.loading || !draft.trim()}
               className="gap-1.5"
             >
               {test.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              בדוק ושמור
+              Test & save
             </Button>
             {token && (
               <Button
@@ -147,7 +147,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                 variant="destructive"
                 className="gap-1.5"
                 onClick={async () => {
-                  // מחיקה כפולה: שרת + לקוח — בעבר הכפתור מחק רק מה-store והשרת המשיך להחזיק
+                  // Double delete: server + client — previously the button only deleted from the store while the server kept it
                   try {
                     await fetch("/api/settings/token", { method: "DELETE" });
                   } catch {
@@ -158,12 +158,12 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                   setTest({ loading: false });
                 }}
               >
-                <Trash2 className="h-4 w-4" /> נקה טוקן שמור
+                <Trash2 className="h-4 w-4" /> Clear saved token
               </Button>
             )}
             {token && !draft && (
               <Button size="sm" variant="secondary" onClick={() => void runTest(token)} disabled={test.loading}>
-                בדוק טוקן שמור
+                Test saved token
               </Button>
             )}
           </div>
@@ -177,7 +177,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
               {test.ok ? (
                 <div className="space-y-1">
                   <p className="flex items-center gap-1.5 font-medium">
-                    <CheckCircle2 className="h-4 w-4" /> הטוקן תקין{draft.trim() && token !== draft.trim() ? " — נשמר ל-store" : ""}!
+                    <CheckCircle2 className="h-4 w-4" /> The token is valid{draft.trim() && token !== draft.trim() ? " — saved to the store" : ""}!
                   </p>
                   {test.info.core && (
                     <p dir="ltr" className="font-mono text-xs">
@@ -188,7 +188,7 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                 </div>
               ) : (
                 <p className="flex items-center gap-1.5">
-                  <XCircle className="h-4 w-4" /> {test.info.error ?? "הטוקן נדחה"}
+                  <XCircle className="h-4 w-4" /> {test.info.error ?? "Token rejected"}
                 </p>
               )}
             </div>
@@ -197,9 +197,9 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
           {token && (
             <p className="text-xs text-muted-foreground">
               {serverInfo?.masked ? (
-                <>טוקן פעיל, נשמר בשרת: <span dir="ltr" className="font-mono">{serverInfo.masked}</span></>
+                <>Active token, stored on the server: <span dir="ltr" className="font-mono">{serverInfo.masked}</span></>
               ) : (
-                "טוקן פעיל — נשמר בשרת"
+                "Active token — stored on the server"
               )}
             </p>
           )}

@@ -7,9 +7,9 @@ import { advanceStatus, OUTCOME_STATUS } from "@/lib/mission-status";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-/** ניקוי מטא-דאטה שנולדה מה-AI לפני שמירתה בספרייה — השם/התיאור של DNA
- * נכנסים לפרומפטים של מהדר/מבצע בעתיד; תווי בקרה וגדרות שם זו דלת
- * הזרקת-הוראות (בעבר: שדה חופשי לגמרי). */
+/** Sanitize AI-born metadata before saving it to the library — a DNA's name/description
+ * enters future compiler/executor prompts; control characters and name fences are an
+ * instruction-injection door (previously: a completely free-form field). */
 function sanitizeBornMeta(v: unknown, max: number): string {
   return String(v ?? "")
     .replace(/[<>`\u0000-\u001f\u007f]/g, " ")
@@ -19,16 +19,16 @@ function sanitizeBornMeta(v: unknown, max: number): string {
 }
 
 /**
- * מזקק מקומי (בלי AI) — רשת ביטחון קריטית:
- * הדיווח מהשדה הוא נתון יקר שנאסף מהעבודה האמיתית. בעבר, כשיחת ה-AI נפלה
- * (timeout/רשת) — כל הדיווח הושלך עם 500. עכשיו הלולאה תמיד נשמרת,
- * עם לקחים היוריסטיים עד שזיקוק AI יוכל לרוץ שוב.
+ * Local distillation (no AI) — a critical safety net:
+ * a field report is precious data collected from real work. Previously, when the AI chat failed
+ * (timeout/network) — the entire report was discarded with a 500. Now the loop is always saved,
+ * with heuristic lessons until AI distillation can run again.
  */
 function localDistill(input: { outcome: string; notes: string }) {
   const outcomeHeb =
-    input.outcome === "success" ? "הצלחה מלאה" : input.outcome === "partial" ? "הצלחה חלקית" : "כישלון";
+    input.outcome === "success" ? "full success" : input.outcome === "partial" ? "partial success" : "failure";
   const lessons: string[] = [];
-  // פיצול הערות למשפטים — כל משפט מועמד ללקח
+  // Split the notes into sentences — each sentence is a lesson candidate
   for (const s of input.notes.split(/[\n.!?]+|\.\s/)) {
     const t = s.trim();
     if (t.length >= 12) lessons.push(t);
@@ -37,26 +37,26 @@ function localDistill(input: { outcome: string; notes: string }) {
   if (lessons.length === 0) {
     lessons.push(
       input.outcome === "failed"
-        ? "כישלון הוא נתון: לתעד איפה בדיוק נתקע ולחלק את השלב הנכשל לצעדים קטנים יותר בפעם הבאה"
-        : "לתעד אילו שלבים עברו אימות בקלות — הם המועמדים לשימוש חוזר כ-DNA במשימות הבאות"
+        ? "Failure is data: document exactly where it got stuck and split the failed stage into smaller steps next time"
+        : "Document which stages passed verification easily — they are the candidates for reuse as DNA in future missions"
     );
   }
   return {
-    verdict: `דיווח שדה (${outcomeHeb}) נשמר — זיקוק AI לא זמין כרגע, הלקחים חולצו מקומית מההערות`,
+    verdict: `Field report (${outcomeHeb}) saved — AI distillation unavailable right now, lessons extracted locally from the notes`,
     lessons,
     newDna: null,
   };
 }
 
-/** סטטוס רק קדימה — דיווח שדה לא מדרג משימה שהגיעה כבר ל-done אחורה
- * (הועבר ל-mission-status — בעבר הוגדר מחדש כאן ובשני קבצים נוספים) */
+/** Forward-only status — a field report does not demote a mission that already reached done
+ * (moved to mission-status — previously redefined here and in two other files) */
 
 /**
- * דיווח שדה — הלולאה המאבולוציונית:
- * דיווח ← זיקוק AI ללקחים ← לידת DNA חדש בספרייה (sourceRepo: field:mission-<id>)
- * כך כל משימה שמבוצעת מחכימה את הספרייה למשימות הבאות.
- * הדיווח עצמו תמיד נשמר — גם כשזיקוק ה-AI נכשל (fallback מקומי),
- * וגם כששמירת DNA נכשלת (הדיווח קודם ל-DNA — סדר שמירה שלא מאבד נתונים).
+ * Field report — the evolutionary loop:
+ * report ← AI distillation into lessons ← birth of new DNA in the library (sourceRepo: field:mission-<id>)
+ * This way every executed mission makes the library smarter for future missions.
+ * The report itself is always saved — even when AI distillation fails (local fallback),
+ * and even when saving the DNA fails (the report precedes the DNA — a save order that loses no data).
  */
 export async function POST(req: NextRequest) {
   let missionId = 0;
@@ -64,20 +64,20 @@ export async function POST(req: NextRequest) {
   let notes = "";
   try {
     const body = (await req.json()) as { missionId?: unknown; outcome?: unknown; notes?: unknown };
-    // (בעבר: Number(null) === 0 עבר את הבדיקה ונחתך ל-404; כעת בדיקת טיפוס מפורשת → 400)
+    // (Previously: Number(null) === 0 passed the check and was cut to a 404; now: an explicit type check → 400)
     missionId = typeof body.missionId === "number" ? body.missionId : Number.NaN;
     outcome = typeof body.outcome === "string" ? body.outcome.trim() : "";
     notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 4000) : "";
   } catch {
-    return NextResponse.json({ error: "גוף הבקשה אינו תקין" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
   if (!Number.isInteger(missionId) || missionId <= 0 || !["success", "partial", "failed"].includes(outcome)) {
-    return NextResponse.json({ error: "נדרש מזהה משימה ותוצאה (success | partial | failed)" }, { status: 400 });
+    return NextResponse.json({ error: "A mission identifier and an outcome are required (success | partial | failed)" }, { status: 400 });
   }
 
   try {
     const mission = await db.mission.findUnique({ where: { id: missionId } });
-    if (!mission) return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
+    if (!mission) return NextResponse.json({ error: "Mission not found" }, { status: 404 });
 
     let phaseTitles: string[] = [];
     try {
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
       phaseTitles = [];
     }
 
-    // זיקוק AI עם נפילה מבוקרת למקומי — הדיווח לא נזרק לעולם
+    // AI distillation with a controlled fall back to local — the report is never thrown away
     let distilled: Awaited<ReturnType<typeof distillFieldReport>>;
     let distillMethod: "ai" | "local" = "ai";
     try {
@@ -104,23 +104,23 @@ export async function POST(req: NextRequest) {
         notes,
       });
     } catch (distillErr) {
-      // timeout לא מנוסה שוב בפנים; כאן זה כבר סופי — שומרים מקומית
+      // The timeout is not retried inside; here it is already final — save locally
       if (!(distillErr instanceof MissionError) && !isTimeoutError(distillErr) && distillErr instanceof Error) {
-        // שגיאה לא צפויה — לוג לשרת, אבל עדיין שומרים את הדיווח
+        // An unexpected error — log to the server, but still save the report
         console.error("[mission/report] distill failed unexpectedly:", distillErr.message);
       }
       distilled = localDistill({ outcome, notes });
       distillMethod = "local";
     }
 
-    // ---- סדר שמירה בטרנזקציה אחת + CAS ----
-    // בעבר: upsert DNA (רשומה ראשונה) ואז mission.update בכתיבה נפרדת —
-    //   1) כשל עדכון השאיר DNA יתום והשליך את הדיווח (ההפך מההערה שלמעלה).
-    //   2) שני טאבים קראו את אותו report ישן — השני דרס את דיווח הראשון (lost update).
-    // עכשיו: קריאה מחדש בתוך הטרנזקציה + updateMany מותנה (compare-and-swap על
-    // status+report) — אם מישהו כתב בינתיים, זה זורק REPORT_CHANGED_RETRY
-    // והלולאה מנסה שוב מערך טרי. ההרכה עצמה עדיין "דיווח קודם": כשל upsert DNA
-    // בתוך הטרנזקציה לא מפיל אותה (dnaBirthError נרשם במקום bornDnaId).
+    // ---- Save order in a single transaction + CAS ----
+    // Previously: a DNA upsert (first record) and then mission.update in a separate write —
+    //   1) an update failure left orphaned DNA and discarded the report (the opposite of the comment above).
+    //   2) two tabs read the same old report — the second overwrote the first's report (lost update).
+    // Now: a re-read inside the transaction + a conditional updateMany (compare-and-swap on
+    // status+report) — if someone wrote in the meantime, it throws REPORT_CHANGED_RETRY
+    // and the loop retries on a fresh value. The composition itself is still "report first": a DNA upsert
+    // failure inside the transaction does not fail it (dnaBirthError is recorded instead of bornDnaId).
     let lastErrFinal: unknown = null;
     let savedDnaBirthError: string | null = null;
     let savedBornDnaId: number | null = null;
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
         let bornDnaId: number | null = null;
         let dnaBirthError: string | null = null;
         await db.$transaction(async (tx) => {
-          // לידת DNA בתוך הטרנזקציה — כישלון לידה לא מפיל את הדיווח (נשמר כשגיאה גלויה)
+          // DNA birth inside the transaction — a birth failure does not fail the report (saved as an explicit error)
           if (distilled.newDna) {
             try {
               const desc = sanitizeBornMeta(distilled.newDna.description, 200);
@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
                   sourceRepo: `field:mission-${missionId}`,
                   path: "field/lesson/SKILL.md",
                   kind: "skill",
-                  // השם נכנס לפרומפטים עתידיים — מנוקה וקצוץ (בעבר: שדה חופשי)
+                  // The name enters future prompts — sanitized and capped (previously: a free-form field)
                   name: sanitizeBornMeta(distilled.newDna.name, 60) || "field-lesson",
                   description: desc,
                   content,
@@ -157,17 +157,17 @@ export async function POST(req: NextRequest) {
               });
               bornDnaId = created.id;
             } catch (dnaErr) {
-              dnaBirthError = dnaErr instanceof Error ? dnaErr.message : "שגיאה";
+              dnaBirthError = dnaErr instanceof Error ? dnaErr.message : "Error";
               console.error("[mission/report] DNA birth failed (report still saved):", dnaErr);
             }
           }
 
-          // קריאה מחדש בתוך הטרנזקציה — מי שכתב בינתיים נכנס ל-history שלנו, לא נדרס
+          // Re-read inside the transaction — whoever wrote in the meantime goes into our history, not overwritten
           const fresh = await tx.mission.findUnique({
             where: { id: missionId },
             select: { status: true, report: true },
           });
-          if (!fresh) throw new MissionError("המשימה נעלמה במהלך הדיווח");
+          if (!fresh) throw new MissionError("The mission disappeared during the report");
 
           const nextStatus = OUTCOME_STATUS[outcome] ?? fresh.status;
           const finalStatus = advanceStatus(fresh.status, nextStatus);
@@ -196,7 +196,7 @@ export async function POST(req: NextRequest) {
           };
           const finalReportJson = JSON.stringify([...reportHistory, newReport].slice(-20));
 
-          // CAS: אם status/report השתנו מחוץ לטרנזקציה — נזרקים ומנסים שוב על ערך טרי
+          // CAS: if status/report changed outside the transaction — thrown out and retried on a fresh value
           const cas = await tx.mission.updateMany({
             where: { id: missionId, status: fresh.status, report: fresh.report ?? "" },
             data: { status: finalStatus, report: finalReportJson },
@@ -214,7 +214,7 @@ export async function POST(req: NextRequest) {
         break;
       } catch (txErr) {
         if (txErr instanceof Error && txErr.name === "ReportChangedRetry" && attempt < 2) {
-          continue; // מישהו כתב בינתיים — לולאה חדשה על ערך טרי
+          continue; // someone wrote in the meantime — a new loop on a fresh value
         }
         lastErrFinal = txErr;
         break;
@@ -237,10 +237,10 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     if (isPrismaNotFound(e)) {
-      return NextResponse.json({ error: "המשימה לא נמצאה" }, { status: 404 });
+      return NextResponse.json({ error: "Mission not found" }, { status: 404 });
     }
-    // (בעבר: e.message גולמי דלף ללקוח; כעת לוג מלא בשרת + הודעה גנרית)
+    // (Previously: a raw e.message leaked to the client; now: a full server log + generic message)
     console.error("[mission/report]", e);
-    return NextResponse.json({ error: "זיקוק הדיווח נכשל" }, { status: 500 });
+    return NextResponse.json({ error: "Report distillation failed" }, { status: 500 });
   }
 }

@@ -1,9 +1,9 @@
 "use client";
 
 // ============================================================
-// חדר המבצעים (Mission Control) — הלולאה השישית: ביצוע ← לקחים ← אבולוציה
-// מטרה בשפה טבעית ← אחזור DNA אוטומטי ← תוכנית קרב מוכנה לביצוע
-// דיווח שדה ← זיקוק לקחים ← DNA חדש נולד — הספרייה מחכימה מכל משימה
+// Mission Control — the sixth loop: execute → lessons → evolution
+// Natural-language goal → automatic DNA retrieval → battle plan ready to run
+// Field report → lesson distillation → new DNA is born — the library grows smarter with every mission
 // ============================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -91,7 +91,7 @@ interface MissionListItem {
 }
 interface MissionListResponse {
   items: MissionListItem[];
-  /** סך הכול ב-DB — בעבר הכותרת הציגה items.length (חסום 50) והשאר נעלם */
+  /** Grand total in the DB — the heading used to show items.length (capped at 50) and the rest vanished */
   total?: number;
   stats: { totalDna: number; fieldDna: number };
 }
@@ -109,8 +109,8 @@ interface MissionDetail extends CompiledPayload {
   context: string | null;
   status: string;
   report: { outcome: string; verdict: string; lessons: string[]; bornDnaId: number | null; reportedAt: string } | null;
-  // רחב במכוון — השרת שולח verdict/notes/distillMethod לכל דיווח; טיפוס צר היה שובר
-  // את הצגת ההיסטוריה (round 4: טיפוס משקר פחות מקוד שמשקר יותר).
+  // Intentionally wide — the server sends verdict/notes/distillMethod on every report; a narrow type would
+  // break history rendering (round 4: a lying type beats code that lies more).
   reportHistory?: Record<string, unknown>[];
   autopilot: MissionAutopilot | null;
   autopilotAt: string | null;
@@ -132,22 +132,22 @@ interface ReportResponse {
   verdict: string;
   lessons: string[];
   bornDna: { id: number | null; name?: string; description?: string; birthError?: string | null } | null;
-  /** הסטטוס בפועל שנכתב בשרת (לפי חוק קדימה-בלבד) — בעבר הלקוח חזה לבד וסטה */
+  /** The actual status written on the server (per the precedence rule) — the client used to guess on its own and drift */
   finalStatus?: string;
   historyCount?: number;
 }
 
 // ---------- constants ----------
 
-/** נרמול הגנתי בצד הלקוח: שורות DB פגומות/ישנות לא מפילות את הלשונית
- * (בעבר: .length/.map על שדות שהשרת הבטיח בטיפוסים אבל לא בריצה) */
+/** Defensive client-side normalization: broken/stale DB rows don't take down the tab
+ * (before: .length/.map on fields the server promised in types but not at runtime) */
 function normalizeDetail(d: MissionDetail): MissionDetail {
   const autopilot = d.autopilot
     ? {
         steps: Array.isArray(d.autopilot.steps)
           ? d.autopilot.steps.map((s) => ({
               phaseIndex: typeof s.phaseIndex === "number" ? s.phaseIndex : 0,
-              title: typeof s.title === "string" ? s.title : `שלב ${(s.phaseIndex ?? 0) + 1}`,
+              title: typeof s.title === "string" ? s.title : `Phase ${(s.phaseIndex ?? 0) + 1}`,
               deliverable: typeof s.deliverable === "string" ? s.deliverable : "",
               executedAt: typeof s.executedAt === "string" ? s.executedAt : "",
             }))
@@ -159,8 +159,8 @@ function normalizeDetail(d: MissionDetail): MissionDetail {
     d.report && typeof d.report === "object"
       ? { ...d.report, lessons: Array.isArray(d.report.lessons) ? d.report.lessons : [] }
       : null;
-  // היסטוריית דיווחים — נרמול הגנתי כמו כל שאר השדות (round 4: ה-GET מחזיר,
-  // ה-POST מחזיר []; עכשיו גם מוצג ב-UI במקום להיות מת)
+  // Report history — defensive normalization like every other field (round 4: GET returns it,
+  // POST returns []; now it's also rendered in the UI instead of being dead)
   const reportHistory = Array.isArray(d.reportHistory)
     ? d.reportHistory.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
     : [];
@@ -183,39 +183,39 @@ function normalizeDetail(d: MissionDetail): MissionDetail {
   };
 }
 
-/** זמן יחסי קצר בעברית לתצוגה בהיסטוריה */
+/** Short relative time for display in the history */
 function relTime(iso: string): string {
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return "";
   const diff = Date.now() - t;
   const mins = Math.round(diff / 60_000);
-  if (mins < 1) return "עכשיו";
-  if (mins < 60) return `לפני ${mins} דק׳`;
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `לפני ${hrs} שע׳`;
+  if (hrs < 24) return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
-  if (days < 30) return `לפני ${days} ימים`;
-  return new Date(iso).toLocaleDateString("he-IL");
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString("en-US");
 }
 
 const EXAMPLE_GOALS = [
-  "לבנות סקיל של סינתזת חיפוש-רשת שמפיק סקירה מאומתת עם מקורות",
-  "לשדרג את תהליך הבדיקות שלנו ל-E2E אוטונומי בדפדפן",
-  "לתכנן ארכיטקטורה למודול AI חדש: מטמון, ריטריים וזרימת סטרימינג",
+  "Build a web-search synthesis skill that produces a verified review with sources",
+  "Upgrade our test process to autonomous in-browser E2E",
+  "Design the architecture for a new AI module: caching, retries, and streaming flow",
 ];
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
-  compiled: { label: "הודרה", cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  in_progress: { label: "בביצוע", cls: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300" },
-  done: { label: "הושלמה", cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
-  partial: { label: "חלקית", cls: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
-  failed: { label: "נכשלה", cls: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300" },
+  compiled: { label: "Compiled", cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
+  in_progress: { label: "In progress", cls: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300" },
+  done: { label: "Completed", cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
+  partial: { label: "Partial", cls: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
+  failed: { label: "Failed", cls: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300" },
 };
 
 const OUTCOME_OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: "success", label: "הצלחה מלאה", hint: "כל קריטריוני ההצלחה עברו" },
-  { value: "partial", label: "הצלחה חלקית", hint: "חלק מהשלבים עברו, יש מה לתקן" },
-  { value: "failed", label: "נכשלה", hint: "נתקענו — אבל יש לקחים יקרים" },
+  { value: "success", label: "Full success", hint: "All success criteria passed" },
+  { value: "partial", label: "Partial success", hint: "Some phases passed — there's room to fix" },
+  { value: "failed", label: "Failed", hint: "We got stuck — but there are valuable lessons" },
 ];
 
 // ---------- component ----------
@@ -229,7 +229,7 @@ export function MissionControlPanel() {
   const [reportOpen, setReportOpen] = useState(false);
   const [outcome, setOutcome] = useState("success");
   const [notes, setNotes] = useState("");
-  // שומר מזהה הבקשה האחרונה — תשובה מיושנת של משימה A לא תדרוס תצוגה של B
+  // Tracks the latest request id — a stale response for mission A won't overwrite B's view
   const detailReqRef = useRef(0);
 
   // ---------- queries ----------
@@ -246,17 +246,17 @@ export function MissionControlPanel() {
         body: JSON.stringify({ goal: goal.trim(), context: context.trim() }),
       }),
     onSuccess: (raw) => {
-      const data = normalizeDetail(raw); // ה-POST מחזיר את אותה צורה בדיוק כמו GET
+      const data = normalizeDetail(raw); // POST returns exactly the same shape as GET
       setDetail(data);
       setGoal("");
       setContext("");
       void qc.invalidateQueries({ queryKey: ["missions"] });
       toast({
-        title: "משימה הודרה 🎯",
-        description: `${data.missionName} · ${data.phases.length} שלבים · נבחרו ${data.selectedDna.length} גנים${data.skillMdSource === "fallback" ? " · SKILL.md: גיבוי מקומי" : ""}`,
+        title: "Mission compiled 🎯",
+        description: `${data.missionName} · ${data.phases.length} phases · ${data.selectedDna.length} genes selected${data.skillMdSource === "fallback" ? " · SKILL.md: local fallback" : ""}`,
       });
     },
-    onError: (e: Error) => toast({ title: "ההידור נכשל", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Compilation failed", description: e.message, variant: "destructive" }),
   });
 
   const statusM = useMutation({
@@ -269,7 +269,7 @@ export function MissionControlPanel() {
       setDetail((d) => (d && d.id === data.id ? { ...d, status: data.status } : d));
       void qc.invalidateQueries({ queryKey: ["missions"] });
     },
-    onError: (e: Error) => toast({ title: "עדכון סטטוס נכשל", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Status update failed", description: e.message, variant: "destructive" }),
   });
 
   const reportM = useMutation({
@@ -281,9 +281,9 @@ export function MissionControlPanel() {
     onSuccess: (data, vars) => {
       setReportOpen(false);
       setNotes("");
-      // סנכרון מהשרת במקום חיזוי לקוחי — בעבר הלקוח חישב סטטוס לבד
-      // (דיווח failed על משימה done השאיר "done" בשרת אבל "failed" במסך,
-      // ו-reportHistory לא נוסף כלל).
+      // Sync from the server instead of client-side prediction — the client used to compute the status on its own
+      // (reporting failed on a done mission left "done" on the server but "failed" on screen,
+      // and reportHistory was never appended).
       setDetail((d) =>
         d && d.id === vars.missionId
           ? { ...d, status: data.finalStatus ?? (outcome === "success" ? "done" : outcome) }
@@ -292,20 +292,20 @@ export function MissionControlPanel() {
       void qc.invalidateQueries({ queryKey: ["missions"] });
       void qc.invalidateQueries({ queryKey: ["dna-library"] });
       toast({
-        title: data.bornDna ? (data.bornDna.id ? "לקחים זוקקו · DNA חדש נולד 🧬" : "לקחים זוקקו · לידת DNA נכשלה") : data.distillMethod === "local" ? "הדיווח נשמר (זיקוק AI לא זמין)" : "לקחים זוקקו ✅",
-        description: data.bornDna ? (data.bornDna.id ? `נולד: ${data.bornDna.name ?? ""} — הספרייה מחכימה` : `${data.bornDna.birthError ?? "שגיאת לידה"} — הדיווח נשמר`) : data.verdict,
+        title: data.bornDna ? (data.bornDna.id ? "Lessons distilled · new DNA born 🧬" : "Lessons distilled · DNA birth failed") : data.distillMethod === "local" ? "Report saved (AI distillation unavailable)" : "Lessons distilled ✅",
+        description: data.bornDna ? (data.bornDna.id ? `Born: ${data.bornDna.name ?? ""} — the library grows smarter` : `${data.bornDna.birthError ?? "Birth error"} — the report was saved`) : data.verdict,
       });
     },
-    onError: (e: Error) => toast({ title: "זיקוק הדיווח נכשל", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Report distillation failed", description: e.message, variant: "destructive" }),
   });
 
-  // ---------- טייס אוטומטי — ריצת צעדים מהלקוח ----------
-  // כל קריאה מבצעת שלב אחד בשרת ומיד שומרת אותו ב-DB —
-  // ניתוק/ריסטרט לא מאבד כלום, וההתקדמות נראית שלב-שלב.
+  // ---------- autopilot — stepping the run from the client ----------
+  // Each call executes one phase on the server and immediately persists it to the DB —
+  // a disconnect/restart loses nothing, and progress is visible phase by phase.
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [autopilotProgress, setAutopilotProgress] = useState("");
-  // דגל ביטול: כשהפאנל מתפרק באמצע ריצה (ניווט לשונית אחרת) הלולאה לא תבצע
-  // setState אחרי unmount. בעבר הדגל הוגדר ונבדק אך שום דבר לא הפעיל אותו אף פעם.
+  // Cancel flag: if the panel unmounts mid-run (navigating to another tab) the loop won't call
+  // setState after unmount. The flag used to be defined and checked, but nothing ever triggered it.
   const autopilotCancelRef = useRef(false);
   useEffect(() => {
     return () => {
@@ -317,56 +317,56 @@ export function MissionControlPanel() {
     if (autopilotRunning) return;
     setAutopilotRunning(true);
     autopilotCancelRef.current = false;
-    // טוקן טרי מה-store בכל קריאה — בעבר: closure תקוע על טוקן ישן
+    // Fresh token from the store on every call — before: a closure stuck on a stale token
     const currentToken = useHunterStore.getState().token;
     let okSteps = 0;
     let failSteps = 0;
     let alreadyComplete = false;
     try {
       for (let guard = 0; guard < 12; guard++) {
-        if (autopilotCancelRef.current) return; // בוטל — בלי toast ובלי setState
-        setAutopilotProgress(`מבצע שלב ${okSteps + failSteps + 1}…`);
+        if (autopilotCancelRef.current) return; // cancelled — no toast and no setState
+        setAutopilotProgress(`Executing phase ${okSteps + failSteps + 1}…`);
         const data = await apiFetch<StepResponse>(`/api/mission/${id}/autopilot/step`, currentToken, { method: "POST" });
         if (autopilotCancelRef.current) return;
         if (data.executed) okSteps++;
         if (data.failure) failSteps++;
         if (guard === 0 && data.done && !data.executed && !data.failure) {
-          // המשימה כבר בוצעה במלואה — לא כישלון. בעבר הוצג טוסט הרסני "הריצה נכשלה".
+          // The mission is already fully executed — not a failure. A destructive "run failed" toast used to show.
           alreadyComplete = true;
           break;
         }
         setAutopilotProgress(
           data.executed
-            ? `הושלם שלב ${data.executed.phaseIndex + 1}/${data.totalPhases}: ${data.executed.title}`
+            ? `Completed phase ${data.executed.phaseIndex + 1}/${data.totalPhases}: ${data.executed.title}`
             : data.failure
-              ? `שלב ${data.failure.phaseIndex + 1} נכשל`
+              ? `Phase ${data.failure.phaseIndex + 1} failed`
               : ""
         );
         setDetail((d) =>
           d && d.id === id ? { ...d, autopilot: data.autopilot, status: d.status === "compiled" ? "in_progress" : d.status } : d
         );
         if (data.allDone || data.done) break;
-        if (!data.executed && !data.failure) break; // תקיעה — לא להיתקע בלולאה
+        if (!data.executed && !data.failure) break; // stuck — don't loop forever
       }
       toast({
-        title: alreadyComplete ? "המשימה כבר בוצעה במלואה" : okSteps > 0 ? "הטייס האוטומטי נחת 🚀" : "הריצה נכשלה",
+        title: alreadyComplete ? "Mission already fully executed" : okSteps > 0 ? "Autopilot has landed 🚀" : "Run failed",
         description: alreadyComplete
-          ? "אין שלבים ממתינים — אפשר לדווח מהשדה"
-          : `בוצעו ${okSteps} שלבים בהצלחה${failSteps > 0 ? ` · ${failSteps} כשלים` : ""} — התוצרים נשמרו`,
+          ? "No phases pending — ready to file a field report"
+          : `${okSteps} phases executed successfully${failSteps > 0 ? ` · ${failSteps} failed` : ""} — deliverables saved`,
         variant: okSteps > 0 || alreadyComplete ? undefined : "destructive",
       });
     } catch (e) {
-      // ניתוק באמצע לא מאבד את מה שנשמר — אפשר פשוט להמשיך מהשלב הבא
+      // A mid-run disconnect loses nothing already saved — you can simply resume from the next phase
       toast({
-        title: "הריצה נעצרה באמצע",
-        description: `${e instanceof Error ? e.message : "שגיאה"} — השלבים שהושלמו נשמרו; לחץ שוב כדי להמשיך`,
+        title: "Run stopped midway",
+        description: `${e instanceof Error ? e.message : "Error"} — completed phases are saved; press again to resume`,
         variant: "destructive",
       });
     } finally {
       setAutopilotRunning(false);
       setAutopilotProgress("");
-      // סנכרון מלא מהשרת — בעבר הלקוח חזה סטטוס לבד והסתטה מהאמת
-      // (ריצה שנגמרה בכישלון מלא השאירה "בביצוע" במסך עד ריענון).
+      // Full sync from the server — the client used to predict the status on its own and drift from the truth
+      // (a run that ended in total failure left "in progress" on screen until a refresh).
       void loadDetail(id).catch(() => undefined);
       void qc.invalidateQueries({ queryKey: ["missions"] });
     }
@@ -377,29 +377,29 @@ export function MissionControlPanel() {
     onSuccess: (_d, id) => {
       setDetail((d) => (d?.id === id ? null : d));
       void qc.invalidateQueries({ queryKey: ["missions"] });
-      toast({ title: "המשימה נמחקה" });
+      toast({ title: "Mission deleted" });
     },
-    onError: (e: Error) => toast({ title: "המחיקה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const loadDetail = async (id: number) => {
     const reqId = ++detailReqRef.current;
     try {
       const d = await apiFetch<MissionDetail>(`/api/mission/${id}`, token);
-      if (reqId !== detailReqRef.current) return; // תשובה מיושנת — לחיצה חדשה יותר כבר באוויר
+      if (reqId !== detailReqRef.current) return; // stale response — a newer click is already in flight
       setDetail(normalizeDetail(d));
     } catch (e) {
       if (reqId !== detailReqRef.current) return;
-      toast({ title: "טעינת המשימה נכשלה", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: "Failed to load mission", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
 
   const copyText = async (text: string, what: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      toast({ title: `${what} הועתק 📋` });
+      toast({ title: `${what} copied 📋` });
     } catch {
-      toast({ title: "ההעתקה נכשלה", variant: "destructive" });
+      toast({ title: "Copy failed", variant: "destructive" });
     }
   };
 
@@ -408,55 +408,55 @@ export function MissionControlPanel() {
 
   return (
     <div className="space-y-5">
-      {/* לולאת האבולוציה — מחוון סטטוס */}
-      <section className="rounded-xl border bg-gradient-to-l from-violet-50/70 via-background to-background p-4 dark:from-violet-950/20" aria-label="מחוון לולאת האבולוציה">
+      {/* Evolution loop — status indicator */}
+      <section className="rounded-xl border bg-gradient-to-l from-violet-50/70 via-background to-background p-4 dark:from-violet-950/20" aria-label="Evolution loop status indicator">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white shadow-sm">
               <RotateCcw className="h-4.5 w-4.5" aria-hidden />
             </div>
             <div>
-              <p className="text-sm font-bold">לולאת האבולוציה</p>
-              <p className="text-xs text-muted-foreground">בצע משימה ← דווח מהשדה ← לקחים הופכים ל-DNA חדש ← הספרייה מחכימה</p>
+              <p className="text-sm font-bold">Evolution Loop</p>
+              <p className="text-xs text-muted-foreground">Run a mission → report from the field → lessons become new DNA → the library grows smarter</p>
             </div>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <Badge variant="outline" className="gap-1 px-2.5 py-1">
-              <Dna className="h-3.5 w-3.5" /> {stats?.totalDna ?? 0} גנים בספרייה
+              <Dna className="h-3.5 w-3.5" /> {stats?.totalDna ?? 0} genes in library
             </Badge>
             <Badge className="gap-1 border-emerald-300 bg-emerald-50 px-2.5 py-1 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-              <Sparkles className="h-3.5 w-3.5" /> {stats?.fieldDna ?? 0} נולדו מהשדה
+              <Sparkles className="h-3.5 w-3.5" /> {stats?.fieldDna ?? 0} born from the field
             </Badge>
           </div>
         </div>
       </section>
 
       <div className="grid gap-5 xl:grid-cols-3">
-        {/* עמודת ההידור והפרטים */}
+        {/* Compile & details column */}
         <div className="space-y-5 xl:col-span-2">
-          {/* טופס הידור */}
-          <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="הידור משימה חדשה">
+          {/* Compile form */}
+          <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="Compile a new mission">
             <p className="mb-1 flex items-center gap-2 text-sm font-bold">
-              <Target className="h-4 w-4 text-violet-600" /> הדבר משימה חדשה
+              <Target className="h-4 w-4 text-violet-600" /> Compile a New Mission
             </p>
             <p className="mb-3 text-xs text-muted-foreground">
-              תאר מטרה בשפה טבעית — המנוע יבחר לבד את ה-DNA הרלוונטי מהספרייה וירכיב תוכנית קרב + רצף פרומפטים מוכן להדבקה ב-Claude Code
+              Describe a goal in natural language — the engine picks the relevant DNA from the library on its own and assembles a battle plan + a prompt sequence ready to paste into Claude Code
             </p>
             <Textarea
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
-              placeholder="לדוגמה: לבנות סקיל שמבצע חיפוש רשת, מצליב מקורות ומפיק דוח מאומת…"
+              placeholder="For example: build a skill that searches the web, cross-checks sources, and produces a verified report…"
               className="mb-2 min-h-20 resize-y"
               maxLength={2000}
-              aria-label="מטרת המשימה"
+              aria-label="Mission goal"
             />
             <Input
               value={context}
               onChange={(e) => setContext(e.target.value)}
-              placeholder="הקשר נוסף (רשות): סטאק, אילוצים, דדליין…"
+              placeholder="Additional context (optional): stack, constraints, deadline…"
               className="mb-3 text-sm"
               maxLength={2000}
-              aria-label="הקשר נוסף"
+              aria-label="Additional context"
             />
             <div className="mb-3 flex flex-wrap gap-1.5">
               {EXAMPLE_GOALS.map((g) => (
@@ -476,28 +476,28 @@ export function MissionControlPanel() {
             >
               {compileM.isPending ? (
                 <>
-                  <Loader2 className="ml-2 h-4 w-4 animate-spin" /> מרכיב תוכנית קרב… (עד דקה)
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" /> Assembling battle plan… (up to a minute)
                 </>
               ) : (
                 <>
-                  <Play className="ml-2 h-4 w-4" /> הדר משימה
+                  <Play className="ml-2 h-4 w-4" /> Compile mission
                 </>
               )}
             </Button>
           </section>
 
-          {/* משימה פעילה — פירוט */}
+          {/* Active mission — details */}
           {detail && (
             <MissionDetailCard
-              key={detail.id} // מצב openSteps לא דולף בין משימות
+              key={detail.id} // openSteps state doesn't leak between missions
               m={detail}
               onCopy={copyText}
               onStatus={(s) => statusM.mutate({ id: detail.id, status: s })}
               onReport={() => setReportOpen(true)}
               onDelete={() => {
-                // אישור לפני מחיקה — בעבר לחיצה אחת מחקה לצמיתות את המשימה,
-                // התוצרים והיסטוריית הדיווחים (ועכשיו גם את ה-DNA שנולד ממנה).
-                if (window.confirm("למחוק את המשימה?\nהפעולה תמחק גם את ה-DNA שנולד ממנה ואת היסטוריית הדיווחים — לא ניתן לשחזר.")) {
+                // Confirm before delete — a single click used to permanently delete the mission,
+                // its deliverables and the report history (and now also the DNA born from it).
+                if (window.confirm("Delete this mission?\nThis will also delete the DNA born from it and the report history — this cannot be undone.")) {
                   deleteM.mutate(detail.id);
                 }
               }}
@@ -509,10 +509,10 @@ export function MissionControlPanel() {
           )}
         </div>
 
-        {/* עמודת ההיסטוריה */}
-        <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="משימות קודמות">
+        {/* History column */}
+        <section className="rounded-xl border bg-card p-4 shadow-sm" aria-label="Past missions">
           <p className="mb-3 flex items-center gap-2 text-sm font-bold">
-            <ListChecks className="h-4 w-4 text-violet-600" /> משימות ({listData?.total ?? items.length})
+            <ListChecks className="h-4 w-4 text-violet-600" /> Missions ({listData?.total ?? items.length})
           </p>
           {listLoading ? (
             <div className="space-y-2">
@@ -522,7 +522,7 @@ export function MissionControlPanel() {
             </div>
           ) : items.length === 0 ? (
             <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
-              עדיין אין משימות. הדבר מטרה והתחל לבצע 🚀
+              No missions yet. Compile a goal and start executing 🚀
             </div>
           ) : (
             <ul className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
@@ -542,9 +542,9 @@ export function MissionControlPanel() {
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{it.goal}</p>
                       <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
-                        <span>{it.phaseCount} שלבים</span>
+                            <span>{it.phaseCount} phases</span>
                         <span>·</span>
-                        <span>{it.promptCount} פרומפטים</span>
+                            <span>{it.promptCount} prompts</span>
                         {it.createdAt && (
                           <>
                             <span>·</span>
@@ -554,7 +554,7 @@ export function MissionControlPanel() {
                         {it.hasReport && (
                           <>
                             <span>·</span>
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">דווח ✓</span>
+                                <span className="font-semibold text-emerald-600 dark:text-emerald-400">Reported ✓</span>
                           </>
                         )}
                       </div>
@@ -567,15 +567,15 @@ export function MissionControlPanel() {
         </section>
       </div>
 
-      {/* דיאלוג דיווח שדה */}
+      {/* Field report dialog */}
       <Dialog open={reportOpen} onOpenChange={setReportOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Send className="h-4 w-4 text-violet-600" /> דיווח שדה — הזן את הלולאה
+              <Send className="h-4 w-4 text-violet-600" /> Field Report — Feed the Loop
             </DialogTitle>
             <DialogDescription>
-              ספר מה קרה בפועל. המזקק יפיק לקחים ויוליד DNA חדש בספרייה — כך המערכת משתפרת מכל משימה.
+              Tell what actually happened. The distiller extracts lessons and births new DNA into the library — that's how the system improves with every mission.
             </DialogDescription>
           </DialogHeader>
 
@@ -598,15 +598,15 @@ export function MissionControlPanel() {
           <Textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="מה עבד? מה נשבר? איזה תרגיל עקף את הבעיה? איזה פרומפט הניב את התוצאה הטובה ביותר?"
+            placeholder="What worked? What broke? Which workaround bypassed the problem? Which prompt produced the best result?"
             className="min-h-24 resize-y"
             maxLength={4000}
-            aria-label="הערות מהשטח"
+            aria-label="Field notes"
           />
 
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setReportOpen(false)}>
-              ביטול
+              Cancel
             </Button>
             <Button
               onClick={() => detail && reportM.mutate({ missionId: detail.id })}
@@ -615,11 +615,11 @@ export function MissionControlPanel() {
             >
               {reportM.isPending ? (
                 <>
-                  <Loader2 className="ml-2 h-4 w-4 animate-spin" /> מזקק לקחים…
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" /> Distilling lessons…
                 </>
               ) : (
                 <>
-                  <Send className="ml-2 h-4 w-4" /> שלח וזקק
+                  <Send className="ml-2 h-4 w-4" /> Send & Distill
                 </>
               )}
             </Button>
@@ -630,7 +630,7 @@ export function MissionControlPanel() {
   );
 }
 
-// ---------- כרטיס פירוט משימה ----------
+// ---------- Mission detail card ----------
 
 function MissionDetailCard({
   m,
@@ -663,7 +663,7 @@ function MissionDetailCard({
       return n;
     });
 
-  // סטטוס פר-שלב: בוצע / נכשל / ממתין — מהנתונים השמורים (מדויק גם אחרי ריסטרט)
+  // Per-phase status: executed / failed / pending — from persisted data (accurate even after a restart)
   const executedMap = new Map((m.autopilot?.steps ?? []).map((s) => [s.phaseIndex, s]));
   const failedMap = new Map((m.autopilot?.failures ?? []).map((f) => [f.phaseIndex, f]));
   const totalPhases = m.phases.length;
@@ -672,8 +672,8 @@ function MissionDetailCard({
   const remaining = Math.max(0, totalPhases - stepsDone - stepsFailed);
   const hasPending = remaining > 0;
   return (
-    <section className="rounded-xl border-2 border-violet-200 bg-card p-4 shadow-sm dark:border-violet-900" aria-label={`משימה ${m.missionName}`}>
-      {/* כותרת */}
+    <section className="rounded-xl border-2 border-violet-200 bg-card p-4 shadow-sm dark:border-violet-900" aria-label={`Mission ${m.missionName}`}>
+      {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -682,42 +682,42 @@ function MissionDetailCard({
             </h3>
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${st.cls}`}>{st.label}</span>
             {m.skillMdSource === "fallback" && (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="יצירת ה-SKILL.md ב-AI נכשלה — נעשה שימוש בגיבוי המקומי">
-                SKILL.md: גיבוי מקומי
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="AI generation of SKILL.md failed — the local fallback was used">
+                SKILL.md: local fallback
               </span>
             )}
             {m.skillMdSource === "unknown" && (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title={'שורה שהודרה לפני עידן סימון המקור — בעבר הוצגה כ־AI בטעון'}>
-                SKILL.md: מקור לא מסומן
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300" title={'A row compiled before source tagging existed — it used to show as AI by mistake'}>
+                SKILL.md: source untagged
               </span>
             )}
           </div>
           {m.oneLiner && <p className="mt-1 text-sm font-medium">{m.oneLiner}</p>}
-          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">מטרה: {m.goal}</p>
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">Goal: {m.goal}</p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button size="sm" variant="outline" onClick={() => onCopy(m.bundle, "חבילת המשימה")} title="העתקת החבילה המלאה">
+          <Button size="sm" variant="outline" onClick={() => onCopy(m.bundle, "Mission bundle")} title="Copy the full bundle">
             <Copy className="h-3.5 w-3.5" />
           </Button>
           <Button
             size="sm"
             variant="outline"
             onClick={() => downloadFile(`mission-${m.missionName}.md`, m.bundle, "text/markdown")}
-            title="הורדת חבילת המשימה"
+            title="Download the mission bundle"
           >
             <Download className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" variant="outline" onClick={onDelete} disabled={busy} title="מחיקת המשימה" className="text-rose-600 hover:text-rose-700">
+          <Button size="sm" variant="outline" onClick={onDelete} disabled={busy} title="Delete the mission" className="text-rose-600 hover:text-rose-700">
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
-      {/* דנ"א שנבחר אוטומטית */}
+      {/* Auto-selected DNA */}
       {m.selectedDna.length > 0 && (
         <div className="mt-3 rounded-lg bg-violet-50/60 p-3 dark:bg-violet-950/20">
           <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-violet-700 dark:text-violet-300">
-            <Dna className="h-3.5 w-3.5" /> נבחר אוטומטית מהספרייה ({m.selectedDna.length})
+            <Dna className="h-3.5 w-3.5" /> Auto-selected from the library ({m.selectedDna.length})
           </p>
           <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
             {m.selectedDna.map((d) => (
@@ -730,9 +730,9 @@ function MissionDetailCard({
         </div>
       )}
 
-      {/* שלבים — עם סטטוס ביצוע חי */}
+      {/* Phases — with live execution status */}
       <div className="mt-4 space-y-2">
-        <p className="text-xs font-bold text-muted-foreground">שלבי המשימה</p>
+        <p className="text-xs font-bold text-muted-foreground">Mission Phases</p>
         {m.phases.map((p, i) => {
           const done = executedMap.has(i);
           const failed = failedMap.has(i);
@@ -746,7 +746,7 @@ function MissionDetailCard({
               {autopilotRunning && !done && !failed && <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />}
             </div>
             {failed && failedMap.get(i) && (
-              <p className="mt-1 pr-8 text-xs font-medium text-rose-700 dark:text-rose-300">כשל: {failedMap.get(i)!.error}</p>
+              <p className="mt-1 pr-8 text-xs font-medium text-rose-700 dark:text-rose-300">Failure: {failedMap.get(i)!.error}</p>
             )}
             {p.objective && <p className="mt-1 pr-8 text-xs text-muted-foreground">{p.objective}</p>}
             {p.steps.length > 0 && (
@@ -767,7 +767,7 @@ function MissionDetailCard({
               )}
               {p.verify && (
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                  ✓ אימות: {p.verify}
+                  ✓ Verify: {p.verify}
                 </span>
               )}
             </div>
@@ -776,10 +776,10 @@ function MissionDetailCard({
         })}
       </div>
 
-      {/* רצף פרומפטים */}
+      {/* Prompt sequence */}
       {m.promptSequence.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-xs font-bold text-muted-foreground">רצף פרומפטים — הדבק ב-Claude Code לפי הסדר</p>
+          <p className="mb-2 text-xs font-bold text-muted-foreground">Prompt Sequence — paste into Claude Code in order</p>
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
             {m.promptSequence.map((p) => (
               <div key={p.order} className="rounded-lg border bg-muted/30 p-3">
@@ -787,8 +787,8 @@ function MissionDetailCard({
                   <p className="text-xs font-bold">
                     <span className="text-violet-600">{p.order}.</span> {p.label}
                   </p>
-                  <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => onCopy(p.paste, "הפרומפט")}>
-                    <Copy className="h-3 w-3" /> העתק
+                    <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => onCopy(p.paste, "Prompt")}>
+                      <Copy className="h-3 w-3" /> Copy
                   </Button>
                 </div>
                 <pre dir="ltr" className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-background p-2 text-left font-mono text-[11px] leading-relaxed">
@@ -800,12 +800,12 @@ function MissionDetailCard({
         </div>
       )}
 
-      {/* סיכונים וקריטריונים */}
+      {/* Risks & criteria */}
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {m.risks.length > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900 dark:bg-amber-950/20">
             <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="h-3.5 w-3.5" /> סיכונים ומיתוג
+              <AlertTriangle className="h-3.5 w-3.5" /> Risks & Mitigation
             </p>
             <ul className="space-y-1 text-xs">
               {m.risks.map((r, i) => (
@@ -817,7 +817,7 @@ function MissionDetailCard({
         {m.successCriteria.length > 0 && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 dark:border-emerald-900 dark:bg-emerald-950/20">
             <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-              <CheckCircle2 className="h-3.5 w-3.5" /> קריטריוני הצלחה
+              <CheckCircle2 className="h-3.5 w-3.5" /> Success Criteria
             </p>
             <ul className="space-y-1 text-xs">
               {m.successCriteria.map((c, i) => (
@@ -828,15 +828,15 @@ function MissionDetailCard({
         )}
       </div>
 
-      {/* טייס אוטומטי — תוצרים אוטונומיים */}
+      {/* Autopilot — autonomous deliverables */}
       {(autopilotRunning || m.autopilot) && (
         <div className="mt-4 rounded-lg border-2 border-amber-300 bg-gradient-to-b from-amber-50/70 to-background p-3 dark:border-amber-800 dark:from-amber-950/20">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="flex items-center gap-1.5 text-sm font-bold text-amber-700 dark:text-amber-300">
               <Rocket className="h-4 w-4" />
               {autopilotRunning
-                ? "הטייס האוטומטי טס — כל שלב נשמר ברגע שהושלם"
-                : `תוצרי טיסה אוטונומית (${stepsDone}/${totalPhases} שלבים)`}
+                ? "Autopilot is flying — every phase is saved the moment it completes"
+                : `Autonomous flight deliverables (${stepsDone}/${totalPhases} phases)`}
             </p>
             {m.autopilot && !autopilotRunning && (
               <Button
@@ -848,11 +848,11 @@ function MissionDetailCard({
                   downloadFile(`autopilot-${m.missionName}.md`, `# Autopilot Deliverables — ${m.missionName}\n\nGoal: ${m.goal}${all}`, "text/markdown");
                 }}
               >
-                <Download className="h-3 w-3" /> הורד את כל התוצרים
+                <Download className="h-3 w-3" /> Download all deliverables
               </Button>
             )}
           </div>
-          {/* פס התקדמות אמיתי — מהנתונים השמורים */}
+          {/* Real progress bar — from persisted data */}
           <div className="mt-2 flex items-center gap-2">
             <div className="h-2 flex-1 overflow-hidden rounded-full bg-amber-100 dark:bg-amber-950">
               <div
@@ -865,13 +865,13 @@ function MissionDetailCard({
               />
             </div>
             <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300">
-              {stepsDone}✓ · {stepsFailed}✗ · {remaining} ממתין
+              {stepsDone}✓ · {stepsFailed}✗ · {remaining} pending
             </span>
           </div>
           {autopilotRunning && (
             <div className="mt-2 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {autopilotProgress || "מבצע את השלב הבא עם ה-DNA שנבחר + שרשור Handoffs…"}
+              {autopilotProgress || "Executing the next phase with the selected DNA + Handoff chaining…"}
             </div>
           )}
           {m.autopilot && (
@@ -882,7 +882,7 @@ function MissionDetailCard({
                     <span className="flex items-center gap-2 text-xs font-bold">
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white">{s.phaseIndex + 1}</span>
                       {s.title}
-                      <span className="font-normal text-muted-foreground">· {Math.round(s.deliverable.length / 100) / 10}k תווים</span>
+                      <span className="font-normal text-muted-foreground">· {Math.round(s.deliverable.length / 100) / 10}k chars</span>
                     </span>
                     <span className="text-[10px] text-muted-foreground">{openSteps.has(i) ? "▲" : "▼"}</span>
                   </button>
@@ -895,10 +895,10 @@ function MissionDetailCard({
               ))}
               {m.autopilot.failures.length > 0 && (
                 <div className="rounded-md border border-rose-300 bg-rose-50/60 p-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300">
-                  <p className="font-bold">כשלים חלקיים:</p>
+                  <p className="font-bold">Partial failures:</p>
                   <ul className="mt-1 space-y-0.5">
                     {m.autopilot.failures.map((f) => (
-                      <li key={f.phaseIndex}>• שלב {f.phaseIndex + 1}: {f.error}</li>
+                      <li key={f.phaseIndex}>• Phase {f.phaseIndex + 1}: {f.error}</li>
                     ))}
                   </ul>
                 </div>
@@ -906,7 +906,7 @@ function MissionDetailCard({
               {!autopilotRunning && (
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   <PackageOpen className="ml-1 inline h-3 w-3" />
-                  התוצרים אמיתיים: קוד, החלטות ו-Handoffs שנכתבו על-ידי יחידת הביצוע עם ה-DNA של הספרייה. דווח מהשדה כדי להנציח לקחים.
+                  The deliverables are real: code, decisions, and Handoffs written by the execution unit with the library's DNA. Report from the field to turn lessons into lasting DNA.
                 </p>
               )}
             </div>
@@ -914,7 +914,7 @@ function MissionDetailCard({
         </div>
       )}
 
-      {/* דיווח שדה קיים */}
+      {/* Existing field report */}
       {m.report && (
         <div className="mt-4 rounded-lg border-2 border-emerald-300 bg-emerald-50/60 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
           <p className="mb-1 flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
@@ -927,21 +927,21 @@ function MissionDetailCard({
           </ul>
           {m.report.bornDnaId && (
             <p className="mt-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
-              🧬 לקח זה הונצח כיכולת חדשה בספרייה (#{m.report.bornDnaId}) — זמין כבר בהידור המשימה הבאה
+              🧬 This lesson was immortalized as a new capability in the library (#{m.report.bornDnaId}) — already available in the next mission compilation
             </p>
           )}
         </div>
       )}
 
-      {/* היסטוריית דיווחים — בעבר הגיעה מהשרת ולא הוצגה אף פעם */}
+      {/* Report history — it used to arrive from the server but was never displayed */}
       {(m.reportHistory?.length ?? 0) > 1 && (
         <div className="mt-3 rounded-lg border bg-muted/30 p-3">
-          <p className="mb-1.5 text-xs font-bold text-muted-foreground">היסטוריית דיווחים ({m.reportHistory!.length})</p>
+          <p className="mb-1.5 text-xs font-bold text-muted-foreground">Report History ({m.reportHistory!.length})</p>
           <ol className="space-y-1.5 border-r-2 border-muted pr-3">
             {m.reportHistory!.map((r, i) => {
               const outcome = typeof r.outcome === "string" ? r.outcome : "?";
               const verdict = typeof r.verdict === "string" ? r.verdict : "";
-              const reportedAt = typeof r.reportedAt === "string" ? new Date(r.reportedAt).toLocaleString("he-IL") : "";
+              const reportedAt = typeof r.reportedAt === "string" ? new Date(r.reportedAt).toLocaleString("en-US") : "";
               const tone =
                 outcome === "success"
                   ? "bg-emerald-600"
@@ -953,7 +953,7 @@ function MissionDetailCard({
                   <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${tone}`} aria-hidden />
                   <span className="min-w-0 flex-1">
                     <span className="font-medium">
-                      {outcome === "success" ? "הצלחה" : outcome === "partial" ? "חלקית" : "כישלון"}
+                      {outcome === "success" ? "Success" : outcome === "partial" ? "Partial" : "Failure"}
                     </span>
                     {reportedAt && <span className="text-muted-foreground"> · {reportedAt}</span>}
                     {verdict && (
@@ -969,7 +969,7 @@ function MissionDetailCard({
         </div>
       )}
 
-      {/* פעולות תחתונות */}
+      {/* Bottom actions */}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3">
         <Button
           size="sm"
@@ -979,12 +979,12 @@ function MissionDetailCard({
         >
           {autopilotRunning ? (
             <>
-              <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin" /> טס אוטונומית…
+              <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin" /> Flying autonomously…
             </>
           ) : (
             <>
               <Rocket className="ml-1 h-3.5 w-3.5" />
-              {hasPending && (m.autopilot || m.status === "in_progress") ? `המשך טיסה (${remaining} שלבים נותרו)` : "הפעל טייס אוטומטי"}
+              {hasPending && (m.autopilot || m.status === "in_progress") ? `Resume flight (${remaining} phases left)` : "Launch autopilot"}
             </>
           )}
         </Button>
@@ -993,15 +993,15 @@ function MissionDetailCard({
           variant="outline"
           disabled={busy || m.status === "done"}
           onClick={() => onStatus("in_progress")}
-          title={m.status === "done" ? "משימה שהושלמה נועלה את הסטטוס" : "סימון המשימה כבביצוע"}
+          title={m.status === "done" ? "A completed mission has a locked status" : "Mark the mission as in progress"}
         >
-          <Play className="ml-1 h-3.5 w-3.5" /> סמן בביצוע
+          <Play className="ml-1 h-3.5 w-3.5" /> Mark in progress
         </Button>
         <Button size="sm" onClick={onReport} disabled={busy} className="bg-violet-600 text-white hover:bg-violet-700">
-          <Send className="ml-1 h-3.5 w-3.5" /> דווח מהשדה
+          <Send className="ml-1 h-3.5 w-3.5" /> Report from the field
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => onCopy(m.skillMd, "ה-SKILL.md")} className="text-xs">
-          <FileText className="ml-1 h-3.5 w-3.5" /> העתק SKILL.md
+        <Button size="sm" variant="ghost" onClick={() => onCopy(m.skillMd, "SKILL.md")} className="text-xs">
+          <FileText className="ml-1 h-3.5 w-3.5" /> Copy SKILL.md
         </Button>
       </div>
     </section>

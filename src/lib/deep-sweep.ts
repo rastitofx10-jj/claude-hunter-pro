@@ -1,37 +1,37 @@
 // ============================================================
-// מנוע סריקת עומק — Claude Hunter
-// סבב מודיעין מקצועי מלא: ארסנל שאילתות רחב (קוד + מאגרים)
-// ← העשרת מטא-דאטה ← דירוג מבוסס ראיות ← כריית DNA.
-// זה הצעד מ"שתי שאילתות קבועות" לארסנל אמיתי שמתעדכן מרישום המודלים.
-// פועל בצד שרת בלבד.
+// Deep sweep engine — Claude Hunter
+// A full professional intelligence round: a wide query arsenal (code + repos)
+// ← metadata enrichment ← evidence-based ranking ← DNA mining.
+// This is the step from "two hardcoded queries" to a real arsenal that updates from the model registry.
+// Runs server-side only.
 // ============================================================
 
-import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey, isCapabilityPath } from "./github";
+import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey, isCapabilityPath, getQuotaState } from "./github";
 import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
 import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 
-// ---------- ארסנל השאילתות ----------
+// ---------- Query arsenal ----------
 
 export interface SweepQuery {
   q: string;
   kind: "code" | "repo";
-  /** מאיפה השאילתה: registry (מודל רשום) | capability | topic | market */
+  /** Where the query comes from: registry (a registered model) | capability | topic | market */
   origin: string;
 }
 
-/** בונה את ארסנל השאילתות המלא מתוך רישום המודלים — תמיד מסונכרן עם הסף */
+/** Builds the full query arsenal from the model registry — always in sync with the threshold */
 export function buildQueryArsenal(): SweepQuery[] {
   const queries: SweepQuery[] = [];
 
-  // 1. כל מחרוזת חיפוש של כל מודל מזכה — חיפוש קוד ישיר (הראיה הקשה)
+  // 1. Every search string of every qualifying model — direct code search (the hard evidence)
   for (const m of QUALIFYING_MODELS) {
     for (const s of m.searchStrings) {
       queries.push({ q: s, kind: "code", origin: `registry:${m.id}` });
     }
   }
 
-  // 2. שאילתות יכולת — קבצי יכולת Claude עם מחרוזות פרימיום
+  // 2. Capability queries — Claude capability files with premium strings
   queries.push(
     { q: "SKILL.md claude", kind: "code", origin: "capability" },
     { q: "claude-code commands", kind: "code", origin: "capability" },
@@ -39,8 +39,8 @@ export function buildQueryArsenal(): SweepQuery[] {
     { q: "anthropic max tokens opus", kind: "code", origin: "capability" },
   );
 
-  // 3. חיפושי מאגרים — השוק הרחב של פרויקטי Claude פעילים
-  // (120 יום — בעבר נקרא בטעות monthAgo; שם המשתנה הטעה את כולם)
+  // 3. Repo searches — the broad market of active Claude projects
+  // (120 days — previously misnamed monthAgo; the variable name misled everyone)
   const freshSince = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
   queries.push(
     { q: `claude opus 5.5 stars:>5 pushed:>${freshSince}`, kind: "repo", origin: "market" },
@@ -55,13 +55,13 @@ export function buildQueryArsenal(): SweepQuery[] {
   return queries;
 }
 
-// ---------- גילוי מועמדים ----------
+// ---------- Candidate discovery ----------
 
 export interface CodeHit {
   path: string;
   repo: string;
   capability: boolean;
-  /** השאילתה שמצאה את הקובץ — GitHub קוד-סרץ' מתאים תוכן קובץ, ולכן זו הוכחה שהמחרוזת בתוכן */
+  /** The query that found the file — GitHub code search matches file content, so this proves the string is in the content */
   viaQuery: string;
 }
 
@@ -79,22 +79,22 @@ export interface Candidate {
   description: string | null;
   pushedAt: string | null;
   topics: string[];
-  /** הוכחה: נמצא בתוכן קובץ אמיתי (GitHub code search מתאים תוכן) — ראיה קשה */
+  /** Proof: found inside a real file's content (GitHub code search matches content) — hard evidence */
   contentEvidence: string[];
-  /** ענף ברירת המחדל מה-GraphQL — חוסך קריאת /repos בכרייה */
+  /** Default branch from GraphQL — saves a /repos call during mining */
   defaultBranch?: string | null;
-  /** נמצא רק בתיאור/topics/נתיב — ראיה רכה, לא הוכחה של שימוש בקוד */
+  /** Found only in description/topics/path — soft evidence, not proof of use in code */
   textEvidence: string[];
-  /** נתיבי קבצים אמיתיים שבהם נמצאה מחרוזת מודל רשומה — קרקע-אמת לאימות חוזר */
+  /** Real file paths where a registered model string was found — ground truth for re-verification */
   evidencePaths: string[];
-  /** לתצוגה: איחוד שני המקורות */
+  /** For display: the union of both sources */
   modelStrings: string[];
-  /** כמה קבצי יכולת נתגלו (SKILL.md, .claude/ וכו') */
+  /** How many capability files were discovered (SKILL.md, .claude/, etc.) */
   capabilityHits: number;
-  /** דיוק ראיית המודל: hard (מחרוזת מודל בתוכן קוד — מאומת) | soft (אזכור בתיאור/נתיב) | none */
+  /** Model-evidence precision: hard (model string in code content — verified) | soft (a mention in description/path) | none */
   evidence: "hard" | "soft" | "none";
   score: number;
-  /** מקורות הגילוי */
+  /** Discovery sources */
   via: string[];
 }
 
@@ -125,12 +125,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // (searchWithBackoff moved to github.ts as ghSearchWithBackoff — one source of truth;
 //  the local copy had a dead backoff: it matched "rate limit" inside a message
-//  that ghFetch had already translated to Hebrew, so rate-limited queries were
+//  that ghFetch had already rewritten, so rate-limited queries were
 //  thrown permanently instead of waiting 8s/16s/32s and retrying.)
 
 /**
- * שלב א׳ — ירי כל השאילתות בקצב בטוח למכסת החיפוש (30/דקה),
- * עם דיווח התקדמות אחרי כל שאילתה.
+ * Stage A — firing all queries at a rate safe for the search quota (30/min),
+ * with progress reporting after each query.
  */
 export interface QueryReport {
   q: string;
@@ -151,6 +151,20 @@ export async function runQueryArsenal(
   const seenCode = new Set<string>(); // repo:path dedup
 
   for (let i = 0; i < queries.length; i++) {
+    // Quota-header pacing BEFORE the query fires: the previous response already
+    // told us where we stand. With ≤3 points left we hold this query until the
+    // window resets (up to 30s, on top of the normal inter-query sleep below) —
+    // instead of charging ahead, eating the 403, and making ghSearchWithBackoff
+    // recover it after the fact. remaining == null (no header ever seen) →
+    // exactly the old blind-pacing behavior.
+    const quota = getQuotaState();
+    if (quota.remaining != null && quota.remaining <= 3 && quota.reset != null) {
+      const extraMs = Math.min(30_000, Math.max(0, (quota.reset - Math.floor(Date.now() / 1000) + 1) * 1000));
+      console.log(
+        `[deep-sweep] quota low: ${quota.remaining} left${quota.resource ? ` (${quota.resource})` : ""} — holding ${Math.round(extraMs / 1000)}s for the window reset`
+      );
+      await sleep(extraMs);
+    }
     const query = queries[i];
     let report: QueryReport = { q: query.q, kind: query.kind, origin: query.origin, count: 0 };
     try {
@@ -185,23 +199,23 @@ export async function runQueryArsenal(
         }
       }
     } catch (e) {
-      report = { ...report, count: 0, error: e instanceof Error ? e.message : "שגיאה" };
+      report = { ...report, count: 0, error: e instanceof Error ? e.message : "error" };
     }
     reports.push(report);
     await onProgress(report, i + 1, queries.length);
-    // קצב מותאם סוג שאילתה: code search מקבל מכסה נפרדת ומחמירה (10 לדקה)
-    // — 2.1s מספיק ל-repositories אבל שורף את מכסת הקוד אחרי ~10 שאילתות.
-    // (בעבר: 2.1s לכולם → שאילתות קוד 403-וות ונרשמו כשגיאות)
+    // Query-type-tailored pacing: code search gets a separate, stricter quota (10/min)
+    // — 2.1s is enough for repositories but burns the code quota after ~10 queries.
+    // (Before: 2.1s for everything → code queries got 403s and were recorded as errors)
     if (i < queries.length - 1) await sleep(query.kind === "code" ? 6_500 : 2_100);
   }
 
   return { reports, codeHits, repoHits };
 }
 
-/** שלב ב׳ — איחוד גילויים למועמדים מדורגים לפי ראיות, עם הפרדת מקורות מחמירה:
- *  — contentEvidence: GitHub code search התאים את המחרוזת בתוכן קובץ אמיתי (מאומת)
- *  — textEvidence: המחרוזת מופיעה רק בתיאור/topics/נתיב (לא הוכחה של קוד)
- *  — evidence=hard אך ורק אם יש contentEvidence. אין קידום תיאור ל"קוד". */
+/** Stage B — consolidating findings into evidence-ranked candidates, with strict source separation:
+ *  — contentEvidence: GitHub code search matched the string inside a real file's content (verified)
+ *  — textEvidence: the string appears only in description/topics/path (not proof of code)
+ *  — evidence=hard if and only if there is contentEvidence. A description never gets promoted to "code". */
 export function consolidateCandidates(
   codeHits: CodeHit[],
   repoHits: RepoHit[]
@@ -231,7 +245,7 @@ export function consolidateCandidates(
     return c;
   };
 
-  // מיפוי שאילתה → מזהה מודל רשומי (לפי ה-origin של הארסנל)
+  // Query → registered model id mapping (by the arsenal origin)
   const queryToModel = new Map<string, string>();
   for (const m of QUALIFYING_MODELS) {
     for (const s of m.searchStrings) queryToModel.set(s.toLowerCase(), m.id);
@@ -240,15 +254,15 @@ export function consolidateCandidates(
   for (const hit of codeHits) {
     const c = ensure(hit.repo);
     if (hit.capability) c.capabilityHits++;
-    // הוכחת תוכן רק למחרוזת מודל רשומה: השאילתה נמצאה בתוכן הקובץ, אבל
-    // שאילתות יכולת/שוק (למשל SKILL.md claude) אינן הוכחת מודל — רק סימן soft.
+    // Content proof only for a registered model string: the query was found in the file's content, but
+    // capability/market queries (e.g. SKILL.md claude) are not proof of a model — only a soft signal.
     const asModel = queryToModel.get(hit.viaQuery.toLowerCase());
     if (asModel) {
       if (!c.contentEvidence.includes(asModel)) c.contentEvidence.push(asModel);
-      // שמירת נתיב הקובץ האמיתי — קרקע-אמת לאימות חוזר במודול הביקורת
+      // Saving the real file path — ground truth for re-verification in the audit module
       if (c.evidencePaths.length < 3 && !c.evidencePaths.includes(hit.path)) c.evidencePaths.push(hit.path);
     }
-    // זיהוי משני מהנתיב — רק ראיה רכה
+    // Secondary detection from the path — soft evidence only
     const pathDetected = detectClaudeModels(hit.path).qualifying;
     for (const d of pathDetected) if (!c.textEvidence.includes(d.id)) c.textEvidence.push(d.id);
     if (!c.via.includes("code")) c.via.push("code");
@@ -261,7 +275,7 @@ export function consolidateCandidates(
     c.pushedAt = hit.pushedAt ?? c.pushedAt;
     c.topics = Array.from(new Set([...c.topics, ...hit.topics]));
     if (!c.via.includes("repo")) c.via.push("repo");
-    // אזכור בתיאור/topics — ראיה רכה בלבד, אף פעם לא hard
+    // A mention in description/topics — soft evidence only, never hard
     const hay = [hit.fullName, hit.description ?? "", hit.topics.join(" ")].join(" ");
     const detected = detectClaudeModels(hay).qualifying;
     for (const d of detected) if (!c.textEvidence.includes(d.id)) c.textEvidence.push(d.id);
@@ -273,17 +287,17 @@ export function consolidateCandidates(
     scoreCandidateInPlace(c);
   }
 
-  // ראייה קשה קודמת תמיד, אחר כך ציון
+  // Hard evidence always comes first, then score
   const evRank = { hard: 0, soft: 1, none: 2 } as const;
   candidates.sort((a, b) => evRank[a.evidence] - evRank[b.evidence] || b.score - a.score);
   return candidates;
 }
 
-/** חישוב הציון של מועמד — מקור יחיד.
- * בעבר הציון חושב פעם אחת ב-consolidate בלבד; enrichCandidates שינה את
- * stars אחר-כך ו"הדירוג מחדש אחרי העשרה" מיין לפי ציון ישן שחושב עם stars=0 —
- * מאגר 10K-כוכבים שהתגלה בחיפוש קוד דורג כ-0-כוכבים, וזה עיוות את ה-top-60,
- * האליטה ובחירת הכרייה. */
+/** Candidate score computation — single source.
+ * Previously the score was computed only once in consolidate; enrichCandidates then changed
+ * stars afterwards, and the "re-ranking after enrichment" sorted by a stale score computed with stars=0 —
+ * a 10K-star repo discovered via code search was ranked as 0 stars, distorting the top-60,
+ * the elite, and the mining selection. */
 export function scoreCandidateInPlace(c: Candidate): void {
   const listScore = computeListScore({
     fullName: c.fullName,
@@ -296,7 +310,7 @@ export function scoreCandidateInPlace(c: Candidate): void {
   const evidenceWeight = (id: string, hard: boolean) => {
     const m = QUALIFYING_MODELS.find((x) => x.id === id);
     const w = m ? m.weight / 10 : 12 / 10;
-    return hard ? w : w * 0.4; // ראיה רכה שווה פחות מחצי
+    return hard ? w : w * 0.4; // soft evidence is worth less than half
   };
   const modelEvidence =
     c.contentEvidence.reduce((s, id) => s + evidenceWeight(id, true), 0) +
@@ -307,19 +321,19 @@ export function scoreCandidateInPlace(c: Candidate): void {
   );
 }
 
-/** העשרה — מטא-דאטה אמיתית למועמדים המובילים.
- *  סבב 5: 30 קריאות REST + מרווחי 400ms ← 1-2 קריאות GraphQL (עלות 1 נקודה כל אחת).
- *  שלב ה-enrich בסריקה ירד מ-~10 שניות לפחות משנייה. */
+/** Enrichment — real metadata for the leading candidates.
+ *  Round 5: 30 REST calls + 400ms gaps ← 1-2 GraphQL calls (costing 1 point each).
+ *  The sweep's enrich stage dropped from ~10 seconds to under a second. */
 export async function enrichCandidates(
   candidates: Candidate[],
   token: string | null,
   topN = 30
 ): Promise<number> {
   const targets = candidates.slice(0, topN);
-  // רק מי שחסר לו כוכבים (נמצא רק דרך חיפוש-קוד — חיפוש המאגרים כבר הביא כוכבים)
+  // Only those missing stars (found only via code search — the repo search already brought stars)
   const needMeta = targets.filter((c) => c.stars === 0).map((c) => c.fullName);
-  // "הועשרו" = קיבל מטא-דאטה מ-GraphQL בפועל. בעבר נספרו גם מי שכבר היה לו stars
-  // מחיפוש המאגרים (לא נקרא בכלל עליהם) — והמספר הוזרם היישר לפרומפט התדריך.
+  // "Enriched" = actually received metadata from GraphQL. Before, those who already had stars
+  // from the repo search were also counted (no call was made for them at all) — and the number was streamed straight into the briefing prompt.
   let enriched = 0;
   if (needMeta.length > 0) {
     const metaMap = await batchRepoMeta(needMeta, token);
@@ -328,20 +342,20 @@ export async function enrichCandidates(
       if (m) {
         enriched++;
         if (m.stars > 0) c.stars = m.stars;
-        c.defaultBranch = m.defaultBranch; // חוסך קריאת /repos לכל ריפו שייכרה
+        c.defaultBranch = m.defaultBranch; // saves a /repos call for every repo that will be mined
       }
     }
   }
-  // חישוב מחדש של הציונים שהשתנו — בעבר המיון "אחרי העשרה" השתמש בציונים
-  // שחושבו עם stars=0 (ראה scoreCandidateInPlace): 10K-כוכבים שהתגלה בקוד
-  // דורג כ-0-כוכבים בכל הדירוגים במורד הזרם.
+  // Recompute the changed scores — before, the "after enrichment" sort used scores
+  // computed with stars=0 (see scoreCandidateInPlace): a 10K-star repo discovered via code
+  // was ranked as 0 stars in every downstream ranking.
   for (const c of targets) scoreCandidateInPlace(c);
   const evRank = { hard: 0, soft: 1, none: 2 } as const;
   candidates.sort((a, b) => evRank[a.evidence] - evRank[b.evidence] || b.score - a.score);
   return enriched;
 }
 
-// ---------- כרייה ----------
+// ---------- Mining ----------
 
 export interface MinedRepoReport {
   repo: string;
@@ -353,7 +367,7 @@ export interface MinedRepoReport {
   error?: string;
 }
 
-/** שלב ג׳ — כריית top-N מאגרים טריים לתוך הספרייה */
+/** Stage C — mine the top-N fresh repos into the library */
 const MINE_ATTEMPTS_KEY = "mineAttempts";
 
 async function loadMineAttempts(): Promise<Record<string, number>> {
@@ -368,7 +382,7 @@ async function loadMineAttempts(): Promise<Record<string, number>> {
 
 export interface MinedBatchResult {
   reports: MinedRepoReport[];
-  /** כמה ריפו דולגו כי כבר הוכחו ריקים בכריות קודמות (שקיפות מלאה ב-evidence) */
+  /** How many repos were skipped because they were already proven empty in previous mines (fully visible in evidence) */
   emptySkipped: number;
 }
 
@@ -386,9 +400,9 @@ export async function mineTopCandidates(
       })
     ).map((x) => x.sourceRepo)
   );
-  // זיכרון כריות ריקות: ריפו שנכרה פעמיים והניב 0 ארטיפקטים לא נכרה שוב.
-  // (בעבר: simonw/llm-anthropic נכרה ב-Gen5 וב-Gen6 והחזיר 0 שתי הפעמים —
-  //  בזבוז מכסה + רושם מטעה של "3 מאגרים נכרו")
+  // Empty-mine memory: a repo mined twice that yielded 0 artifacts is not mined again.
+  // (Before: simonw/llm-anthropic was mined in Gen5 and Gen6 and returned 0 both times —
+  //  wasted quota + a misleading "3 repos mined" record)
   const mineAttempts = await loadMineAttempts();
   let emptySkipped = 0;
   const fresh = candidates
@@ -398,9 +412,9 @@ export async function mineTopCandidates(
         emptySkipped++;
         return false;
       }
-      // חוק הסף — כרייה רק לריפו שמוכיחים ראייה למודל מזכה או יכולות .claude אמתיות,
-      // או שמקורם ארגון האליטה עצמו. מועמד סטרילי (אין ראייה, אין יכולות) לא מתגנב לספרייה.
-      // (בעבר: ריפו עם 4.x בלבד וכוכבים נכרה לספריית ה-DNA)
+      // Threshold rule — mine only repos that prove evidence of a qualifying model or real .claude capabilities,
+      // or that originate from the elite organization itself. A sterile candidate (no evidence, no capabilities) doesn't sneak into the library.
+      // (Before: a repo with only 4.x and stars was mined into the DNA library)
       if (c.evidence === "hard") return true;
       if (c.capabilityHits > 0) return true;
       if (/^anthropics\//i.test(c.fullName)) return true;
@@ -411,11 +425,11 @@ export async function mineTopCandidates(
 
   for (let i = 0; i < fresh.length; i += 2) {
     const batch = fresh.slice(i, i + 2);
-    // ענף ברירת המחדל מה-GraphQL של ההעשרה — חוסך קריאת /repos לכל ריפו
+    // The default branch from the enrichment GraphQL — saves a /repos call per repo
     const results = await Promise.allSettled(
       batch.map((c) => harvestRepo(c.fullName, token, { stars: c.stars, defaultBranch: c.defaultBranch ?? null }))
     );
-    // await במקום void — כתיבות התקדמות לא-מסודרות יכלו להחזיר progress אחורה
+    // await instead of void — unordered progress writes could report progress backwards
     for (let j = 0; j < results.length; j++) {
       const r = results[j];
       const c = batch[j];
@@ -439,7 +453,7 @@ export async function mineTopCandidates(
           updatedCount: 0,
           skippedStubs: 0,
           kinds: [],
-          error: r.reason instanceof Error ? r.reason.message : "כרייה נכשלה",
+          error: r.reason instanceof Error ? r.reason.message : "mining failed",
         };
         reports.push(rep);
         await onProgress?.(reports.length, fresh.length, rep);
@@ -447,7 +461,7 @@ export async function mineTopCandidates(
     }
   }
 
-  // עדכון זיכרון הכריות הריקות — שקיפות מלאה: המספר נרשם ב-evidence של השלב
+  // Update the empty-mine memory — full transparency: the number is recorded in the stage evidence
   for (const rep of reports) {
     if (!rep.error && rep.artifacts === 0) mineAttempts[rep.repo] = (mineAttempts[rep.repo] ?? 0) + 1;
     else if (rep.artifacts > 0) delete mineAttempts[rep.repo];
@@ -459,13 +473,13 @@ export async function mineTopCandidates(
       create: { key: MINE_ATTEMPTS_KEY, value: JSON.stringify(mineAttempts) },
     });
   } catch {
-    // זיכרון הוא אופטימיזציה — כשל שמירה לא מפיל את השלב
+    // The memory is an optimization — a save failure doesn't take down the stage
   }
 
   return { reports, emptySkipped };
 }
 
-// ---------- דוח שטוח ללהקת הפרומפטים ----------
+// ---------- Flat report for the prompt swarm ----------
 
 export interface CandidateFlat {
   fullName: string;
@@ -474,11 +488,11 @@ export interface CandidateFlat {
   pushedAt: string | null;
   topics: string[];
   modelStrings: string[];
-  /** מאומת: נמצא בתוכן קובץ אמיתי */
+  /** Verified: found inside a real file's content */
   contentEvidence: string[];
-  /** רק אזכור בתיאור/topics/נתיב */
+  /** Only a mention in description/topics/path */
   textEvidence: string[];
-  /** נתיבי קבצים אמיתיים לקרקע-אמת */
+  /** Real file paths for ground truth */
   evidencePaths: string[];
   capabilityHits: number;
   evidence: Candidate["evidence"];

@@ -30,20 +30,20 @@ export function RateChip() {
     <div className="flex items-center gap-2">
       <TokenDialog
         trigger={
-          <Button variant="outline" size="sm" className="gap-1.5 font-mono" title="מכסת GitHub API — לחיצה להגדרות טוקן">
+          <Button variant="outline" size="sm" className="gap-1.5 font-mono" title="GitHub API quota — click for token settings">
             <Gauge className={`h-4 w-4 ${low ? "text-red-500" : "text-emerald-600"}`} />
             {isLoading || !mounted
               ? "…"
               : isError
-                ? "שגיאת טוקן"
+                ? "Token error"
                 : hasToken
                   ? `${remaining ?? "?"}/${limit ?? "?"}`
-                  : "אורח"}
+                  : "Guest"}
           </Button>
         }
       />
       {!mounted ? null : hasToken ? null : (
-        <span className="hidden text-xs text-muted-foreground sm:inline">ללא טוקן — מוגבל מאוד</span>
+        <span className="hidden text-xs text-muted-foreground sm:inline">No token — very limited</span>
       )}
     </div>
   );

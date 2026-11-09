@@ -33,19 +33,19 @@ export interface PaletteActions {
 }
 
 const NAV: { tab: TabKey; label: string; icon: typeof Search; hint: string }[] = [
-  { tab: "home", label: "בית — לוח מחוונים", icon: LayoutDashboard, hint: "סקירת מצב, KPI, פעולות מהירות" },
-  { tab: "live", label: "ציד חי", icon: Swords, hint: "שרשרת הרג אוטונומית 8 שלבים" },
-  { tab: "mission", label: "מבצעים", icon: Target, hint: "הידור משימות + טייס אוטומטי" },
-  { tab: "sweep", label: "סריקת עומק", icon: Satellite, hint: "מבצע מודיעין מלא + ביקורת" },
-  { tab: "genesis", label: "Genesis — ספריית DNA", icon: Dna, hint: "כרייה, כימרות, קודקס" },
-  { tab: "search", label: "חיפוש", icon: Search, hint: "repos + code עם סף 5.5+" },
-  { tab: "watchlist", label: "נשמרים", icon: Bookmark, hint: "מאגרי המקורות + סינתזת קרב" },
-  { tab: "history", label: "היסטוריה", icon: History, hint: "חיפושים קודמים להרצה חוזרת" },
+  { tab: "home", label: "Home — Dashboard", icon: LayoutDashboard, hint: "Status overview, KPIs, quick actions" },
+  { tab: "live", label: "Live Hunt", icon: Swords, hint: "Autonomous 8-stage kill chain" },
+  { tab: "mission", label: "Missions", icon: Target, hint: "Mission compilation + autopilot" },
+  { tab: "sweep", label: "Deep Sweep", icon: Satellite, hint: "Full intelligence operation + review" },
+  { tab: "genesis", label: "Genesis — DNA Library", icon: Dna, hint: "Mining, chimeras, codex" },
+  { tab: "search", label: "Search", icon: Search, hint: "repos + code with a 5.5+ threshold" },
+  { tab: "watchlist", label: "Watchlist", icon: Bookmark, hint: "Source repos + battle synthesis" },
+  { tab: "history", label: "History", icon: History, hint: "Past searches to rerun" },
 ];
 
 const QUICK_ANALYZE: { owner: string; repo: string; label: string }[] = [
-  { owner: "storytold", repo: "craft-anything", label: "נתח: storytold/craft-anything" },
-  { owner: "public-apis", repo: "public-apis", label: "נתח: public-apis/public-apis" },
+  { owner: "storytold", repo: "craft-anything", label: "Analyze: storytold/craft-anything" },
+  { owner: "public-apis", repo: "public-apis", label: "Analyze: public-apis/public-apis" },
 ];
 
 export function CommandPalette({
@@ -79,10 +79,10 @@ export function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="לאן ללכת? מה לנתח? (חיפוש בעברית או אנגלית)" />
+      <CommandInput placeholder="Where to go? What to analyze? (search in English)" />
       <CommandList className="max-h-[420px]">
-        <CommandEmpty>לא נמצאה פעולה מתאימה</CommandEmpty>
-        <CommandGroup heading="ניווט">
+        <CommandEmpty>No matching action found</CommandEmpty>
+        <CommandGroup heading="Navigation">
           {NAV.map((n) => (
             <CommandItem key={n.tab} value={`${n.label} ${n.hint} ${n.tab}`} onSelect={() => run(() => actions.onNavigate(n.tab))}>
               <n.icon className="ml-2 h-4 w-4" />
@@ -92,7 +92,7 @@ export function CommandPalette({
           ))}
         </CommandGroup>
         <CommandSeparator />
-        <CommandGroup heading="מתכוני חיפוש מוכנים">
+        <CommandGroup heading="Preset Search Recipes">
           {RECIPES.map((r) => (
             <CommandItem
               key={r.id}
@@ -109,7 +109,7 @@ export function CommandPalette({
           ))}
         </CommandGroup>
         <CommandSeparator />
-        <CommandGroup heading="ניתוח מהיר">
+        <CommandGroup heading="Quick Analyze">
           {QUICK_ANALYZE.map((q) => (
             <CommandItem key={q.repo} value={q.label} onSelect={() => run(() => actions.onAnalyze(q.owner, q.repo))}>
               <Search className="ml-2 h-4 w-4" />
@@ -118,10 +118,10 @@ export function CommandPalette({
           ))}
         </CommandGroup>
         <CommandSeparator />
-        <CommandGroup heading="מערכת">
-          <CommandItem value="מצב תצוגה כהה בהיר theme dark light" onSelect={() => setTheme(dark ? "light" : "dark")}>
+        <CommandGroup heading="System">
+          <CommandItem value="display mode dark light theme" onSelect={() => setTheme(dark ? "light" : "dark")}>
             {dark ? <Sun className="ml-2 h-4 w-4" /> : <Moon className="ml-2 h-4 w-4" />}
-            {dark ? "עבור למצב בהיר" : "עבור למצב כהה"}
+            {dark ? "Switch to light mode" : "Switch to dark mode"}
           </CommandItem>
         </CommandGroup>
       </CommandList>

@@ -2,7 +2,7 @@
 
 import { Star, GitFork, Clock, ExternalLink, Search, BookmarkPlus, BookmarkCheck } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { he } from "date-fns/locale";
+import { enUS } from "date-fns/locale";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,8 +32,8 @@ export function RepoCard({
   saving?: boolean;
 }) {
   const updated = item.pushedAt
-    ? formatDistanceToNow(new Date(item.pushedAt), { addSuffix: true, locale: he })
-    : "לא ידוע";
+    ? formatDistanceToNow(new Date(item.pushedAt), { addSuffix: true, locale: enUS })
+    : "unknown";
   const langColor = item.language ? LANG_COLORS[item.language] : undefined;
   const isPrivatePerson = item.owner?.type === "User";
 
@@ -55,14 +55,14 @@ export function RepoCard({
                 {item.fullName}
               </a>
               <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                {isPrivatePerson ? "פרטי 👤" : "ארגון 🏢"}
+                {isPrivatePerson ? "Individual 👤" : "Organization 🏢"}
               </Badge>
               {item.archived && (
-                <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">ארכיון</Badge>
+                <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">Archived</Badge>
               )}
             </div>
             <p className="mt-1 line-clamp-2 min-h-8 text-xs text-muted-foreground" dir="auto">
-              {item.description || "אין תיאור"}
+              {item.description || "No description"}
             </p>
           </div>
         </div>
@@ -126,7 +126,7 @@ export function RepoCard({
               </a>
             ))}
             {(item.matchCount ?? 0) > item.matches!.length && (
-              <span className="text-[10px] text-muted-foreground">+{item.matchCount! - item.matches!.length} קבצים נוספים</span>
+              <span className="text-[10px] text-muted-foreground">+{item.matchCount! - item.matches!.length} more files</span>
             )}
           </div>
         )}
@@ -135,16 +135,16 @@ export function RepoCard({
         <div className="mt-auto flex items-center gap-1.5 pt-1">
           <Button size="sm" onClick={onAnalyze} className="h-8 flex-1 gap-1.5 text-xs">
             <Search className="h-3.5 w-3.5" />
-            נתח מעמיק
+            Deep analysis
           </Button>
           {onSave && (
             <Button size="sm" variant="outline" onClick={onSave} disabled={saving || saved} className="h-8 gap-1.5 text-xs">
               {saved ? <BookmarkCheck className="h-3.5 w-3.5 text-emerald-600" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
-              {saved ? "נשמר" : "שמור"}
+              {saved ? "Saved" : "Save"}
             </Button>
           )}
           <Button size="sm" variant="ghost" asChild className="h-8 w-8 p-0">
-            <a href={item.htmlUrl} target="_blank" rel="noreferrer" aria-label="פתח ב-GitHub">
+            <a href={item.htmlUrl} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </Button>

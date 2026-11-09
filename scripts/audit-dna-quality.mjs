@@ -5,7 +5,11 @@ const db = new PrismaClient();
 const genes = await db.dnaArtifact.findMany({ select: { id: true, kind: true, name: true, sourceRepo: true, path: true, size: true, content: true, rawUrl: true } });
 const sizes = genes.map(g => g.content?.length ?? 0).sort((a,b)=>a-b);
 const under400 = genes.filter(g => (g.content?.length ?? 0) < 400);
-const truncated = genes.filter(g => (g.content ?? "").includes("[נחתך לכרייה]"));
+// Truncation marker appended by src/lib/dna-miner.ts when a gene exceeds MAX_FILE_BYTES.
+// Must match the exact runtime bytes the miner emits — currently the English
+// marker "[truncated for mining]" (verify against dna-miner.ts if that ever changes).
+const TRUNCATION_MARKER = "[truncated for mining]";
+const truncated = genes.filter(g => (g.content ?? "").includes(TRUNCATION_MARKER));
 const emptyContent = genes.filter(g => !g.content || g.content.trim().length === 0);
 console.log("=== DNA QUALITY ===");
 console.log(JSON.stringify({

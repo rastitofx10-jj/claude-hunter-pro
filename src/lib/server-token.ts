@@ -2,16 +2,16 @@ import { db } from "@/lib/db";
 import type { NextRequest } from "next/server";
 
 // ============================================================
-// ניהול טוקן GitHub בצד השרת
-// עדיפות: כותרת הבקשה ← משתנה סביבה ← טוקן שנשמר בבסיס הנתונים
-// כל בקשה שמגיעה עם טוקן תקין-מבנה נשמרת אוטומטית (upsert) כדי
-// שהשרת יוכל להשתמש בו גם בקריאות עתידיות בלי הכותרת.
+// Server-side GitHub token management
+// Priority: request header ← environment variable ← token stored in the database
+// Every request arriving with a structurally valid token is saved automatically
+// (upsert) so the server can use it in future calls without the header.
 // ============================================================
 
 const TOKEN_KEY = "github_pat";
 /**
- * בדיקת תקינות גמישה: GitHub עצמו הוא מקור האמת (הלכידה קורית רק אחרי 200 מ-GitHub),
- * אז כל מחרוזת סבירה באורך הולם מתקבלת — בלי קפדנות על קידומות שעלולות להשתנות.
+ * Lenient validity check: GitHub itself is the source of truth (capture happens only after a 200 from GitHub),
+ * so any reasonable string of suitable length is accepted — no strictness about prefixes that may change.
  */
 export function looksLikeToken(t: string | null | undefined): t is string {
   if (!t) return false;
@@ -22,7 +22,7 @@ export function looksLikeToken(t: string | null | undefined): t is string {
   return true;
 }
 
-/** הטוקן הפעיל לבקשה: כותרת ← env ← DB */
+/** The active token for a request: header ← env ← DB */
 export async function resolveToken(req: NextRequest): Promise<string | null> {
   const header = req.headers.get("x-gh-token");
   if (header && header.trim()) return header.trim();
@@ -35,7 +35,7 @@ export async function resolveToken(req: NextRequest): Promise<string | null> {
   }
 }
 
-/** שמירת טוקן בבסיס הנתונים (רק אם המבנה תקין) */
+/** Saves a token to the database (only if structurally valid) */
 export async function persistToken(token: string): Promise<boolean> {
   const t = token.trim();
   if (!looksLikeToken(t)) return false;
@@ -52,12 +52,12 @@ export async function persistToken(token: string): Promise<boolean> {
 }
 
 /**
- * לכידה שקופה: אם הבקשה נשאה טוקן תקין-מבנה — שומר אותו לשימוש השרת.
- * נקרא רק אחרי הצלחת קריאת GitHub (כלומר הטוקן גם באמת עובד).
- * באג היסטורי שתוקן כאן: resolveToken מחזיר את כותרת הבקשה עצמה כשיש כותרת —
- * לכן "current !== header" היה תמיד שקר, persistToken לארץ לעולם, וכל
- * הערות ה-"לכידה" בחמשת ה-routes היו על פונקציה מתה. עכשיו: ההשוואה מול
- * הערך השמור ב-DB בלבד (env אינו ניתן לעדכון בזמן ריצה — הכותרת תמיד גוברת עליו).
+ * Transparent capture: if the request carried a structurally valid token — save it for server use.
+ * Called only after a successful GitHub call (meaning the token also actually works).
+ * A historical bug fixed here: resolveToken returns the request header itself when one is present —
+ * so "current !== header" was always false, persistToken never ran, and all the
+ * "capture" comments in the five routes were about a dead function. Now: the comparison is against
+ * the value stored in the DB only (env cannot be updated at runtime — the header always wins over it).
  */
 export async function captureTokenFrom(req: NextRequest): Promise<void> {
   const header = req.headers.get("x-gh-token");
@@ -74,7 +74,7 @@ export async function captureTokenFrom(req: NextRequest): Promise<void> {
   }
 }
 
-/** מחיקת הטוקן השמור */
+/** Deletes the stored token */
 export async function clearStoredToken(): Promise<void> {
   try {
     await db.setting.deleteMany({ where: { key: TOKEN_KEY } });
@@ -83,7 +83,7 @@ export async function clearStoredToken(): Promise<void> {
   }
 }
 
-/** תצוגה ממוסכת ללא חשיפת הטוקן המלא */
+/** Masked display without exposing the full token */
 export function maskToken(t: string | null | undefined): string | null {
   if (!t) return null;
   const s = t.trim();

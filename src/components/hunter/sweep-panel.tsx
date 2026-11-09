@@ -46,7 +46,7 @@ interface SweepStats {
   enriched?: number;
   hardEvidence?: number;
   reposMined?: number;
-  /** מאגרים שהניבו ארטיפקטים בפועל — בעבר "נכרו" כלל מאגרים שנוגבו ללא כלום */
+  /** Repos that actually yielded artifacts — "mined" used to include repos that were wiped clean with nothing */
   reposWithFindings?: number;
   mineErrors?: number;
   mineErrorList?: string[];
@@ -128,17 +128,17 @@ interface SweepListItem {
 }
 
 const PHASES: { key: string; label: string; icon: typeof Search }[] = [
-  { key: "queries", label: "שאילתות", icon: Search },
-  { key: "enrich", label: "העשרה", icon: TrendingUp },
-  { key: "mine", label: "כריית DNA", icon: Database },
-  { key: "swarm", label: "להקת פרומפטים", icon: Brain },
-  { key: "done", label: "תדריך", icon: Crosshair },
+  { key: "queries", label: "Queries", icon: Search },
+  { key: "enrich", label: "Enrich", icon: TrendingUp },
+  { key: "mine", label: "DNA mining", icon: Database },
+  { key: "swarm", label: "Prompt swarm", icon: Brain },
+  { key: "done", label: "Briefing", icon: Crosshair },
 ];
 
 const VERDICT_STYLE: Record<string, { label: string; cls: string }> = {
-  elite: { label: "אליטה", cls: "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800" },
-  watch: { label: "מעקב", cls: "bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800" },
-  noise: { label: "רעש", cls: "bg-muted text-muted-foreground border-border" },
+  elite: { label: "Elite", cls: "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800" },
+  watch: { label: "Watch", cls: "bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800" },
+  noise: { label: "Noise", cls: "bg-muted text-muted-foreground border-border" },
 };
 
 export function SweepPanel() {
@@ -149,8 +149,8 @@ export function SweepPanel() {
   const listQuery = useQuery({
     queryKey: ["sweep-list"],
     queryFn: () => apiFetch<{ items: SweepListItem[]; active: SweepListItem | null }>("/api/sweep", token),
-    // רענון הרשימה כל עוד יש ריצה פעילה — בעבר היא ה היסטוריה (כולל "באוויר %")
-    // התעדכנה רק בהשקה או במיקוד חלון, ונעשתה דקות מיושנות במהלך הריצה.
+    // Refresh the list while a run is active — the history (including "in flight %")
+    // used to update only on launch or window focus, going minutes-stale mid-run.
     refetchInterval: (q) => (q.state.data?.active ? 4000 : false),
   });
 
@@ -165,7 +165,7 @@ export function SweepPanel() {
     refetchInterval: (q) => (q.state.data?.status === "running" || q.state.data?.audit?.status === "running" ? 2500 : false),
   });
 
-  // גלילת לוג השאילתות אוטומטית
+  // Auto-scroll the query log
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [detailQuery.data?.queries?.length]);
@@ -173,22 +173,22 @@ export function SweepPanel() {
   const launch = useMutation({
     mutationFn: () => apiFetch<{ ok: boolean; id: number }>("/api/sweep", token, { method: "POST" }),
     onSuccess: (data) => {
-      toast({ title: "הסריקה שוגרה 🛰️", description: `ריצה #${data.id} באוויר — עוקבים אחריה עכשיו` });
-      // עקיבה אוטומטית אחרי הריצה החדשה — בעבר viewId נדבק לריצה ישנה שנבחרה קודם
-      // והמשתמש לא ראה את הריצה שזה עתה שיגר עד לחיצה ידנית.
+      toast({ title: "Deep sweep launched 🛰️", description: `Run #${data.id} is in flight — tracking it now` });
+      // Auto-follow the new run — viewId used to stick to a previously selected older run
+      // and the user never saw the run they just launched until clicking manually.
       setViewId(data.id);
       void qc.invalidateQueries({ queryKey: ["sweep-list"] });
     },
-    onError: (e: Error) => toast({ title: "השגירה נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Launch failed", description: e.message, variant: "destructive" }),
   });
 
   const launchAudit = useMutation({
     mutationFn: () => apiFetch<{ ok: boolean; id: number }>(`/api/sweep/${selectedId}/audit`, token, { method: "POST" }),
     onSuccess: () => {
-      toast({ title: "הביקורת האדברסרית הושקה 🔥", description: "מאמתים כל ראיה מול GitHub ומריצים anti-slop" });
+      toast({ title: "Adversarial audit launched 🔥", description: "Verifying every piece of evidence against GitHub and running anti-slop" });
       void qc.invalidateQueries({ queryKey: ["sweep-detail", selectedId] });
     },
-    onError: (e: Error) => toast({ title: "הביקורת נכשלה", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Audit failed", description: e.message, variant: "destructive" }),
   });
 
   const detail = detailQuery.data;
@@ -206,18 +206,18 @@ export function SweepPanel() {
   const queriesDone = (detail?.queries ?? []).length;
 
   return (
-    <div className="space-y-5" dir="rtl">
-      {/* משגר */}
+    <div className="space-y-5">
+      {/* launcher */}
       <Card className="border-orange-200 bg-gradient-to-l from-orange-50/80 to-transparent dark:border-orange-900 dark:from-orange-950/20">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Satellite className="h-5 w-5 text-orange-600" aria-hidden />
-            סריקת עומק — מבצע מודיעין מלא
+            Deep Sweep — Full Intelligence Operation
           </CardTitle>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            ארסנל מלא של שאילתות GitHub (קוד + מאגרים, כל מודל 5.5+ רשום) ← העשרת מטא-דאטה ← כריית DNA
-            מהאליטה ← <strong>להקת פרומפטים</strong>: 8 פרומפטים מקצועיים — טריאז׳ה, פרופילי השקעה, דפוסי שוק,
-            תוכנית תקיפה, אבולוציית שאילתות ותדריך מנהלים.
+            A full arsenal of GitHub queries (code + repos, every listed 5.5+ model) → metadata enrichment → DNA mining
+            from the elite → <strong>prompt swarm</strong>: 8 professional prompts — triage, investment profiles, market
+            patterns, attack plan, query evolution, and an executive briefing.
           </p>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
@@ -232,50 +232,50 @@ export function SweepPanel() {
             ) : (
               <Play className="h-4 w-4" aria-hidden />
             )}
-            {listQuery.data?.active ? `סריקה #${listQuery.data.active.id} באוויר` : "שגר סריקת עומק"}
+            {listQuery.data?.active ? `Sweep #${listQuery.data.active.id} in flight` : "Launch deep sweep"}
           </Button>
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <Badge variant="outline">26 שאילתות GitHub</Badge>
-            <Badge variant="outline">‎7-10 פרומפטים (לפי היקף האליטה)</Badge>
-            <Badge variant="outline">עד ~8 דקות ברקע</Badge>
+            <Badge variant="outline">26 GitHub queries</Badge>
+            <Badge variant="outline">7-10 prompts (depending on elite size)</Badge>
+            <Badge variant="outline">Up to ~8 minutes in the background</Badge>
           </div>
         </CardContent>
       </Card>
 
-      {/* הריצה הנוכחית / נבחרת */}
+      {/* current / selected run */}
       {detail && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
               <span className="flex items-center gap-2">
-                מבצע #{detail.id}
+                Operation #{detail.id}
                 {detail.status === "running" && (
                   <Badge className="bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300">
-                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> באוויר
+                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> In flight
                   </Badge>
                 )}
                 {detail.status === "done" && (
                   <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                    <CheckCircle2 className="h-3 w-3" aria-hidden /> הושלם
+                    <CheckCircle2 className="h-3 w-3" aria-hidden /> Completed
                   </Badge>
                 )}
                 {detail.status === "failed" && (
                   <Badge variant="destructive">
-                    <XCircle className="h-3 w-3" aria-hidden /> נכשל
+                    <XCircle className="h-3 w-3" aria-hidden /> Failed
                   </Badge>
                 )}
               </span>
               <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
                 <Clock className="h-3.5 w-3.5" aria-hidden />
-                {new Date(detail.createdAt).toLocaleTimeString("he-IL")}
-                {stats.elapsedMs ? ` · ${Math.round(stats.elapsedMs / 1000)} שניות` : ""}
+                {new Date(detail.createdAt).toLocaleTimeString("en-US")}
+                {stats.elapsedMs ? ` · ${Math.round(stats.elapsedMs / 1000)} seconds` : ""}
               </span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
-            {/* מד התקדמות + שלבים */}
+            {/* progress meter + phases */}
             <div className="space-y-2">
-              <Progress value={detail.progress} className="h-2" aria-label={`התקדמות ${detail.progress}%`} />
+              <Progress value={detail.progress} className="h-2" aria-label={`Progress ${detail.progress}%`} />
               <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
                 {PHASES.map((p, i) => {
                   const Icon = p.icon;
@@ -303,13 +303,13 @@ export function SweepPanel() {
               )}
             </div>
 
-            {/* לוג שאילתות חי */}
+            {/* live query log */}
             {(detail.queries?.length ?? 0) > 0 && (
               <div>
                 <p className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
-                  <Search className="h-4 w-4" aria-hidden /> יומן השאילתות
+                  <Search className="h-4 w-4" aria-hidden /> Query Log
                   <span className="text-xs font-normal text-muted-foreground">
-                    {stats.queryErrors ? ` · ${stats.queryErrors} שגיאות` : ""}
+                    {stats.queryErrors ? ` · ${stats.queryErrors} errors` : ""}
                   </span>
                 </p>
                 <div
@@ -332,18 +332,18 @@ export function SweepPanel() {
               </div>
             )}
 
-            {/* סטטיסטיקות */}
+            {/* statistics */}
             {stats.queriesRun ? (
               <>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
                 {[
-                  { label: "שאילתות", value: stats.queriesRun ?? 0 },
-                  { label: "פגיעות קוד", value: stats.codeHits ?? 0 },
-                  { label: "מועמדים", value: stats.candidatesFound ?? 0 },
-                  { label: "ראיה קשה", value: stats.hardEvidence ?? 0 },
-                  { label: "DNA נוסף", value: stats.dnaAdded ?? 0 },
-                  { label: "פרומפטים", value: stats.llmCalls ?? 0 },
-                  { label: "אליטה", value: stats.eliteCount ?? 0 },
+                  { label: "Queries", value: stats.queriesRun ?? 0 },
+                  { label: "Code hits", value: stats.codeHits ?? 0 },
+                  { label: "Candidates", value: stats.candidatesFound ?? 0 },
+                  { label: "Hard evidence", value: stats.hardEvidence ?? 0 },
+                  { label: "DNA added", value: stats.dnaAdded ?? 0 },
+                  { label: "Prompts", value: stats.llmCalls ?? 0 },
+                  { label: "Elite", value: stats.eliteCount ?? 0 },
                 ].map((s) => (
                   <div key={s.label} className="rounded-lg border bg-muted/30 p-2 text-center">
                     <p className="text-lg font-bold text-orange-600">{s.value.toLocaleString()}</p>
@@ -351,19 +351,19 @@ export function SweepPanel() {
                   </div>
                 ))}
               </div>
-              {/* כנות כרייה: בעבר "N מאגרים נכרו" הסתיר מאגרים שנוגבו ללא כלום וכישלוני כרייה */}
+              {/* Mining honesty: "N repos mined" used to hide repos wiped clean with nothing, plus mining failures */}
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>כרייה: {stats.reposWithFindings ?? 0}/{stats.reposMined ?? 0} מאגרים הניבו גנים</span>
+                <span>Mining: {stats.reposWithFindings ?? 0}/{stats.reposMined ?? 0} repos yielded genes</span>
                 {stats.mineErrors ? (
                   <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300" title={(stats.mineErrorList ?? []).join(" | ")}>
-                    {stats.mineErrors} כישלוני כרייה
+                    {stats.mineErrors} mining failures
                   </span>
                 ) : null}
               </div>
               </>
             ) : null}
 
-            {/* תדריך מנהלים */}
+            {/* executive briefing */}
             {briefing?.brief?.headline && (
               <div className="rounded-xl border border-orange-300 bg-orange-50/60 p-4 dark:border-orange-800 dark:bg-orange-950/20">
                 <p className="mb-1 flex items-center gap-1.5 text-sm font-bold text-orange-800 dark:text-orange-200">
@@ -381,7 +381,7 @@ export function SweepPanel() {
                 )}
                 {briefing.brief.decisiveMove && (
                   <p className="mt-3 rounded-md border bg-card p-2 text-sm">
-                    <strong>המהלך המכריע:</strong> {briefing.brief.decisiveMove}
+                    <strong>Decisive move:</strong> {briefing.brief.decisiveMove}
                   </p>
                 )}
                 {(briefing.brief.riskMap?.length ?? 0) > 0 && (
@@ -397,11 +397,11 @@ export function SweepPanel() {
               </div>
             )}
 
-            {/* ביקורת אדברסרית */}
+            {/* adversarial audit */}
             <div className="rounded-xl border border-red-200 bg-red-50/40 p-4 dark:border-red-900 dark:bg-red-950/10">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="flex items-center gap-1.5 text-sm font-bold text-red-800 dark:text-red-300">
-                  <ShieldCheck className="h-4 w-4" aria-hidden /> ביקורת אדברסרית — המערכת מפחדת מהחלק הזה
+                  <ShieldCheck className="h-4 w-4" aria-hidden /> Adversarial audit — the part the system fears
                 </p>
                 {detail.status === "done" && (
                   <Button
@@ -414,54 +414,54 @@ export function SweepPanel() {
                     {audit?.status === "running" ? (
                       <>
                         <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                        בודק אכזרית… ({audit.stage})
+                        Auditing ruthlessly… ({audit.stage})
                       </>
                     ) : (
-                      "הרץ ביקורת אכזרית"
+                      "Run ruthless audit"
                     )}
                   </Button>
                 )}
               </div>
 
               {audit?.status === "failed" && (
-                <p className="text-xs text-destructive">הביקורת נכשלה: {audit.error}</p>
+                <p className="text-xs text-destructive">Audit failed: {audit.error}</p>
               )}
 
               {audit?.status === "done" && (
                 <div className="space-y-3">
-                  {/* ציונים */}
+                  {/* scores */}
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <div className="rounded-lg border bg-card p-2 text-center">
                       <p className={`text-2xl font-bold ${audit.precision >= 90 ? "text-emerald-600" : audit.precision >= 70 ? "text-amber-600" : "text-red-600"}`}>
                         {audit.precision}%
                       </p>
-                      <p className="text-[11px] text-muted-foreground">דיוק ראיות חי</p>
+                      <p className="text-[11px] text-muted-foreground">Live evidence accuracy</p>
                     </div>
                     <div className="rounded-lg border bg-card p-2 text-center">
                       <p className={`text-2xl font-bold ${audit.specificityScore >= 80 ? "text-emerald-600" : audit.specificityScore >= 60 ? "text-amber-600" : "text-red-600"}`}>
                         {audit.specificityScore}/100
                       </p>
-                      <p className="text-[11px] text-muted-foreground">ציון anti-slop</p>
+                      <p className="text-[11px] text-muted-foreground">Anti-slop score</p>
                     </div>
                     <div className="rounded-lg border bg-card p-2 text-center">
                       <p className="text-2xl font-bold">{audit.evidenceChecks.length}</p>
-                      <p className="text-[11px] text-muted-foreground">ראיות נבדקו חי</p>
+                      <p className="text-[11px] text-muted-foreground">Evidence verified live</p>
                     </div>
                     <div className="rounded-lg border bg-card p-2 text-center">
                       <p className="text-2xl font-bold text-red-600">{audit.slopFlags.length + audit.refutedClaims.length}</p>
-                      <p className="text-[11px] text-muted-foreground">סלופ/נסתרות שאותרו</p>
+                      <p className="text-[11px] text-muted-foreground">Slop/refuted found</p>
                     </div>
                   </div>
 
-                  {/* טבלת אימות ראיות */}
-                  <div className="max-h-52 overflow-y-auto rounded-lg border" role="region" aria-label="תוצאות אימות ראיות">
+                  {/* evidence verification table */}
+                  <div className="max-h-52 overflow-y-auto rounded-lg border" role="region" aria-label="Evidence verification results">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-muted/80 backdrop-blur">
                         <tr className="text-right text-xs text-muted-foreground">
-                          <th className="p-2 font-medium">מאגר</th>
-                          <th className="p-2 font-medium">ראיה נטענת</th>
-                          <th className="p-2 font-medium">קבצים במאגר</th>
-                          <th className="p-2 font-medium">פסק</th>
+                          <th className="p-2 font-medium">Repo</th>
+                          <th className="p-2 font-medium">Claimed evidence</th>
+                          <th className="p-2 font-medium">Files in repo</th>
+                          <th className="p-2 font-medium">Verdict</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -479,13 +479,13 @@ export function SweepPanel() {
                             <td className="p-2 text-xs font-bold">{c.error ? "—" : c.filesFound}</td>
                             <td className="p-2 text-xs">
                               {c.verified ? (
-                                <span className="font-bold text-emerald-600">✓ אומתה</span>
+                                <span className="font-bold text-emerald-600">✓ Verified</span>
                               ) : c.error ? (
-                                // שגיאת API אינה הפרכה — בעבר הוצגה כ"נסתרה" באדום
-                                // וראיית אמת נפסלה על כישלון טכני של המאמת
-                                <span className="font-bold text-amber-600" title={c.error}>⚠️ לא נבדקה (שגיאת אימות)</span>
+                                // An API error is not a refutation — it used to render as "refuted" in red
+                                // and true evidence got dismissed over a technical failure of the verifier
+                                <span className="font-bold text-amber-600" title={c.error}>⚠️ Unverified (check error)</span>
                               ) : (
-                                <span className="font-bold text-red-600">✗ נסתרה</span>
+                                <span className="font-bold text-red-600">✗ Refuted</span>
                               )}
                             </td>
                           </tr>
@@ -496,13 +496,13 @@ export function SweepPanel() {
 
                   {audit.verdict && (
                     <p className="rounded-md border bg-card p-2 text-sm leading-relaxed">
-                      <strong>פסק הביקורת:</strong> {audit.verdict}
+                      <strong>Audit verdict:</strong> {audit.verdict}
                     </p>
                   )}
 
                   {(audit.refutedClaims?.length ?? 0) > 0 && (
                     <div>
-                      <p className="mb-1 text-xs font-bold text-red-700 dark:text-red-300">טענות שנסתרו על-ידי האימות החי</p>
+                      <p className="mb-1 text-xs font-bold text-red-700 dark:text-red-300">Claims refuted by the live verification</p>
                       <ul className="space-y-1 text-xs leading-relaxed">
                         {audit.refutedClaims.map((r, i) => (
                           <li key={i} className="rounded-md border border-red-200 bg-red-50/70 p-1.5 dark:border-red-900 dark:bg-red-950/20">
@@ -516,7 +516,7 @@ export function SweepPanel() {
 
                   {(audit.slopFlags?.length ?? 0) > 0 && (
                     <div>
-                      <p className="mb-1 text-xs font-bold text-amber-700 dark:text-amber-300">דגלי סלופ — גנרי/לא נתמך בראיות</p>
+                      <p className="mb-1 text-xs font-bold text-amber-700 dark:text-amber-300">Slop flags — generic / unsupported by evidence</p>
                       <ul className="space-y-1 text-xs leading-relaxed">
                         {audit.slopFlags.map((s, i) => (
                           <li key={i} className="rounded-md border border-amber-200 bg-amber-50/70 p-1.5 dark:border-amber-900 dark:bg-amber-950/20">
@@ -531,20 +531,20 @@ export function SweepPanel() {
               )}
             </div>
 
-            {/* טבלת ממצאים */}
+            {/* findings table */}
             {(detail.findings?.length ?? 0) > 0 && (
               <div>
-                <p className="mb-1.5 text-sm font-semibold">ממצאים מדורגים ({detail.findings.length})</p>
-                <div className="max-h-96 overflow-y-auto rounded-lg border" role="region" aria-label="רשימת ממצאים">
+                <p className="mb-1.5 text-sm font-semibold">Ranked findings ({detail.findings.length})</p>
+                <div className="max-h-96 overflow-y-auto rounded-lg border" role="region" aria-label="Findings list">
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-muted/80 backdrop-blur">
                       <tr className="text-right text-xs text-muted-foreground">
                         <th className="p-2 font-medium">#</th>
-                        <th className="p-2 font-medium">מאגר</th>
+                        <th className="p-2 font-medium">Repo</th>
                         <th className="p-2 font-medium">⭐</th>
-                        <th className="p-2 font-medium">ראיה</th>
-                        <th className="p-2 font-medium">פסק דין</th>
-                        <th className="p-2 font-medium">השקעה</th>
+                        <th className="p-2 font-medium">Evidence</th>
+                        <th className="p-2 font-medium">Verdict</th>
+                        <th className="p-2 font-medium">Investment</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -560,14 +560,14 @@ export function SweepPanel() {
                             <td className="p-2 text-xs">{f.stars.toLocaleString()}</td>
                             <td className="p-2">
                               <span className={`text-xs ${f.evidence === "hard" ? "font-bold text-orange-600" : "text-muted-foreground"}`}>
-                                {f.evidence === "hard" ? "קשה" : f.evidence === "soft" ? "רכה" : "—"}
+                                {f.evidence === "hard" ? "Hard" : f.evidence === "soft" ? "Soft" : "—"}
                               </span>
                             </td>
                             <td className="p-2">
                               {vs ? (
                                 <span className={`rounded-full border px-2 py-0.5 text-xs ${vs.cls}`}>{vs.label}</span>
                               ) : (
-                                <span className="text-xs text-muted-foreground">ממתין</span>
+                                <span className="text-xs text-muted-foreground">Pending</span>
                               )}
                             </td>
                             <td className="p-2 text-xs">
@@ -586,12 +586,12 @@ export function SweepPanel() {
               </div>
             )}
 
-            {/* דפוסים + תוכנית תקיפה */}
+            {/* patterns + attack plan */}
             {briefing?.patterns && briefing.patterns.patterns.length > 0 && (
               <div className="grid gap-3 lg:grid-cols-2">
                 <div className="rounded-xl border p-3">
                   <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-                    <TrendingUp className="h-4 w-4" aria-hidden /> דפוסי שוק
+                    <TrendingUp className="h-4 w-4" aria-hidden /> Market Patterns
                   </p>
                   {briefing.patterns.marketShift && (
                     <p className="mb-2 text-xs leading-relaxed text-muted-foreground">{briefing.patterns.marketShift}</p>
@@ -608,7 +608,7 @@ export function SweepPanel() {
                 {briefing.attack && (
                   <div className="rounded-xl border p-3">
                     <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-                      <Target className="h-4 w-4" aria-hidden /> תוכנית תקיפה
+                      <Target className="h-4 w-4" aria-hidden /> Attack Plan
                     </p>
                     <ul className="space-y-1.5">
                       {briefing.attack.topMoves.map((m, i) => (
@@ -621,7 +621,7 @@ export function SweepPanel() {
                     </ul>
                     {(briefing.attack.immediateActions?.length ?? 0) > 0 && (
                       <div className="mt-2 rounded-lg border border-orange-200 bg-orange-50/50 p-2 dark:border-orange-900 dark:bg-orange-950/20">
-                        <p className="mb-1 text-xs font-bold text-orange-700 dark:text-orange-300">ל-48 השעות הקרובות</p>
+                        <p className="mb-1 text-xs font-bold text-orange-700 dark:text-orange-300">Next 48 hours</p>
                         <ul className="space-y-0.5 text-xs">
                           {briefing.attack.immediateActions.map((a, i) => (
                             <li key={i}>• {a}</li>
@@ -634,11 +634,11 @@ export function SweepPanel() {
               </div>
             )}
 
-            {/* אבולוציית שאילתות לסבב הבא */}
+            {/* query evolution for the next round */}
             {(briefing?.queryEvolution?.nextQueries?.length ?? 0) > 0 && (
               <div className="rounded-xl border p-3">
                 <p className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
-                  <Lightbulb className="h-4 w-4" aria-hidden /> הסבב הבא — שאילתות שה-AI ממליץ
+                  <Lightbulb className="h-4 w-4" aria-hidden /> Next round — AI-recommended queries
                 </p>
                 {briefing!.queryEvolution!.rationale && (
                   <p className="mb-2 text-xs text-muted-foreground">{briefing!.queryEvolution!.rationale}</p>
@@ -651,30 +651,30 @@ export function SweepPanel() {
               </div>
             )}
 
-            {/* כשלי להקה חלקיים */}
+            {/* partial swarm failures */}
             {(briefing?.llmFailures?.length ?? 0) > 0 && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 <AlertTriangle className="mr-1 inline h-3 w-3" aria-hidden />
-                {briefing!.llmFailures!.length} פרומפטים נכשלו: {briefing!.llmFailures!.join(" · ")}
+                {briefing!.llmFailures!.length} prompts failed: {briefing!.llmFailures!.join(" · ")}
               </p>
             )}
           </CardContent>
         </Card>
       )}
 
-      {/* שגיאת טעינה — בעבר: 500 שקט מהשרת לא היה נראה כלל בממשק */}
+      {/* load error — before: a silent 500 from the server was completely invisible in the UI */}
       {(listQuery.isError || detailQuery.isError) && (
         <div className="rounded-lg border border-red-200 bg-red-50/60 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/20 dark:text-red-300" role="alert">
           <AlertTriangle className="mr-1 inline h-4 w-4" aria-hidden />
-          טעינת נתוני הסריקה נכשלה: {((listQuery.error as Error)?.message || (detailQuery.error as Error)?.message || "שגיאת רשת")}
+          Failed to load sweep data: {((listQuery.error as Error)?.message || (detailQuery.error as Error)?.message || "Network error")}
         </div>
       )}
 
-      {/* היסטוריית סריקות */}
+      {/* sweep history */}
       {(listQuery.data?.items?.length ?? 0) > 0 && (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">היסטוריית מבצעים</CardTitle>
+            <CardTitle className="text-base">Operation History</CardTitle>
           </CardHeader>
           <CardContent className="max-h-60 space-y-1.5 overflow-y-auto">
             {listQuery.data!.items.map((r) => (
@@ -691,17 +691,17 @@ export function SweepPanel() {
                 <span className="flex items-center gap-2">
                   <span className="font-mono text-xs text-muted-foreground">#{r.id}</span>
                   {r.status === "running" ? (
-                    <Badge className="bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300">באוויר {r.progress}%</Badge>
+                    <Badge className="bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300">In flight {r.progress}%</Badge>
                   ) : r.status === "done" ? (
-                    <Badge variant="outline" className="text-emerald-600">הושלם</Badge>
+                    <Badge variant="outline" className="text-emerald-600">Completed</Badge>
                   ) : (
-                    <Badge variant="destructive">נכשל</Badge>
+                    <Badge variant="destructive">Failed</Badge>
                   )}
-                  {r.stats?.eliteCount ? <span className="text-xs text-muted-foreground">אליטה: {r.stats.eliteCount}</span> : null}
+                  {r.stats?.eliteCount ? <span className="text-xs text-muted-foreground">Elite: {r.stats.eliteCount}</span> : null}
                   {r.stats?.dnaAdded ? <span className="text-xs text-muted-foreground">DNA +{r.stats.dnaAdded}</span> : null}
-                  {r.stats?.llmCalls ? <span className="text-xs text-muted-foreground">פרומפטים: {r.stats.llmCalls}</span> : null}
+                  {r.stats?.llmCalls ? <span className="text-xs text-muted-foreground">Prompts: {r.stats.llmCalls}</span> : null}
                 </span>
-                <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleString("he-IL")}</span>
+                <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleString("en-US")}</span>
               </div>
             ))}
           </CardContent>

@@ -1,5 +1,6 @@
-// מנהל ריצה עבור Gen 7 — מריץ start ואז next בלולאה עד לסיום.
-// המצב נשמר ב-DB לכל שלב, ולכן ניתן להמשיך מכל נקודה גם אם הסקריפט נחתך.
+// Run manager for Gen 7 — calls start and then loops next until the hunt completes.
+// State is persisted in the DB at every stage, so the run can be resumed
+// from any point even if this script is interrupted.
 const BASE = "http://localhost:3000/api/live-hunt";
 const startRes = await fetch(BASE, {
   method: "POST",
@@ -27,7 +28,7 @@ for (let i = 0; i < 15; i++) {
     console.log(`STAGE_DONE: ${last?.key ?? "?"} (${Math.round((last?.ms ?? 0) / 1000)}s) | next=${h.stageKey} | status=${h.status} | dna:${h.dnaBefore}->${h.dnaAfter} | llm=${h.llmCalls}`);
     if (h.status === "done" || h.status === "failed") { console.log("FINAL:", h.status, "| missionId:", h.missionId); break; }
   } catch (e) {
-    console.log("TIMEOUT_OR_NET:", e.message ?? e, "— המצב ב-DB, אפשר להמשיך");
+    console.log("TIMEOUT_OR_NET:", e.message ?? e, "— state is in the DB, safe to resume");
     break;
   }
 }

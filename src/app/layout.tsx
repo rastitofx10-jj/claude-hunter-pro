@@ -16,9 +16,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Claude Hunter — צייד פרויקטי Claude ב-GitHub",
+  title: "Claude Hunter — Hunt premium-Claude projects on GitHub",
   description:
-    "כלי חזק לחיפוש, איתור וניתוח פרויקטים שנבנו עם Claude בתשלום: זיהוי מודלים פרימיום בסף מחמיר 5.5+ בלבד (Opus 5.5, Fable, Opus 6+ — 4.x חסום), מדד השקעה בטוקנים, וניתוח מעמיק של מאגרים.",
+    "Find, track, and analyze GitHub projects built with paid Claude: premium model detection with a strict 5.5+ threshold (4.x blocked), a token investment score, and deep repo analysis.",
   keywords: ["Claude", "GitHub", "Anthropic", "Opus", "Claude Code", "AI projects", "investment score"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
@@ -31,7 +31,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="he" dir="rtl" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
