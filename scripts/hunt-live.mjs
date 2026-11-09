@@ -110,10 +110,10 @@ async function phaseHarvest() {
   if (r.status !== 200) { console.error(`FAIL | harvest → ${r.status}: ${JSON.stringify(r.body).slice(0, 250)}`); process.exit(1); }
   const b = r.body;
   console.log(`PASS | harvest done`);
-  console.log(`     candidates=${b.candidatesFound ?? "?"} queries=${b.queriesRun ?? "?"} (failed=${b.queriesFailed ?? 0}) repos=${(b.reposMined ?? []).length} mined · skipped=${b.skippedAlreadyMined ?? 0}`);
+  console.log(`     candidates=${b.candidatesFound ?? "?"} queriesRun=${b.queriesRun ?? "?"} (failed=${b.queriesFailed ?? 0}) · repos=${(b.reposMined ?? []).length} mined · skipped=${b.skippedAlreadyMined ?? 0}`);
   console.log(`     genes: +${b.artifactsAdded ?? "?"} new · ${b.artifactsUpdated ?? 0} updated · library total=${b.totalLibrary ?? "?"}`);
-  for (const repo of b.reposMined ?? []) console.log(`     ⛏ ${repo.fullName ?? "?"} → +${repo.newCount ?? "?"} genes${repo.updatedCount ? ` (~${repo.updatedCount} upd)` : ""}${repo.error ? ` ERR=${String(repo.error).slice(0, 80)}` : ""}`);
-  if ((b.reposFailed ?? []).length) console.log(`     ✗ failed: ${b.reposFailed.map((x) => x.fullName ?? x).join(", ")}`);
+  for (const repo of b.reposMined ?? []) console.log(`     ⛏ ${repo.repo ?? "?"} ★${repo.stars ?? "?"} → +${repo.newCount ?? 0} genes${repo.updatedCount ? ` (~${repo.updatedCount} upd)` : ""}`);
+  if ((b.reposFailed ?? []).length) console.log(`     ✗ failed: ${b.reposFailed.map((x) => x.repo ?? x).join(", ")}`);
 }
 
 // ---------- phase: sweep ----------
