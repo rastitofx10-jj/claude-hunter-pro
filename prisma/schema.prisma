@@ -19,6 +19,8 @@ model SavedRepo {
   score       Int      @default(0)
   models      String?  // Comma-separated list of detected models
   evidence    String?  // JSON of evidence
+  // SPDX license — basis for deciding which intel can be distributed/used commercially
+  license     String?
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -52,6 +54,10 @@ model DnaArtifact {
   content     String?  // File content (full or excerpt)
   rawUrl      String?
   size        Int      @default(0)
+  // SPDX license of the source repo at mining time (MIT/Apache-2.0/GPL-3.0...).
+  // "self" = born from our own field reports. null = unknown (backfill pending).
+  // Without this field there is no lawful commercial distribution of derivatives.
+  license     String?
   createdAt   DateTime @default(now())
 
   @@unique([sourceRepo, path])

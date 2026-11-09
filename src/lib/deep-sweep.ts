@@ -423,11 +423,27 @@ export async function mineTopCandidates(
     .slice(0, maxRepos);
   const reports: MinedRepoReport[] = [];
 
+  // License at birth — mandatory provenance for every gene: without a known
+  // license there is no lawful commercial distribution of derivatives.
+  // One batched GraphQL call for the whole list (1 point per 40 repos) — zero REST cost.
+  const licMeta = await batchRepoMeta(
+    fresh.map((c) => c.fullName),
+    token
+  ).catch(
+    () => new Map<string, { stars: number; defaultBranch: string | null; license: string | null }>()
+  );
+
   for (let i = 0; i < fresh.length; i += 2) {
     const batch = fresh.slice(i, i + 2);
     // The default branch from the enrichment GraphQL — saves a /repos call per repo
     const results = await Promise.allSettled(
-      batch.map((c) => harvestRepo(c.fullName, token, { stars: c.stars, defaultBranch: c.defaultBranch ?? null }))
+      batch.map((c) =>
+        harvestRepo(c.fullName, token, {
+          stars: c.stars,
+          defaultBranch: c.defaultBranch ?? licMeta.get(c.fullName)?.defaultBranch ?? null,
+          license: licMeta.get(c.fullName)?.license ?? null,
+        })
+      )
     );
     // await instead of void — unordered progress writes could report progress backwards
     for (let j = 0; j < results.length; j++) {

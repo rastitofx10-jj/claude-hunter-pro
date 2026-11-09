@@ -72,6 +72,7 @@ export interface HarvestResult {
 interface RepoMeta {
   stars: number;
   defaultBranch: string | null;
+  license: string | null;
 }
 
 interface Candidate {
@@ -100,18 +101,22 @@ export async function batchRepoMeta(
       .map((name, j) => {
         const [owner, repo] = name.split("/");
         if (!owner || !repo) return null;
-        return `r${j}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { stargazerCount defaultBranchRef { name } }`;
+        return `r${j}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { stargazerCount defaultBranchRef { name } licenseInfo { spdxId } }`;
       })
       .filter(Boolean);
     if (aliases.length === 0) continue;
     try {
-      const data = await ghGraphql<Record<string, { stargazerCount: number; defaultBranchRef: { name: string } | null } | null>>(
-        `query { ${aliases.join(" ")} }`,
-        token
-      );
+      const data = await ghGraphql<
+        Record<string, { stargazerCount: number; defaultBranchRef: { name: string } | null; licenseInfo: { spdxId: string | null } | null } | null>
+      >(`query { ${aliases.join(" ")} }`, token);
       chunk.forEach((name, j) => {
         const r = data?.[`r${j}`];
-        if (r) out.set(name, { stars: r.stargazerCount ?? 0, defaultBranch: r.defaultBranchRef?.name ?? null });
+        if (r)
+          out.set(name, {
+            stars: r.stargazerCount ?? 0,
+            defaultBranch: r.defaultBranchRef?.name ?? null,
+            license: r.licenseInfo?.spdxId ?? null,
+          });
       });
     } catch {
       // Enrichment is an optimization — a repo without meta is simply mined without exact stars
@@ -242,6 +247,8 @@ export async function harvestRepo(
         description: a.description,
         content: a.content,
         size: a.size,
+        // license flows in whenever meta is available — gradual backfill for old genes too
+        ...(pre?.license ? { license: pre.license } : {}),
       },
       create: {
         sourceRepo: fullName,
@@ -252,6 +259,7 @@ export async function harvestRepo(
         content: a.content,
         rawUrl: a.rawUrl,
         size: a.size,
+        license: pre?.license ?? null,
       },
     });
     if (prev === undefined) newCount++;
@@ -289,7 +297,13 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
   for (let i = 0; i < fresh.length; i += 2) {
     const batch = fresh.slice(i, i + 2);
     const results = await Promise.allSettled(
-      batch.map((c) => harvestRepo(c.fullName, token, { stars: c.stars, defaultBranch: c.meta?.defaultBranch ?? null }))
+      batch.map((c) =>
+        harvestRepo(c.fullName, token, {
+          stars: c.stars,
+          defaultBranch: c.meta?.defaultBranch ?? null,
+          license: c.meta?.license ?? null,
+        })
+      )
     );
     results.forEach((r, j) => {
       const c = batch[j];

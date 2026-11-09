@@ -845,6 +845,8 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
           description: distilled.newDna.description,
           content,
           size: content.length,
+          // A field lesson born from our own runs — our IP, no distribution limits
+          license: "self",
         },
       });
       bornDnaId = created.id;
