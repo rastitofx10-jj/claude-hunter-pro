@@ -68,7 +68,8 @@ const doneToday = (ts) => {
 
 async function ensureToken() {
   let r = await j("/api/settings/token", {}, 20_000).catch(() => null);
-  if (r?.body?.hasToken) return true;
+  // API returns {exists, masked, updatedAt} — accept both shapes (older drafts said hasToken)
+  if (r?.body?.hasToken || r?.body?.exists) return true;
   // post-recycle: store from upload file
   const FILE = "upload/טוקן טיטפקס10.secret";
   if (!existsSync(FILE)) return false;
