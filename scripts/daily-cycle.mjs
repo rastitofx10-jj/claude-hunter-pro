@@ -187,6 +187,18 @@ function sh(cmd) {
   if (!(await ensureToken())) { console.error("FATAL | no GitHub token (DB or upload file)"); process.exit(1); }
   note(true, "token ready");
 
+  // 1.5) restore-if-thin — env recycles wipe db/custom.db; the git snapshot is the
+  //      source of truth. Idempotent upserts: a full DB gains nothing, a wiped DB
+  //      gets the whole library back (incl. hunt history → generation continuity).
+  let snapGenes = 0;
+  try {
+    snapGenes = JSON.parse(readFileSync("/home/z/my-project/reports/state/dna-snapshot.json", "utf8")).counts?.dnaArtifacts ?? 0;
+  } catch { /* no snapshot yet — first ever run */ }
+  if (snapGenes > (await countGenes().catch(() => 0))) {
+    const r = sh("node scripts/dna-restore.mjs");
+    note(r.ok, "restore", r.out.split("\n")[0] ?? "");
+  }
+
   const genesBefore = await countGenes().catch(() => 0);
   const state = loadState();
 
@@ -231,15 +243,20 @@ function sh(cmd) {
   const bf = sh("node scripts/license-backfill.mjs");
   note(bf.ok, "license backfill", bf.out.split("\n")[0] ?? "");
 
-  // 6) snapshot to git (survives env recycles)
-  const snap = sh("node scripts/dna-snapshot.mjs");
-  note(snap.ok, "snapshot", snap.out.split("\n")[0] ?? "");
-
-  // 7) radar report — the artifact that leaves the system
-  const radar = sh("node scripts/radar-report.mjs");
-  note(radar.ok, "radar report", radar.out.split("\n")[0] ?? "");
-
   const genesAfter = await countGenes().catch(() => genesBefore);
+
+  // 6) snapshot to git (survives env recycles) — never regress: if the DB holds
+  //    fewer genes than the committed snapshot, snapshotting would erase history
+  if (genesAfter < snapGenes) {
+    note(false, "snapshot", `refused — db ${genesAfter} < snapshot ${snapGenes} genes; would erase history`);
+  } else {
+    const snap = sh("node scripts/dna-snapshot.mjs");
+    note(snap.ok, "snapshot", snap.out.split("\n")[0] ?? "");
+
+    // 7) radar report — the artifact that leaves the system (only over a full library)
+    const radar = sh("node scripts/radar-report.mjs");
+    note(radar.ok, "radar report", radar.out.split("\n")[0] ?? "");
+  }
   note(true, "cycle summary", `genes ${genesBefore} → ${genesAfter} (${genesAfter - genesBefore >= 0 ? "+" : ""}${genesAfter - genesBefore})`);
   console.log(results.join("\n"));
   // free the owned server (if we started it) — next run re-spawns as needed
