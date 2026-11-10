@@ -66,7 +66,10 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
   activeRuns.add(runId);
   try {
     // ---------- Stage A: queries ----------
-    const arsenal = buildQueryArsenal();
+    // Frontier rotation: each completed sweep seeds the next slice — the sweep
+    // probes different frontier coordinates every run instead of repeating.
+    const doneSweeps = await db.sweepRun.count({ where: { status: "done" } });
+    const arsenal = buildQueryArsenal(doneSweeps);
     const reports: QueryReport[] = [];
     await updateRun(runId, { phase: "queries", progress: 1 });
 

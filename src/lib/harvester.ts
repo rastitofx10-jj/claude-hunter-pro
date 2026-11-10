@@ -19,17 +19,25 @@ import { ghFetch, ghSearchWithBackoff, ghGraphql, mapLimit, GhError, isCapabilit
 import { QUALIFYING_MODELS } from "./claude-models";
 import { mineDna } from "./dna-miner";
 import { db } from "./db";
+import { FRONTIER_CODE_POOL, rotateSlice, hydrateFresh, daySeed } from "./frontier-queries";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The most precise search identifier of every qualifying model (kebab-case — what appears in real code).
- *  Derived from the registry, not hardcoded — a new threshold in the registry = automatic harvest coverage. */
+/** The harvest's discovery queries — 6 slots, rotated daily.
+ *  2 registry (model strings, rotated by day) + 4 frontier (contract files / SDK /
+ *  configs, rotated by day). Before: 6 fixed model strings — the same candidates
+ *  every day, which is exactly why the harvest saturated (+0 genes by gen 8).
+ *  Daily rotation makes each day's harvest probe different corners. */
 function harvestQueries(): string[] {
-  const qs: string[] = [];
+  const seed = daySeed();
+  const registry: string[] = [];
   for (const m of QUALIFYING_MODELS) {
     const primary = m.searchStrings.find((s) => /^claude-[a-z0-9-]+$/.test(s)) ?? m.searchStrings[0];
-    if (primary && !qs.includes(primary)) qs.push(primary);
+    if (primary && !registry.includes(primary)) registry.push(primary);
   }
+  const regSlice = rotateSlice(registry, seed, 2).map((q) => q);
+  const frontierSlice = rotateSlice(FRONTIER_CODE_POOL, seed * 3, 4).map((f) => hydrateFresh(f.q));
+  const qs = [...regSlice, ...frontierSlice];
   return qs.slice(0, 6); // code-search quota 10/min — 6 queries with 6.5s spacing = safe
 }
 

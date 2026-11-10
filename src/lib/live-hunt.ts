@@ -182,10 +182,13 @@ function evolvedKind(q: string): "code" | "repo" {
 }
 
 // Total cap on queries for a single hunt (static + evolved).
-// Full arsenal = 26 (15 registry-code + 4 capability-code + 7 repos). Generation 2+ adds ≤10 evolved.
-// 32 = the maximum possible (26 static in generation 1; 22 static + 10 evolved in generation 2+).
-// Timing budget: 25 code queries × 6.5s + 7 repo × 2.1 ≈ 195 seconds — headroom remains for backoff against maxDuration=300.
-const MAX_HUNT_QUERIES = 32;
+// Full arsenal = 26 core (15 registry-code + 4 capability-code + 7 repos) + 9 frontier
+// (6 code + 3 repos) = 35 static. Generation 2+ adds ≤10 evolved.
+// 40 = the maximum possible. Frontier slices rotate by generation (seed), so
+// different generations probe different frontier coordinates.
+// Timing budget: 28 code queries × 6.5s + 10 repo × 2.1 ≈ 203 seconds — headroom
+// remains for quota-window holds against maxDuration=300.
+const MAX_HUNT_QUERIES = 40;
 
 /**
  * A deterministic threshold guard for evolved queries — we don't rely on the LLM to follow the rules.
@@ -300,7 +303,7 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   if (!token) {
     throw new LiveHuntError("No GitHub token on the server — the live hunt requires a token (Settings → Token)", 400);
   }
-  const arsenal = buildQueryArsenal();
+  const arsenal = buildQueryArsenal(ctx.generation);
 
   // Accumulated knowledge — once per hunt (seeding and the novelty metric share it)
   const known = await previousKnownRepos();
@@ -310,19 +313,24 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const seenQ = new Set(arsenal.map((q) => q.q.toLowerCase()));
   const evolved = seed.queries.filter((q) => !seenQ.has(q.q.toLowerCase()));
 
-  // Static budget by category — evolved queries replace registry breadth,
-  // never the market/topic dimension (repo). Before: head-of-list allocation starved
-  // all 7 repo searches in generation 2+ and also drained the capability searches —
-  // seeding was meant to add coverage but actually wiped out entire dimensions.
+  // Category-aware static allocation with floors — evolved queries replace registry
+  // breadth, never the market/topic or frontier dimensions. (Before: a flat
+  // "registry-first" sort starved all 7 repo searches in generation 2+; the same
+  // sort would now starve the frontier — every category gets an explicit share.)
   const staticBudget = Math.max(0, MAX_HUNT_QUERIES - evolved.length);
-  const repoQ = arsenal.filter((q) => q.kind === "repo"); // 7 — always first
-  const codeQ = arsenal
-    .filter((q) => q.kind === "code")
-    .sort((a, b) => (a.origin.startsWith("registry") ? -1 : 1) - (b.origin.startsWith("registry") ? -1 : 1)); // registry before capability
-  const staticQ: SweepQuery[] = [
-    ...repoQ.slice(0, staticBudget),
-    ...codeQ.slice(0, Math.max(0, staticBudget - repoQ.length)),
-  ];
+  const repoQ = arsenal.filter((q) => q.kind === "repo"); // 10 — always all (2.1s spacing, cheap quota)
+  let left = Math.max(0, staticBudget - repoQ.length);
+  const frontierQ = arsenal.filter((q) => q.origin === "frontier"); // 9 — the anti-saturation dimension
+  const capQ = arsenal.filter((q) => q.origin === "capability"); // 4
+  const regQ = arsenal.filter((q) => q.origin.startsWith("registry")); // 15
+  // capability floor (2) survives even when evolved queries squeeze the budget
+  const capFloor = Math.min(2, capQ.length, left);
+  const frontierTake = frontierQ.slice(0, Math.max(0, left - capFloor));
+  left -= frontierTake.length;
+  const capTake = capQ.slice(0, Math.min(capQ.length, left));
+  left -= capTake.length;
+  const regTake = regQ.slice(0, Math.min(regQ.length, left));
+  const staticQ: SweepQuery[] = [...repoQ, ...frontierTake, ...capTake, ...regTake];
   const queries = [...staticQ, ...evolved];
 
   const { reports, codeHits, repoHits } = await runQueryArsenal(token, queries, () => {});

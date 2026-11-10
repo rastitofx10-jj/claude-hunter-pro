@@ -10,6 +10,7 @@ import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey,
 import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
 import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
+import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
 
 // ---------- Query arsenal ----------
 
@@ -20,8 +21,12 @@ export interface SweepQuery {
   origin: string;
 }
 
-/** Builds the full query arsenal from the model registry — always in sync with the threshold */
-export function buildQueryArsenal(): SweepQuery[] {
+/**
+ * Builds the full query arsenal from the model registry — always in sync with the threshold.
+ * `seed` rotates the frontier slice: each generation/sweep probes different frontier
+ * coordinates, so coverage compounds across runs instead of repeating (anti-saturation).
+ */
+export function buildQueryArsenal(seed = 0): SweepQuery[] {
   const queries: SweepQuery[] = [];
 
   // 1. Every search string of every qualifying model — direct code search (the hard evidence)
@@ -52,6 +57,17 @@ export function buildQueryArsenal(): SweepQuery[] {
     { q: `anthropic premium api integration stars:>20 pushed:>${freshSince}`, kind: "repo", origin: "market" },
   );
 
+  // 4. Frontier — coordinates the arsenal never touched before (contract files,
+  //    Agent SDK, MCP configs, young repos, fresh topics, awesome lists).
+  //    A rotating slice of pools larger than the slice: cross-run novelty.
+  //    (Field evidence: gens 6→9 collapsed +57→+9→+3→+1 probing the same corners.)
+  for (const f of rotateSlice(FRONTIER_CODE_POOL, seed * 3, 6)) {
+    queries.push({ q: f.q, kind: "code", origin: "frontier" });
+  }
+  for (const f of rotateSlice(FRONTIER_REPO_POOL, seed * 2, 3)) {
+    queries.push({ q: hydrateFresh(f.q), kind: "repo", origin: "frontier" });
+  }
+
   return queries;
 }
 
@@ -71,6 +87,8 @@ export interface RepoHit {
   stars: number;
   pushedAt: string | null;
   topics: string[];
+  /** The repo-search query that surfaced it — frontier identification in consolidation */
+  viaQuery: string;
 }
 
 export interface Candidate {
@@ -91,6 +109,8 @@ export interface Candidate {
   modelStrings: string[];
   /** How many capability files were discovered (SKILL.md, .claude/, etc.) */
   capabilityHits: number;
+  /** Found by a frontier query (SDK import in content / curated repo-search) — ecosystem evidence */
+  frontierHits: number;
   /** Model-evidence precision: hard (model string in code content — verified) | soft (a mention in description/path) | none */
   evidence: "hard" | "soft" | "none";
   score: number;
@@ -195,6 +215,7 @@ export async function runQueryArsenal(
             stars: item.stargazers_count ?? 0,
             pushedAt: item.pushed_at ?? null,
             topics: item.topics ?? [],
+            viaQuery: query.q,
           });
         }
       }
@@ -236,6 +257,7 @@ export function consolidateCandidates(
         evidencePaths: [],
         modelStrings: [],
         capabilityHits: 0,
+        frontierHits: 0,
         evidence: "none",
         score: 0,
         via: [],
@@ -250,10 +272,18 @@ export function consolidateCandidates(
   for (const m of QUALIFYING_MODELS) {
     for (const s of m.searchStrings) queryToModel.set(s.toLowerCase(), m.id);
   }
+  // Frontier queries (hydrated to their runtime form) — a hit via one of them is
+  // ecosystem evidence of its own: SDK imports, MCP configs, hooks contracts,
+  // curated topics/awesome lists.
+  const frontierQs = new Set<string>([
+    ...FRONTIER_CODE_POOL.map((f) => f.q.toLowerCase()),
+    ...FRONTIER_REPO_POOL.map((f) => hydrateFresh(f.q).toLowerCase()),
+  ]);
 
   for (const hit of codeHits) {
     const c = ensure(hit.repo);
     if (hit.capability) c.capabilityHits++;
+    if (frontierQs.has(hit.viaQuery.toLowerCase())) c.frontierHits++;
     // Content proof only for a registered model string: the query was found in the file's content, but
     // capability/market queries (e.g. SKILL.md claude) are not proof of a model — only a soft signal.
     const asModel = queryToModel.get(hit.viaQuery.toLowerCase());
@@ -275,6 +305,7 @@ export function consolidateCandidates(
     c.pushedAt = hit.pushedAt ?? c.pushedAt;
     c.topics = Array.from(new Set([...c.topics, ...hit.topics]));
     if (!c.via.includes("repo")) c.via.push("repo");
+    if (frontierQs.has(hit.viaQuery.toLowerCase())) c.frontierHits++;
     // A mention in description/topics — soft evidence only, never hard
     const hay = [hit.fullName, hit.description ?? "", hit.topics.join(" ")].join(" ");
     const detected = detectClaudeModels(hay).qualifying;
@@ -317,7 +348,7 @@ export function scoreCandidateInPlace(c: Candidate): void {
     c.textEvidence.reduce((s, id) => s + evidenceWeight(id, false), 0);
   c.evidence = c.contentEvidence.length > 0 ? "hard" : c.via.includes("code") || c.textEvidence.length > 0 ? "soft" : "none";
   c.score = Math.round(
-    modelEvidence * 6 + c.capabilityHits * 4 + listScore.score + Math.log10(c.stars + 1) * 4
+    modelEvidence * 6 + c.capabilityHits * 4 + c.frontierHits * 3 + listScore.score + Math.log10(c.stars + 1) * 4
   );
 }
 
@@ -412,11 +443,14 @@ export async function mineTopCandidates(
         emptySkipped++;
         return false;
       }
-      // Threshold rule — mine only repos that prove evidence of a qualifying model or real .claude capabilities,
-      // or that originate from the elite organization itself. A sterile candidate (no evidence, no capabilities) doesn't sneak into the library.
+      // Threshold rule — mine only repos that prove ecosystem evidence: a qualifying
+      // model in code, real .claude capabilities, a frontier hit (SDK import in content,
+      // curated topic/awesome list), or the elite organization itself.
+      // A sterile candidate (no evidence, no capabilities) doesn't sneak into the library.
       // (Before: a repo with only 4.x and stars was mined into the DNA library)
       if (c.evidence === "hard") return true;
       if (c.capabilityHits > 0) return true;
+      if (c.frontierHits > 0) return true;
       if (/^anthropics\//i.test(c.fullName)) return true;
       return false;
     })
