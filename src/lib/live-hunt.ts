@@ -31,6 +31,7 @@ import {
   type QueryReport,
   type SweepQuery,
 } from "./deep-sweep";
+import { loadYieldStats, rankByYield } from "./adaptive-learning";
 import {
   triageBatch,
   sharpProfiles,
@@ -317,12 +318,17 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   // breadth, never the market/topic or frontier dimensions. (Before: a flat
   // "registry-first" sort starved all 7 repo searches in generation 2+; the same
   // sort would now starve the frontier — every category gets an explicit share.)
+  // Adaptive learning (chimera WO4): within each category, yield-proven queries
+  // rank first — so when evolved queries squeeze the budget, the survivors are
+  // the queries that historically ADDED genes, not arbitrary pool order. Ties keep
+  // rotation order, so novelty is preserved.
+  const ystats = await loadYieldStats();
   const staticBudget = Math.max(0, MAX_HUNT_QUERIES - evolved.length);
   const repoQ = arsenal.filter((q) => q.kind === "repo"); // 10 — always all (2.1s spacing, cheap quota)
   let left = Math.max(0, staticBudget - repoQ.length);
-  const frontierQ = arsenal.filter((q) => q.origin === "frontier"); // 9 — the anti-saturation dimension
-  const capQ = arsenal.filter((q) => q.origin === "capability"); // 4
-  const regQ = arsenal.filter((q) => q.origin.startsWith("registry")); // 15
+  const frontierQ = rankByYield(arsenal.filter((q) => q.origin === "frontier"), ystats); // 9 — the anti-saturation dimension
+  const capQ = rankByYield(arsenal.filter((q) => q.origin === "capability"), ystats); // 4
+  const regQ = rankByYield(arsenal.filter((q) => q.origin.startsWith("registry")), ystats); // 15
   // capability floor (2) survives even when evolved queries squeeze the budget
   const capFloor = Math.min(2, capQ.length, left);
   const frontierTake = frontierQ.slice(0, Math.max(0, left - capFloor));

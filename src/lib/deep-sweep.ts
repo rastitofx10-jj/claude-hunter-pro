@@ -11,6 +11,7 @@ import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
 import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
+import { recordQueryYields } from "./adaptive-learning";
 
 // ---------- Query arsenal ----------
 
@@ -111,6 +112,8 @@ export interface Candidate {
   capabilityHits: number;
   /** Found by a frontier query (SDK import in content / curated repo-search) — ecosystem evidence */
   frontierHits: number;
+  /** The queries that surfaced this repo — adaptive-learning attribution feed (WO4) */
+  viaQueries: string[];
   /** Model-evidence precision: hard (model string in code content — verified) | soft (a mention in description/path) | none */
   evidence: "hard" | "soft" | "none";
   score: number;
@@ -258,6 +261,7 @@ export function consolidateCandidates(
         modelStrings: [],
         capabilityHits: 0,
         frontierHits: 0,
+        viaQueries: [],
         evidence: "none",
         score: 0,
         via: [],
@@ -284,6 +288,8 @@ export function consolidateCandidates(
     const c = ensure(hit.repo);
     if (hit.capability) c.capabilityHits++;
     if (frontierQs.has(hit.viaQuery.toLowerCase())) c.frontierHits++;
+    // Adaptive-learning feed: remember which query surfaced this repo
+    if (c.viaQueries.length < 8 && !c.viaQueries.includes(hit.viaQuery)) c.viaQueries.push(hit.viaQuery);
     // Content proof only for a registered model string: the query was found in the file's content, but
     // capability/market queries (e.g. SKILL.md claude) are not proof of a model — only a soft signal.
     const asModel = queryToModel.get(hit.viaQuery.toLowerCase());
@@ -306,6 +312,7 @@ export function consolidateCandidates(
     c.topics = Array.from(new Set([...c.topics, ...hit.topics]));
     if (!c.via.includes("repo")) c.via.push("repo");
     if (frontierQs.has(hit.viaQuery.toLowerCase())) c.frontierHits++;
+    if (c.viaQueries.length < 8 && !c.viaQueries.includes(hit.viaQuery)) c.viaQueries.push(hit.viaQuery);
     // A mention in description/topics — soft evidence only, never hard
     const hay = [hit.fullName, hit.description ?? "", hit.topics.join(" ")].join(" ");
     const detected = detectClaudeModels(hay).qualifying;
@@ -415,6 +422,8 @@ export interface MinedBatchResult {
   reports: MinedRepoReport[];
   /** How many repos were skipped because they were already proven empty in previous mines (fully visible in evidence) */
   emptySkipped: number;
+  /** Adaptive learning (WO4): query → genes it contributed this run — persisted for future ranking */
+  queryAttribution: Record<string, number>;
 }
 
 export async function mineTopCandidates(
@@ -526,7 +535,18 @@ export async function mineTopCandidates(
     // The memory is an optimization — a save failure doesn't take down the stage
   }
 
-  return { reports, emptySkipped };
+  // Adaptive learning (WO4) — attribute added genes to the queries that surfaced
+  // the mined repos; future hunts rank proven queries above never-productive ones.
+  const queryAttribution: Record<string, number> = {};
+  for (const rep of reports) {
+    if (rep.newCount > 0) {
+      const c = fresh.find((x) => x.fullName === rep.repo);
+      for (const q of c?.viaQueries ?? []) queryAttribution[q] = (queryAttribution[q] ?? 0) + rep.newCount;
+    }
+  }
+  await recordQueryYields(queryAttribution);
+
+  return { reports, emptySkipped, queryAttribution };
 }
 
 // ---------- Flat report for the prompt swarm ----------
@@ -549,6 +569,8 @@ export interface CandidateFlat {
   score: number;
   tier: TierKey;
   tierLabel: string;
+  /** The queries that surfaced this repo (top 4) — adaptive-learning transparency */
+  viaQueries: string[];
 }
 
 export function flattenForSwarm(candidates: Candidate[]): CandidateFlat[] {
@@ -569,6 +591,7 @@ export function flattenForSwarm(candidates: Candidate[]): CandidateFlat[] {
       score: c.score,
       tier: t.key,
       tierLabel: t.label,
+      viaQueries: c.viaQueries.slice(0, 4),
     };
   });
 }

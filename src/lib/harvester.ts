@@ -20,6 +20,8 @@ import { QUALIFYING_MODELS } from "./claude-models";
 import { mineDna } from "./dna-miner";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, rotateSlice, hydrateFresh, daySeed } from "./frontier-queries";
+import { gateArtifacts, type QualityRejection } from "./quality-gate";
+import { recordQueryYields } from "./adaptive-learning";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -59,6 +61,10 @@ export interface HarvestRepoReport {
   newCount: number;
   updatedCount?: number;
   skippedStubs?: number;
+  /** Chimera quality gate (WO3): genes rejected at ingestion, with reasons */
+  qualityRejected?: QualityRejection[];
+  /** Average quality score of the genes that passed (0..1) */
+  avgQuality?: number | null;
 }
 
 export interface HarvestResult {
@@ -69,6 +75,8 @@ export interface HarvestResult {
   totalLibrary: number;
   fieldDna: number;
   skippedAlreadyMined: number;
+  /** Genes rejected by the chimera quality gate across all mined repos */
+  qualityRejectedTotal: number;
   /** Full transparency: what actually happened at the discovery stage */
   queriesRun: { q: string; count: number }[];
   queriesFailed: { q: string; error: string }[];
@@ -89,6 +97,8 @@ interface Candidate {
   skillRichness: number;
   alreadyMined: boolean;
   meta?: RepoMeta;
+  /** The queries that surfaced this repo — feed for adaptive learning attribution */
+  viaQueries: string[];
 }
 
 /**
@@ -159,8 +169,9 @@ export async function discoverEliteRepos(
         const existing = byName.get(r.full_name);
         if (existing) {
           existing.skillRichness += richnessGain;
+          if (!existing.viaQueries.includes(q)) existing.viaQueries.push(q);
         } else {
-          byName.set(r.full_name, { fullName: r.full_name, stars: 0, skillRichness: richnessGain, alreadyMined: false });
+          byName.set(r.full_name, { fullName: r.full_name, stars: 0, skillRichness: richnessGain, alreadyMined: false, viaQueries: [q] });
         }
       }
     } catch (e) {
@@ -221,17 +232,14 @@ export async function harvestRepo(
 
   let newCount = 0;
   let updatedCount = 0;
-  let skippedStubs = 0;
   const kinds = new Set<string>();
 
-  // Quality gate — a stub gene (content under 200 bytes) never enters the library.
-  // (Before: DNA #133 entered with 11 bytes — an empty CLAUDE.md counted as a "gene")
-  const MIN_GENE_BYTES = 200;
-  const artifacts = pkg.artifacts.filter((a) => {
-    if ((a.content ?? "").length >= MIN_GENE_BYTES) return true;
-    skippedStubs++;
-    return false;
-  });
+  // Chimera quality gate (WO3) — replaces the raw byte-floor filter: a stub gene
+  // never enters the library, and now neither does structure-less fluff or a
+  // generic-name placeholder. Every rejection is reported with its reasons.
+  const { kept: artifacts, rejected, avgScore } = gateArtifacts(pkg.artifacts);
+  const skippedStubs = rejected.filter((r) => r.reasons.some((x) => x.startsWith("stub:"))).length;
+  const qualityRejected = rejected.slice(0, 6);
 
   // A single fetch of the repo's existing rows (instead of findUnique per artifact — N+1).
   // Used both for a reliable "new vs updated" count and for skipping identical writes.
@@ -283,6 +291,8 @@ export async function harvestRepo(
     newCount,
     updatedCount,
     skippedStubs,
+    qualityRejected,
+    avgQuality: avgScore,
   };
 }
 
@@ -329,6 +339,17 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
     db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
   ]);
 
+  // Adaptive learning (WO4) — attribute added genes to the queries that surfaced
+  // the mined repos, so future harvests rank proven queries higher.
+  const attribution: Record<string, number> = {};
+  for (const rep of reports) {
+    if (rep.newCount > 0) {
+      const c = starsMap.get(rep.repo);
+      for (const q of c?.viaQueries ?? []) attribution[q] = (attribution[q] ?? 0) + rep.newCount;
+    }
+  }
+  await recordQueryYields(attribution);
+
   return {
     candidatesFound: candidates.length,
     reposMined: reports,
@@ -337,6 +358,7 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
     totalLibrary,
     fieldDna,
     skippedAlreadyMined,
+    qualityRejectedTotal: reports.reduce((s, r) => s + (r.qualityRejected?.length ?? 0), 0),
     queriesRun,
     queriesFailed,
     reposFailed,
