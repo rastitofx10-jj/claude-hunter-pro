@@ -12,6 +12,7 @@ import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
 import { recordQueryYields } from "./adaptive-learning";
+import type { QualityRejection } from "./quality-gate";
 
 // ---------- Query arsenal ----------
 
@@ -403,6 +404,10 @@ export interface MinedRepoReport {
   skippedStubs: number;
   kinds: string[];
   error?: string;
+  /** Chimera quality gate (WO3): genes rejected at ingestion, with reasons */
+  qualityRejected?: QualityRejection[];
+  /** Average quality score of the genes that passed (0..1) */
+  avgQuality?: number | null;
 }
 
 /** Stage C — mine the top-N fresh repos into the library */

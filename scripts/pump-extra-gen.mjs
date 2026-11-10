@@ -108,9 +108,27 @@ async function runSweep() {
 
 // ---- main ----
 console.log(`=== extra generation pump ${new Date().toISOString()} ===`);
+
+// Cold-start the dev server if down (env recycles kill background processes;
+// each pump run owns its server lifetime — dies with this process, DB keeps state)
+const { spawn } = await import("node:child_process");
+let alive = await fetch(`${BASE}/`, { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false);
+let serverProc = null;
+if (!alive) {
+  console.log("server down — cold-starting dev server…");
+  serverProc = spawn("bun", ["run", "dev"], { cwd: "/home/z/my-project", stdio: "ignore", detached: false });
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    await sleep(5000);
+    alive = await fetch(`${BASE}/`, { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false);
+    if (alive) break;
+  }
+}
+if (!alive) { console.error("FATAL | dev server would not start on :3000"); process.exit(1); }
+
 const up = await j("/api/settings/token", {}, 20_000).catch(() => null);
 if (!up || up.status !== 200) {
-  console.error("FATAL | server down — run daily-cycle first to cold-start it");
+  console.error("FATAL | server up but token API unreachable");
   process.exit(1);
 }
 if (!(up.body?.hasToken || up.body?.exists)) {

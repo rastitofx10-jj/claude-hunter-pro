@@ -111,6 +111,16 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       .slice(0, 6)
       .map((r) => `${r.repo}: ${r.error}`);
 
+    // Chimera WO3 — quality-gate visibility: rejections and average score per run
+    const qualityRejectedTotal = minedReports.reports.reduce(
+      (s, r) => s + (r.qualityRejected?.length ?? 0),
+      0
+    );
+    const qualitySamples = minedReports.reports
+      .filter((r) => (r.qualityRejected?.length ?? 0) > 0)
+      .slice(0, 3)
+      .flatMap((r) => (r.qualityRejected ?? []).slice(0, 2).map((q) => `${r.repo}!${q.path}: ${q.reasons[0] ?? "low score"} (${q.score})`));
+
     const [totalLibrary, fieldDna] = await Promise.all([
       db.dnaArtifact.count(),
       db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
@@ -170,6 +180,10 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       reposWithFindings,
       mineErrors,
       mineErrorList,
+      // Chimera injection — quality gate + adaptive learning, visible in every sweep
+      qualityRejectedTotal,
+      qualitySamples,
+      queryAttribution: minedReports.queryAttribution,
       dnaAdded: dnaAddedTotal.n,
       totalLibrary,
       fieldDna,
