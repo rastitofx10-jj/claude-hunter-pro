@@ -1,0 +1,476 @@
+{
+ "version": 1,
+ "generatedAt": "2026-11-11T05:59:50.632Z",
+ "note": "WO5 of chimera #3 (verified-mutation-flywheel): every verdict recorded; base rates feed the next adversarial pass.",
+ "baseRates": {
+  "huntsTotal": 22,
+  "huntsDone": 22,
+  "sweepDoneRate": 0.8181818181818182,
+  "avgGenesPerHuntGen": 34.95454545454545,
+  "avgCodeHitsPerSweep": 1879.611111111111,
+  "avgCandidatesPerSweep": 1994.9444444444443,
+  "enrichmentRate": 0.008493692389094656,
+  "chimerasBorn": 3,
+  "genesTotal": 826
+ },
+ "generations": [
+  {
+   "gen": 1,
+   "date": "2026-11-09",
+   "genesAdded": 7,
+   "genesTotalAfter": 7,
+   "llmCalls": 14,
+   "status": "done"
+  },
+  {
+   "gen": 2,
+   "date": "2026-11-09",
+   "genesAdded": 45,
+   "genesTotalAfter": 52,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 3,
+   "date": "2026-11-09",
+   "genesAdded": 1,
+   "genesTotalAfter": 53,
+   "llmCalls": 12,
+   "status": "done"
+  },
+  {
+   "gen": 4,
+   "date": "2026-11-09",
+   "genesAdded": 34,
+   "genesTotalAfter": 87,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 5,
+   "date": "2026-11-09",
+   "genesAdded": 51,
+   "genesTotalAfter": 138,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 6,
+   "date": "2026-11-10",
+   "genesAdded": 47,
+   "genesTotalAfter": 185,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 7,
+   "date": "2026-11-10",
+   "genesAdded": 42,
+   "genesTotalAfter": 227,
+   "llmCalls": 12,
+   "status": "done"
+  },
+  {
+   "gen": 8,
+   "date": "2026-11-10",
+   "genesAdded": 9,
+   "genesTotalAfter": 236,
+   "llmCalls": 12,
+   "status": "done"
+  },
+  {
+   "gen": 9,
+   "date": "2026-11-10",
+   "genesAdded": 3,
+   "genesTotalAfter": 239,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 10,
+   "date": "2026-11-10",
+   "genesAdded": 1,
+   "genesTotalAfter": 240,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 11,
+   "date": "2026-11-10",
+   "genesAdded": 85,
+   "genesTotalAfter": 325,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 12,
+   "date": "2026-11-10",
+   "genesAdded": 73,
+   "genesTotalAfter": 398,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 13,
+   "date": "2026-11-10",
+   "genesAdded": 72,
+   "genesTotalAfter": 470,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 14,
+   "date": "2026-11-10",
+   "genesAdded": 61,
+   "genesTotalAfter": 531,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 15,
+   "date": "2026-11-10",
+   "genesAdded": 37,
+   "genesTotalAfter": 568,
+   "llmCalls": 22,
+   "status": "done"
+  },
+  {
+   "gen": 16,
+   "date": "2026-11-10",
+   "genesAdded": 28,
+   "genesTotalAfter": 596,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 17,
+   "date": "2026-11-10",
+   "genesAdded": 24,
+   "genesTotalAfter": 620,
+   "llmCalls": 14,
+   "status": "done"
+  },
+  {
+   "gen": 18,
+   "date": "2026-11-10",
+   "genesAdded": 37,
+   "genesTotalAfter": 657,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 19,
+   "date": "2026-11-10",
+   "genesAdded": 29,
+   "genesTotalAfter": 686,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 20,
+   "date": "2026-11-10",
+   "genesAdded": 22,
+   "genesTotalAfter": 708,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 21,
+   "date": "2026-11-10",
+   "genesAdded": 43,
+   "genesTotalAfter": 751,
+   "llmCalls": 22,
+   "status": "done"
+  },
+  {
+   "gen": 22,
+   "date": "2026-11-11",
+   "genesAdded": 18,
+   "genesTotalAfter": 769,
+   "llmCalls": 13,
+   "status": "done"
+  }
+ ],
+ "sweeps": [
+  {
+   "sweep": 1,
+   "date": "2026-11-09",
+   "status": "done",
+   "queries": 26,
+   "codeHits": 1486,
+   "candidates": 1561,
+   "enriched": 17,
+   "hardEvidence": 973,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 2,
+   "date": "2026-11-09",
+   "status": "failed",
+   "queries": null,
+   "codeHits": null,
+   "candidates": null,
+   "enriched": null,
+   "hardEvidence": null,
+   "llmCalls": null
+  },
+  {
+   "sweep": 3,
+   "date": "2026-11-09",
+   "status": "done",
+   "queries": 26,
+   "codeHits": 1488,
+   "candidates": 1563,
+   "enriched": 17,
+   "hardEvidence": 974,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 4,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 26,
+   "codeHits": 1486,
+   "candidates": 1561,
+   "enriched": 17,
+   "hardEvidence": 972,
+   "llmCalls": 8
+  },
+  {
+   "sweep": 5,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 26,
+   "codeHits": 1492,
+   "candidates": 1566,
+   "enriched": 17,
+   "hardEvidence": 977,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 6,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 26,
+   "codeHits": 1492,
+   "candidates": 1564,
+   "enriched": 17,
+   "hardEvidence": 975,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 7,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 26,
+   "codeHits": 1492,
+   "candidates": 1563,
+   "enriched": 17,
+   "hardEvidence": 975,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 8,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2062,
+   "candidates": 2174,
+   "enriched": 17,
+   "hardEvidence": 976,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 9,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2068,
+   "candidates": 2230,
+   "enriched": 17,
+   "hardEvidence": 976,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 10,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2088,
+   "candidates": 2211,
+   "enriched": 17,
+   "hardEvidence": 977,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 11,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2065,
+   "candidates": 2196,
+   "enriched": 17,
+   "hardEvidence": 977,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 12,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2071,
+   "candidates": 2230,
+   "enriched": 17,
+   "hardEvidence": 978,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 13,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2084,
+   "candidates": 2201,
+   "enriched": 17,
+   "hardEvidence": 977,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 14,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2061,
+   "candidates": 2205,
+   "enriched": 17,
+   "hardEvidence": 977,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 15,
+   "date": "2026-11-10",
+   "status": "failed",
+   "queries": null,
+   "codeHits": null,
+   "candidates": null,
+   "enriched": null,
+   "hardEvidence": null,
+   "llmCalls": null
+  },
+  {
+   "sweep": 16,
+   "date": "2026-11-10",
+   "status": "failed",
+   "queries": null,
+   "codeHits": null,
+   "candidates": null,
+   "enriched": null,
+   "hardEvidence": null,
+   "llmCalls": null
+  },
+  {
+   "sweep": 17,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2071,
+   "candidates": 2212,
+   "enriched": 17,
+   "hardEvidence": 978,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 18,
+   "date": "2026-11-10",
+   "status": "failed",
+   "queries": null,
+   "codeHits": null,
+   "candidates": null,
+   "enriched": null,
+   "hardEvidence": null,
+   "llmCalls": null
+  },
+  {
+   "sweep": 19,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2090,
+   "candidates": 2224,
+   "enriched": 17,
+   "hardEvidence": 980,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 20,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2069,
+   "candidates": 2205,
+   "enriched": 17,
+   "hardEvidence": 981,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 21,
+   "date": "2026-11-10",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2075,
+   "candidates": 2205,
+   "enriched": 17,
+   "hardEvidence": 981,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 22,
+   "date": "2026-11-11",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2093,
+   "candidates": 2238,
+   "enriched": 16,
+   "hardEvidence": 983,
+   "llmCalls": 9
+  }
+ ],
+ "chimeras": [
+  {
+   "id": 1,
+   "name": "competitive-intelligence-orchestrator",
+   "born": "2026-11-09",
+   "parents": [
+    "OrchestratorInc/agent-orchestrator",
+    "edvardgrishin27/nativeprompt",
+    "xiaolai/claudepot-app",
+    "1jehuang/jcode",
+    "LibreChat-AI/LibreChat"
+   ]
+  },
+  {
+   "id": 2,
+   "name": "elite-dna-hunter-orchestrator",
+   "born": "2026-11-10",
+   "parents": [
+    "0xHoneyJar/loa-finn",
+    "AI-agents-incubator/n8n-pilot",
+    "AratKruglik/claude-laravel",
+    "Autopsias/gearbox-routing",
+    "DongDuong2001/pudo-code-system"
+   ]
+  },
+  {
+   "id": 3,
+   "name": "verified-mutation-flywheel",
+   "born": "2026-11-11",
+   "parents": [
+    "yennanliu/InvestSkill",
+    "medici-finance/assay",
+    "spotify/ads-agentic-tools",
+    "itz4blitz/agentful",
+    "Generous-Corp/pulp"
+   ]
+  }
+ ]
+}
