@@ -11,7 +11,7 @@
 export const MIN_QUALIFYING_VERSION = 5.5;
 export const THRESHOLD_LABEL = "5.5+";
 export const THRESHOLD_RULE_TEXT =
-  "The model threshold is locked: only 5.5 and above (Opus 5.5, Fable, Opus 6+) — the 4.x family is completely blocked";
+  "The model threshold is locked: only 5.5 and above (Opus 5.5, Fable — own 5.x track, Opus 6+) — the 4.x family is completely blocked";
 
 export type ModelFamily = "opus" | "sonnet" | "haiku" | "fable" | "generic";
 
@@ -58,6 +58,22 @@ export const QUALIFYING_MODELS: ClaudeModelDef[] = [
     version: 5.5,
     weight: 45,
     searchStrings: ["claude-fable", "claude fable", "fable model"],
+  },
+  {
+    id: "claude-fable-5-1",
+    label: "Fable 5.1",
+    family: "fable",
+    version: 5.1,
+    weight: 45,
+    searchStrings: ["claude-fable-5-1"],
+  },
+  {
+    id: "claude-fable-5-2",
+    label: "Fable 5.2",
+    family: "fable",
+    version: 5.2,
+    weight: 45,
+    searchStrings: ["claude-fable-5-2", "fable 5.2"],
   },
   {
     id: "claude-opus-5-5",
@@ -117,12 +133,18 @@ const KNOWN_BLOCKED_LABELS: Record<string, string> = {
 /**
  * Classification by version: below 5.5 → blocked (weight 0).
  * Above the threshold → weight by family and version (cap 45).
+ * FABLE EXCEPTION: the fable family has its own version track — born premium
+ * at 5.x with no 4.x heritage, so fable 5.1/5.2 qualify despite being < 5.5.
+ * Before this fix (fable-probe, 2026-11-11 — the day Fable 5.2 shipped),
+ * `claude-fable-5-2` pins were classified as BLOCKED and repos using the new
+ * module got block-evidence instead of premium credit.
  */
 export function classifyVersion(
   v: number,
   family: ModelFamily
 ): { qualifying: boolean; weight: number } {
-  if (!Number.isFinite(v) || v < MIN_QUALIFYING_VERSION) {
+  const minForFamily = family === "fable" ? 5.0 : MIN_QUALIFYING_VERSION;
+  if (!Number.isFinite(v) || v < minForFamily) {
     return { qualifying: false, weight: 0 };
   }
   let base: number;
@@ -141,7 +163,11 @@ function fmtVersion(maj: number, min: number | null): number {
 }
 
 function buildId(family: ModelFamily, maj: number, min: number | null): string {
-  if (family === "fable") return "claude-fable";
+  // Fable: a bare family mention ("claude fable") keeps the family id, but a
+  // versioned pin ("claude-fable-5-2") builds the specific id — previously ALL
+  // fable mentions collapsed to "claude-fable" and the version was discarded,
+  // so the new-module wave (5.1/5.2) was invisible as a distinct model signal.
+  if (family === "fable") return min == null ? "claude-fable" : `claude-fable-${maj}-${min}`;
   if (family === "generic") return min == null ? `claude-${maj}` : `claude-${maj}-${min}`;
   return min == null ? `claude-${family}-${maj}` : `claude-${family}-${maj}-${min}`;
 }

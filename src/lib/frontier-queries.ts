@@ -46,6 +46,23 @@ export const FRONTIER_REPO_POOL: FrontierQuery[] = [
   { q: "awesome claude stars:>=10", kind: "repo", why: "curated awesome lists — ecosystem goldmines" },
 ];
 
+/** Model frontier — new model releases create a content wave before the
+ *  star-weighted radar notices. Field evidence (fable-probe, 2026-11-11):
+ *  54 genes mention fable and 8 hunts chased it, yet the arsenal held ZERO
+ *  fable queries — detection was luck (harvested repos happened to pin the
+ *  model), not strategy. These queries actively hunt the wave: model-string
+ *  pins, system prompts, eval harnesses, migration notes. Update the version
+ *  strings when the next model lands. */
+export const FRONTIER_MODEL_POOL: FrontierQuery[] = [
+  { q: '"claude-fable-5-2"', kind: "code", why: "fable 5.2 model-string pin — day-one adopters" },
+  { q: '"claude-fable-5" filename:SKILL.md', kind: "code", why: "skills written for fable-class models" },
+  { q: "fable 5.2 filename:CLAUDE.md", kind: "code", why: "project contracts pinning fable 5.2" },
+  { q: '"fable-5-2" OR "fable-5.2" system prompt', kind: "code", why: "system-prompt engineering for the new module" },
+  { q: '"claude-opus-5-5" "claude-fable-5-2"', kind: "code", why: "model routers comparing opus 5.5 vs fable 5.2" },
+  { q: "fable 5.2 created:{fresh}", kind: "repo", why: "repos born around the fable 5.2 release" },
+  { q: '"fable 5.2" eval', kind: "code", why: "eval harnesses measuring the new module" },
+];
+
 /** Deterministic rotation: `count` items from `pool`, starting at `seed % pool.length`.
  *  Wraps around — a pool larger than the slice guarantees cross-run novelty. */
 export function rotateSlice<T>(pool: T[], seed: number, count: number): T[] {

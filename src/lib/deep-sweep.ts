@@ -10,7 +10,7 @@ import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey,
 import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
 import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
-import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
+import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, FRONTIER_MODEL_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
 import { recordQueryYields } from "./adaptive-learning";
 import type { QualityRejection } from "./quality-gate";
 
@@ -68,6 +68,11 @@ export function buildQueryArsenal(seed = 0): SweepQuery[] {
   }
   for (const f of rotateSlice(FRONTIER_REPO_POOL, seed * 2, 3)) {
     queries.push({ q: hydrateFresh(f.q), kind: "repo", origin: "frontier" });
+  }
+  // Model frontier — day-one detection of new-model content waves (fable 5.2 & co).
+  // Rotates like the others: a 3-query slice per sweep, full pool covered across runs.
+  for (const f of rotateSlice(FRONTIER_MODEL_POOL, seed * 5, 3)) {
+    queries.push({ q: hydrateFresh(f.q), kind: f.kind, origin: "frontier-model" });
   }
 
   return queries;
@@ -283,6 +288,7 @@ export function consolidateCandidates(
   const frontierQs = new Set<string>([
     ...FRONTIER_CODE_POOL.map((f) => f.q.toLowerCase()),
     ...FRONTIER_REPO_POOL.map((f) => hydrateFresh(f.q).toLowerCase()),
+    ...FRONTIER_MODEL_POOL.map((f) => hydrateFresh(f.q).toLowerCase()),
   ]);
 
   for (const hit of codeHits) {
