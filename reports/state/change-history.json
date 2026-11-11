@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generatedAt": "2026-11-11T06:17:17.286Z",
+ "generatedAt": "2026-11-11T06:19:59.584Z",
  "note": "WO5 of chimera #3 (verified-mutation-flywheel): every verdict recorded; base rates feed the next adversarial pass.",
  "baseRates": {
   "huntsTotal": 23,
@@ -10,7 +10,7 @@
   "avgCodeHitsPerSweep": 1889.2631578947369,
   "avgCandidatesPerSweep": 2005.1052631578948,
   "enrichmentRate": 0.00845210908995459,
-  "chimerasBorn": 3,
+  "chimerasBorn": 4,
   "genesTotal": 881
  },
  "generations": [
@@ -489,6 +489,18 @@
     "spotify/ads-agentic-tools",
     "itz4blitz/agentful",
     "Generous-Corp/pulp"
+   ]
+  },
+  {
+   "id": 4,
+   "name": "elite-parallel-orchestrator",
+   "born": "2026-11-11",
+   "parents": [
+    "GregoryHo/arcforge",
+    "Mentor-Wizard/mentor-wizard-webapp",
+    "Loulen/prompt-driven-orchestrator",
+    "MelonS/MelonS-Agents",
+    "FinpeakInc/frevana-skills"
    ]
   }
  ]

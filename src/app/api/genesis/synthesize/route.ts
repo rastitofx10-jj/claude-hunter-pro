@@ -2,20 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateChimera } from "@/lib/genesis";
 import { writeDnaSnapshot } from "@/lib/dna-snapshot";
+import { saveDraft } from "@/lib/chimera-draft";
 import type { MinedArtifact } from "@/lib/dna-miner";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-/** Chimera creation: AI fusion of DNA from several elite repos + work orders */
+/**
+ * Chimera creation: AI fusion of DNA from several elite repos + work orders.
+ * WO3 (chimera #3 verified-mutation-flywheel): body flag `draft: true` stages the
+ * result as a validated DRAFT FILE — nothing live. Publish is a separate explicit
+ * call (POST /api/genesis/drafts). Omitting the flag keeps the legacy publish-now
+ * behavior so the existing UI flow is untouched.
+ */
 export async function POST(req: NextRequest) {
   let repos: string[] = [];
   let productContext = "";
+  let draft = false;
   try {
-    const body = (await req.json()) as { repos?: string[]; productContext?: string };
+    const body = (await req.json()) as { repos?: string[]; productContext?: string; draft?: boolean };
     repos = (body.repos ?? []).map((r) => r.trim()).filter(Boolean).slice(0, 5);
     // Input cap — previously unbounded (mission/route.ts already caps; here there was none).
     productContext = (body.productContext ?? "").trim().slice(0, 2000);
+    draft = body.draft === true;
   } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
@@ -54,6 +63,17 @@ export async function POST(req: NextRequest) {
       productContext ||
         "Claude Hunter — a competitive-intelligence system for discovering and analyzing premium Claude projects on GitHub, with an AI synthesis layer. Next.js 16, TypeScript, Prisma, Tailwind."
     );
+
+    // ---- WO3 fork: draft mode stages a validated file, never touches the live library ----
+    if (draft) {
+      const rec = await saveDraft(chimera);
+      return NextResponse.json({
+        staged: true,
+        draftId: rec.draftId,
+        validation: rec.validation,
+        ...chimera,
+      });
+    }
 
     const saved = await db.chimera.create({
       data: {
