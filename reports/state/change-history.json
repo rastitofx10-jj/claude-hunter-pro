@@ -1,17 +1,17 @@
 {
  "version": 1,
- "generatedAt": "2026-11-11T05:59:50.632Z",
+ "generatedAt": "2026-11-11T06:17:17.286Z",
  "note": "WO5 of chimera #3 (verified-mutation-flywheel): every verdict recorded; base rates feed the next adversarial pass.",
  "baseRates": {
-  "huntsTotal": 22,
-  "huntsDone": 22,
-  "sweepDoneRate": 0.8181818181818182,
-  "avgGenesPerHuntGen": 34.95454545454545,
-  "avgCodeHitsPerSweep": 1879.611111111111,
-  "avgCandidatesPerSweep": 1994.9444444444443,
-  "enrichmentRate": 0.008493692389094656,
+  "huntsTotal": 23,
+  "huntsDone": 23,
+  "sweepDoneRate": 0.8260869565217391,
+  "avgGenesPerHuntGen": 35.95652173913044,
+  "avgCodeHitsPerSweep": 1889.2631578947369,
+  "avgCandidatesPerSweep": 2005.1052631578948,
+  "enrichmentRate": 0.00845210908995459,
   "chimerasBorn": 3,
-  "genesTotal": 826
+  "genesTotal": 881
  },
  "generations": [
   {
@@ -188,6 +188,14 @@
    "genesAdded": 18,
    "genesTotalAfter": 769,
    "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 23,
+   "date": "2026-11-11",
+   "genesAdded": 58,
+   "genesTotalAfter": 827,
+   "llmCalls": 12,
    "status": "done"
   }
  ],
@@ -432,6 +440,17 @@
    "candidates": 2238,
    "enriched": 16,
    "hardEvidence": 983,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 23,
+   "date": "2026-11-11",
+   "status": "done",
+   "queries": 35,
+   "codeHits": 2063,
+   "candidates": 2188,
+   "enriched": 17,
+   "hardEvidence": 981,
    "llmCalls": 9
   }
  ],
