@@ -467,7 +467,8 @@ export async function mineTopCandidates(
   candidates: Candidate[],
   token: string | null,
   maxRepos = 8,
-  onProgress?: (done: number, total: number, report: MinedRepoReport) => Promise<void> | void
+  onProgress?: (done: number, total: number, report: MinedRepoReport) => Promise<void> | void,
+  executedQueries: string[] = []
 ): Promise<MinedBatchResult> {
   const minedNames = new Set(
     (
@@ -557,23 +558,44 @@ export async function mineTopCandidates(
     }
   }
 
-  // Update the empty-mine memory — full transparency: the number is recorded in the stage evidence
-  for (const rep of reports) {
-    if (!rep.error && rep.artifacts === 0) mineAttempts[rep.repo] = (mineAttempts[rep.repo] ?? 0) + 1;
-    else if (rep.artifacts > 0) delete mineAttempts[rep.repo];
-  }
+  // Update the empty-mine memory — full transparency: the number is recorded in the stage evidence.
+  // Race-safe: instead of writing the stale run-local copy (load-at-start → save-at-end,
+  // which a concurrent recorder could clobber), the transaction re-reads the current
+  // row and applies only THIS run's diffs (strikes to add, productive repos to unblock).
+  const strikesToAdd = reports
+    .filter((rep) => !rep.error && rep.artifacts === 0)
+    .map((rep) => rep.repo);
+  const toUnblock = reports.filter((rep) => rep.artifacts > 0).map((rep) => rep.repo);
   try {
-    await db.setting.upsert({
-      where: { key: MINE_ATTEMPTS_KEY },
-      update: { value: JSON.stringify(mineAttempts) },
-      create: { key: MINE_ATTEMPTS_KEY, value: JSON.stringify(mineAttempts) },
-    });
+    const { db: txdb } = await import("./db");
+    await txdb.$transaction(
+      async (tx) => {
+        const row = await tx.setting.findUnique({ where: { key: MINE_ATTEMPTS_KEY } });
+        let parsed: Record<string, number> = {};
+        try {
+          const v = row?.value ? JSON.parse(row.value) : null;
+          if (v && typeof v === "object" && !Array.isArray(v)) parsed = v;
+        } catch {
+          // corrupted row — start fresh rather than losing the memory forever
+        }
+        for (const repo of strikesToAdd) parsed[repo] = (parsed[repo] ?? 0) + 1;
+        for (const repo of toUnblock) delete parsed[repo];
+        await tx.setting.upsert({
+          where: { key: MINE_ATTEMPTS_KEY },
+          update: { value: JSON.stringify(parsed) },
+          create: { key: MINE_ATTEMPTS_KEY, value: JSON.stringify(parsed) },
+        });
+      },
+      { timeout: 10_000 }
+    );
   } catch {
     // The memory is an optimization — a save failure doesn't take down the stage
   }
 
   // Adaptive learning (WO4) — attribute added genes to the queries that surfaced
   // the mined repos; future hunts rank proven queries above never-productive ones.
+  // executedQueries seeds zero-yield runs so sterile queries get demoted (see
+  // recordQueryYields) — callers pass only queries that ran WITHOUT error.
   const queryAttribution: Record<string, number> = {};
   for (const rep of reports) {
     if (rep.newCount > 0) {
@@ -581,7 +603,7 @@ export async function mineTopCandidates(
       for (const q of c?.viaQueries ?? []) queryAttribution[q] = (queryAttribution[q] ?? 0) + rep.newCount;
     }
   }
-  await recordQueryYields(queryAttribution);
+  await recordQueryYields(queryAttribution, executedQueries);
 
   return { reports, emptySkipped, queryAttribution };
 }

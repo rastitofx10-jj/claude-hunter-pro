@@ -181,8 +181,22 @@ try {
     }
   }
 
+  // 8) Learning state (v1.1 snapshots) — the empty-mine memory + query yield
+  //    ledger. Only fills MISSING rows: on a wiped DB they're gone (the normal
+  //    post-recycle case); on a live DB the newer state wins (never clobbered).
+  //    Old snapshots without learningState simply skip — backward compatible.
+  let learning = 0;
+  for (const key of ["mineAttempts", "queryYieldStats"]) {
+    const val = snap.learningState?.[key];
+    if (val === undefined || val === null) continue;
+    const existing = await db.setting.findUnique({ where: { key } });
+    if (existing) continue;
+    await db.setting.create({ data: { key, value: JSON.stringify(val) } });
+    learning++;
+  }
+
   console.log(
-    `RESTORE_OK | repos=${repos} genes=${genes} chimeras=${chimeras} missions=${missions} hunts=${hunts} sweeps=${sweeps} history=${history}`,
+    `RESTORE_OK | repos=${repos} genes=${genes} chimeras=${chimeras} missions=${missions} hunts=${hunts} sweeps=${sweeps} history=${history} learning=${learning}`,
   );
   const total = await db.dnaArtifact.count();
   console.log(`  library now: ${total} genes`);

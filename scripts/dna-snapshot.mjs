@@ -5,8 +5,9 @@
  *      (this exact wipe killed the harvest data twice). The snapshot lives in git,
  *      so the library survives any recycle; restore with scripts/dna-restore.mjs.
  * SAFETY: only public intelligence is exported (DNA mined from public repos,
- *         hunts, missions, sweeps, chimera). The Setting table (GitHub PAT)
- *         is NEVER exported.
+ *         hunts, missions, sweeps, chimera). From the Setting table ONLY the two
+ *         learning keys (mineAttempts, queryYieldStats) are exported — never the
+ *         GitHub PAT.
  * Usage: node scripts/dna-snapshot.mjs
  */
 import { PrismaClient } from "@prisma/client";
@@ -21,7 +22,7 @@ function cleanArtifact(a) {
 }
 
 try {
-  const [artifacts, savedRepos, chimeras, missions, hunts, sweeps, history] = await Promise.all([
+  const [artifacts, savedRepos, chimeras, missions, hunts, sweeps, history, learningRows] = await Promise.all([
     db.dnaArtifact.findMany({ orderBy: { id: "asc" } }),
     db.savedRepo.findMany({ orderBy: { id: "asc" } }),
     db.chimera.findMany({ orderBy: { id: "asc" } }),
@@ -29,7 +30,15 @@ try {
     db.liveHunt.findMany({ orderBy: { id: "asc" } }),
     db.sweepRun.findMany({ orderBy: { id: "asc" } }),
     db.searchHistory.findMany({ orderBy: { id: "asc" } }),
+    db.setting.findMany({ where: { key: { in: ["mineAttempts", "queryYieldStats"] } } }),
   ]);
+
+  // Learning state (v1.1) — same keys the in-app writer exports; a recycle must
+  // not reset the empty-mine memory or the query yield ledger.
+  const learningState = {};
+  for (const row of learningRows) {
+    try { learningState[row.key] = JSON.parse(row.value); } catch { /* skip corrupted */ }
+  }
 
   const snapshot = {
     version: 1,
@@ -43,6 +52,7 @@ try {
       sweepRuns: sweeps.length,
       searchHistory: history.length,
     },
+    learningState,
     // date fields → ISO strings so the JSON is fully deterministic
     dnaArtifacts: artifacts.map(cleanArtifact),
     savedRepos: savedRepos.map((r) => ({ ...r, createdAt: iso(r.createdAt), updatedAt: iso(r.updatedAt) })),

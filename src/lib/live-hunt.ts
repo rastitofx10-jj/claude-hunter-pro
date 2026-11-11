@@ -585,7 +585,11 @@ async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     };
   }
 
-  const { reports: mined, emptySkipped } = await mineTopCandidates(top, token, 3);
+  // Adaptive learning: the hunt's executed queries (stage-1 evidence) feed the yield
+  // ledger — error-free runs count even at 0 genes so sterile queries get demoted.
+  const huntQueries = (huntEv?.queries as { q: string; error?: string | null }[] | undefined) ?? [];
+  const cleanHuntQueries = huntQueries.filter((q) => !q.error).map((q) => q.q);
+  const { reports: mined, emptySkipped } = await mineTopCandidates(top, token, 3, undefined, cleanHuntQueries);
   // Measurement honesty: "mined" = a repo that yielded artifacts. A repo that was swept and returned 0 doesn't count as mined —
   // before: "3 repos mined" hid that none of them yielded anything.
   const reposAttempted = mined.length;

@@ -55,9 +55,14 @@ async function fetchLicenses(fullNames, token) {
     if (!res.ok) throw new Error(`GitHub GraphQL ${res.status}`);
     const data = await res.json();
     chunk.forEach((name, j) => {
-      const spdx = data?.data?.[`r${j}`]?.licenseInfo?.spdxId ?? null;
+      const node = data?.data?.[`r${j}`];
+      if (node === null) return; // repo deleted/renamed — leave for next cycle
+      const spdx = node?.licenseInfo?.spdxId ?? null;
       // NOASSERTION = יש רישיון אך לא מזוהה סטנדרטית — נשמר כתווית אמת
       if (spdx) out.set(name, spdx === "NOASSERTION" ? "other" : spdx);
+      // repo exists but has NO license file = all rights reserved. Pin as "none"
+      // so we stop re-querying it every cycle and the provenance stays truthful.
+      else out.set(name, "none");
     });
   }
   return out;
@@ -92,11 +97,13 @@ try {
   const need = [...new Set([...geneRepos, ...watchRepos])];
   let filled = 0;
   let stillNull = 0;
+  let unlicensed = 0;
   if (need.length > 0) {
     const token = await resolveToken();
     if (!token) throw new Error("no GitHub token available (DB or upload file)");
     const lic = await fetchLicenses(need, token);
     for (const [name, spdx] of lic) {
+      if (spdx === "none") unlicensed++;
       const g = await db.dnaArtifact.updateMany({
         where: { sourceRepo: name, license: null },
         data: { license: spdx },
@@ -116,8 +123,9 @@ try {
   const permissive = await db.dnaArtifact.count({
     where: { license: { in: ["MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "0BSD", "Unlicense", "self"] } },
   });
-  console.log(`BACKFILL_OK | filled=${filled} selfMarked=${selfRepos.length} lookupFailed=${stillNull}`);
-  console.log(`  provenance: ${withLic}/${total} genes carry a license · ${permissive}/${total} commercially usable (permissive/self)`);
+  const unlicensedGenes = await db.dnaArtifact.count({ where: { license: "none" } });
+  console.log(`BACKFILL_OK | filled=${filled} selfMarked=${selfRepos.length} unlicensedPinned=${unlicensed} lookupFailed=${stillNull}`);
+  console.log(`  provenance: ${withLic}/${total} genes carry a license · ${permissive}/${total} commercially usable (permissive/self) · ${unlicensedGenes} unlicensed (all rights reserved)`);
 } catch (e) {
   console.error("BACKFILL_FAIL:", e.message);
   process.exit(1);

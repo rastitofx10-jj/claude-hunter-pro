@@ -33,7 +33,8 @@ try {
     byLicense[l] = (byLicense[l] ?? 0) + 1;
   }
   const permissive = genes.filter((g) => PERMISSIVE.includes(g.license)).length;
-  const copyleft = genes.filter((g) => g.license && g.license !== "unknown" && !PERMISSIVE.includes(g.license)).length;
+  const unlicensed = genes.filter((g) => g.license === "none").length;
+  const copyleft = genes.filter((g) => g.license && g.license !== "unknown" && g.license !== "none" && !PERMISSIVE.includes(g.license)).length;
   const unknown = genes.filter((g) => !g.license).length;
   const repos = [...new Set(genes.map((g) => g.sourceRepo))];
   const doneHunts = hunts.filter((h) => h.status === "done");
@@ -55,7 +56,7 @@ try {
   lines.push("");
   lines.push(`- **${genes.length} capability genes** mined from **${repos.length} elite-track repos**`);
   lines.push(`- Composition: ${Object.entries(byKind).map(([k, n]) => `${kindLabels[k] ?? k}: ${n}`).join(" · ")}`);
-  lines.push(`- **License provenance: ${permissive} permissive / ${copyleft} restrictive / ${unknown} unknown** — ${(100 * permissive / genes.length).toFixed(0)}% of the library is commercially usable as-is`);
+  lines.push(`- **License provenance: ${permissive} permissive / ${copyleft} restrictive / ${unlicensed} unlicensed / ${unknown} unknown** — ${(100 * permissive / genes.length).toFixed(0)}% of the library is commercially usable as-is`);
   lines.push(`- ${doneHunts.length} completed autonomous hunts (${doneHunts.map((h) => `gen ${h.generation}`).join(" → ")}), ${totalLlm} LLM calls, ${Math.round(totalElapsed / 1000)}s total machine time`);
   lines.push("");
   lines.push("## 2. What the numbers say (interpretation)");
@@ -65,6 +66,9 @@ try {
   lines.push(`- **Skills dominate (${skillShare.toFixed(0)}%)**: the ecosystem's center of gravity is shifting from "chat wrappers" to packaged, composable capabilities. Teams are standardizing on SKILL.md as the unit of work.`);
   if (copyleft > 0) {
     lines.push(`- **${copyleft} genes carry copyleft/unknown terms**: the ecosystem's best engineering is NOT uniformly free for the taking. Anyone building a commercial product on community Claude skills without license discipline is exposed — provenance tracking is now table stakes.`);
+  }
+  if (unlicensed > 0) {
+    lines.push(`- **${unlicensed} genes are UNLICENSED (confirmed: no LICENSE file)** — all rights reserved by their authors. Legally untouchable without explicit permission; a stricter class than "unknown" and a growing share of freshly published skills.`);
   }
   const eliteStars = watch.filter((w) => w.score >= 80);
   if (eliteStars.length) {
@@ -94,7 +98,7 @@ try {
   writeFileSync(file, lines.join("\n"), "utf8");
   console.log(`RADAR_OK | ${file}`);
   console.log(`  genes=${genes.length} repos=${repos.length} hunts=${doneHunts.length} chimeras=${chimeras.length} missions=${missions.length}`);
-  console.log(`  licenses: permissive=${permissive} restrictive=${copyleft} unknown=${unknown}`);
+  console.log(`  licenses: permissive=${permissive} restrictive=${copyleft} unlicensed=${unlicensed} unknown=${unknown}`);
   console.log(`  sweep findings analyzed: ${sweepFindings.length}`);
 } catch (e) {
   console.error("RADAR_FAIL:", e.message);

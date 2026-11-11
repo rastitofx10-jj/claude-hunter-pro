@@ -10,7 +10,8 @@
 // SAFETY: identical v1 shape to the script's output, because
 // scripts/dna-restore.mjs reads exactly these keys after a recycle — any drift
 // here silently breaks disaster recovery. Only public intelligence tables are
-// exported; the Setting table (GitHub PAT) is NEVER read by this module.
+// exported; from the Setting table ONLY the two learning keys (mineAttempts,
+// queryYieldStats) are read — the GitHub PAT never enters a snapshot.
 // Atomic write: tmp file + fs.rename — a crash mid-write can never leave a
 // truncated snapshot that dna-restore.mjs would then seed into a fresh DB.
 // Server-side only.
@@ -28,10 +29,14 @@ const iso = (d: Date) => d.toISOString();
  * Produces the same document as `node scripts/dna-snapshot.mjs` — v1, exportedAt,
  * counts, and the seven table arrays with dates as ISO strings.
  */
+/** The non-secret Setting keys that must survive a recycle — the hunter's
+ * learned state. Anything else in Setting (the PAT) stays out on purpose. */
+const LEARNING_KEYS = ["mineAttempts", "queryYieldStats"] as const;
+
 export async function writeDnaSnapshot(): Promise<void> {
   // All seven public tables in one parallel round — same reads the script does,
-  // minus the Setting table on purpose (the PAT never enters a snapshot).
-  const [artifacts, savedRepos, chimeras, missions, hunts, sweeps, history] = await Promise.all([
+  // minus the rest of the Setting table on purpose (the PAT never enters a snapshot).
+  const [artifacts, savedRepos, chimeras, missions, hunts, sweeps, history, learningRows] = await Promise.all([
     db.dnaArtifact.findMany({ orderBy: { id: "asc" } }),
     db.savedRepo.findMany({ orderBy: { id: "asc" } }),
     db.chimera.findMany({ orderBy: { id: "asc" } }),
@@ -39,7 +44,19 @@ export async function writeDnaSnapshot(): Promise<void> {
     db.liveHunt.findMany({ orderBy: { id: "asc" } }),
     db.sweepRun.findMany({ orderBy: { id: "asc" } }),
     db.searchHistory.findMany({ orderBy: { id: "asc" } }),
+    db.setting.findMany({ where: { key: { in: [...LEARNING_KEYS] } } }),
   ]);
+  // Learning state (v1.1): empty-mine memory + query yield ledger. Without this,
+  // every recycle reset the adaptive learning to zero — blocked sterile repos got
+  // re-mined (wasted quota) and the yield ranking restarted from amnesia.
+  const learningState: Record<string, unknown> = {};
+  for (const row of learningRows) {
+    try {
+      learningState[row.key] = JSON.parse(row.value);
+    } catch {
+      // a corrupted row is skipped — the snapshot must never fail on it
+    }
+  }
 
   // The v1 shape, key for key with the script (missions: the script also spreads a
   // `steps` field that doesn't exist on the model — JSON.stringify drops undefined,
@@ -56,6 +73,7 @@ export async function writeDnaSnapshot(): Promise<void> {
       sweepRuns: sweeps.length,
       searchHistory: history.length,
     },
+    learningState,
     dnaArtifacts: artifacts.map((a) => ({ ...a, createdAt: iso(a.createdAt) })),
     savedRepos: savedRepos.map((r) => ({ ...r, createdAt: iso(r.createdAt), updatedAt: iso(r.updatedAt) })),
     chimeras: chimeras.map((c) => ({ ...c, createdAt: iso(c.createdAt) })),

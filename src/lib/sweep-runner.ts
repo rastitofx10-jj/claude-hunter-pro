@@ -93,6 +93,10 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     let reposMined = 0; // per the report's definition: repos swept without error
     let reposWithFindings = 0;
     let mineErrors = 0;
+    // Adaptive learning: every query that ran WITHOUT error counts as a yield run —
+    // zero-yield runs demote sterile queries (errored ones are excluded so a
+    // rate-limited good query isn't punished for a transient failure).
+    const cleanQueries = reports.filter((r) => !r.error).map((r) => r.q);
     const minedReports = await mineTopCandidates(candidates, token, 8, async (done, total, rep) => {
       if (!rep.error) {
         reposMined++;
@@ -103,7 +107,7 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       }
       const progress = 52 + Math.round((done / Math.max(1, total)) * 18);
       await updateRun(runId, { progress });
-    });
+    }, cleanQueries);
     // Mining failures are no longer thrown — before, "3 repos mined" hid 5 failures
     // and the DB row didn't record them at all (a divergence from the live hunt, which does report them).
     const mineErrorList = minedReports.reports
