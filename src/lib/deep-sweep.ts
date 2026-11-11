@@ -282,6 +282,28 @@ export function consolidateCandidates(
   for (const m of QUALIFYING_MODELS) {
     for (const s of m.searchStrings) queryToModel.set(s.toLowerCase(), m.id);
   }
+  // Frontier-model queries carry their own model proof: GitHub code search matches
+  // the model phrase INSIDE the file's content (`fable 5.2 filename:CLAUDE.md` only
+  // returns files whose content contains the phrase) — so a hit is hard evidence for
+  // the models named in the query itself. Before the fable-wave fix these hits gave
+  // a generic frontierHit (+3) but ZERO model evidence — the wave was found and then
+  // discounted. AND-queries ("opus-5-5" "fable-5-2") grant evidence for every model
+  // they name; the file had to contain all of them.
+  const frontierModelEvidence = new Map<string, string[]>();
+  for (const f of FRONTIER_MODEL_POOL) {
+    if (f.kind !== "code") continue;
+    const hq = hydrateFresh(f.q).toLowerCase();
+    // Normalize to REGISTERED ids: an unregistered variant (claude-fable-5 from
+    // `"claude-fable-5" filename:SKILL.md`) gets the family-level entry (claude-fable)
+    // so evidence weight stays at the registered 45 — not the generic 12-point fallback.
+    const ids = detectClaudeModels(f.q)
+      .qualifying.map((m) =>
+        QUALIFYING_MODELS.some((r) => r.id === m.id)
+          ? m.id
+          : QUALIFYING_MODELS.find((r) => r.id === `claude-${m.family}`)?.id ?? m.id
+      );
+    if (ids.length > 0) frontierModelEvidence.set(hq, ids);
+  }
   // Frontier queries (hydrated to their runtime form) — a hit via one of them is
   // ecosystem evidence of its own: SDK imports, MCP configs, hooks contracts,
   // curated topics/awesome lists.
@@ -300,8 +322,12 @@ export function consolidateCandidates(
     // Content proof only for a registered model string: the query was found in the file's content, but
     // capability/market queries (e.g. SKILL.md claude) are not proof of a model — only a soft signal.
     const asModel = queryToModel.get(hit.viaQuery.toLowerCase());
-    if (asModel) {
-      if (!c.contentEvidence.includes(asModel)) c.contentEvidence.push(asModel);
+    // Frontier-model fallback: the query itself names the model(s) — same content-match
+    // guarantee as a registry query, so the same hard-evidence treatment.
+    const frontierModels = asModel ? [] : frontierModelEvidence.get(hit.viaQuery.toLowerCase()) ?? [];
+    if (asModel || frontierModels.length > 0) {
+      const ids = asModel ? [asModel] : frontierModels;
+      for (const id of ids) if (!c.contentEvidence.includes(id)) c.contentEvidence.push(id);
       // Saving the real file path — ground truth for re-verification in the audit module
       if (c.evidencePaths.length < 3 && !c.evidencePaths.includes(hit.path)) c.evidencePaths.push(hit.path);
     }

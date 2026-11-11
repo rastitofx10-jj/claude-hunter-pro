@@ -20,11 +20,16 @@ import { db } from "./db";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+// type-only — erased at compile time, no runtime cycle with genesis
+import type { WorkOrder } from "./genesis";
 
 const DRAFT_DIR = path.join(process.cwd(), "reports", "state", "chimera-drafts");
 
-/** A principle / work-order entry — the generator emits strings or {title, spec} objects */
-export type PrincipleOrOrder = string | Record<string, unknown>;
+/** A principle / work-order entry — the generator emits strings or {title, spec} objects.
+ *  WorkOrder (genesis) is named explicitly: an interface without an index signature
+ *  is not assignable to Record<string, unknown> — a known TS strictness rule that
+ *  previously broke the draft path's typecheck (ChimeraResult → ChimeraCandidate). */
+export type PrincipleOrOrder = string | WorkOrder | Record<string, unknown>;
 
 /** The chimera shape produced by generateChimera (src/lib/genesis.ts) */
 export type ChimeraCandidate = {

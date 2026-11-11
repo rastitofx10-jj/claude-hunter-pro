@@ -5,6 +5,7 @@ import {
   ghFetchRaw,
   ghSearchWithBackoff,
   detectClaudeModels,
+  detectModelFieldValue,
   QUALIFYING_MODELS,
   tierOf,
   satScore,
@@ -313,17 +314,31 @@ export async function GET(req: NextRequest) {
     }
 
     // Text-based detection: settings / CLAUDE.md / README — full separation between qualifying (5.5+) and blocked (4.x and below)
+    // The settings model field is a CONTROLLED context — its value IS a model identifier,
+    // so a bare family pin ("fable" / "fable-5-2") is decisive here even without prose
+    // context. Before the fable-wave fix this path only saw the value through the free-text
+    // detector, which demands surrounding context — and the value alone has none.
+    if (settingsModelText) {
+      const pinned = detectModelFieldValue(settingsModelText);
+      if (pinned) addModel(pinned.id, pinned.label, pinned.weight, "settings", undefined, true, pinned.version);
+    }
+    const sourceOf = (id: string): string => {
+      const smt = settingsModelText.toLowerCase();
+      // settings values legitimately lack the claude- prefix ("fable-5-2") — compare both forms
+      if (smt.includes(id) || smt.includes(id.replace(/^claude-/, ""))) return "settings";
+      const cm = (contents.claudeMd ?? "").toLowerCase();
+      if (cm.includes(id) || cm.includes(id.replace(/^claude-/, ""))) return "claude-md";
+      return "readme";
+    };
     const textDetection = detectClaudeModels(
       `${settingsModelText} ${contents.claudeMd ?? ""} ${readme.slice(0, 4000)}`
     );
     for (const m of textDetection.qualifying) {
-      const source = settingsModelText.toLowerCase().includes(m.id) ? "settings" : contents.claudeMd?.toLowerCase().includes(m.id) ? "claude-md" : "readme";
-      addModel(m.id, m.label, m.weight, source, undefined, true, m.version);
+      addModel(m.id, m.label, m.weight, sourceOf(m.id), undefined, true, m.version);
     }
     // Blocked (4.x and below): shown for transparency only — weight 0, not counted in the score
     for (const b of textDetection.blocked) {
-      const source = settingsModelText.toLowerCase().includes(b.id) ? "settings" : contents.claudeMd?.toLowerCase().includes(b.id) ? "claude-md" : "readme";
-      addModel(b.id, b.label, 0, source, undefined, false, b.version);
+      addModel(b.id, b.label, 0, sourceOf(b.id), undefined, false, b.version);
     }
 
     const modelList = Array.from(models.values()).sort((a, b) => b.weight - a.weight);

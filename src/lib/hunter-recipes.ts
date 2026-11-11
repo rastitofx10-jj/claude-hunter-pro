@@ -62,9 +62,9 @@ export const RECIPES: Recipe[] = [
   {
     id: "fable",
     emoji: "✨",
-    title: "Fable models — maximum premium",
-    desc: "Code search for the claude-fable string — the leading model above the 5.5 threshold",
-    body: { mode: "code", model: "claude-fable" },
+    title: "Fable 5.2 — the day-one wave",
+    desc: "Code search for claude-fable-5-2 pins — the newest flagship module (own 5.x track, full premium weight)",
+    body: { mode: "code", model: "claude-fable-5-2" },
   },
   {
     id: "premium-settings",

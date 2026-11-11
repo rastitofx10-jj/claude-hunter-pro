@@ -227,7 +227,12 @@ export function detectClaudeModels(text: string): ModelDetection {
   // claude-3-5-sonnet / claude-3-7-sonnet-20250219 / claude-5-5
   const re2 = /claude[-_ ](\d{1,2})(?!\d)[-_. ](\d{1,2})(?!\d)(?:[-_ ]?(opus|sonnet|haiku|fable))?/gi;
   // opus 5.5 / opus-5.5 / sonnet-4-5 (also without the claude prefix) — including the decimal comma "opus 5,5"
-  const re3 = /\b(opus|sonnet|haiku)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
+  // fable joins the family list — but standalone (no claude/anthropic prefix) it MUST carry
+  // an explicit X.Y version: "fable 5.2" / "fable-5-2" are model pins, bare "fable 5" is
+  // story-list prose ("fable 5: the tortoise"). Field evidence (fable-wave fix, 2026-11-11):
+  // the frontier queries retrieve exactly this phrasing — "written for fable 5.2",
+  // "tuned for fable-5-2" — and the detector returned NOTHING for all of them.
+  const re3 = /\b(opus|sonnet|haiku|fable)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
   // claude-5 / claude 6 — a model mention without a family and without a minor version.
   // Iron rule: a mention without a minor = maj.0 → "claude 5" is blocked (5.0 < 5.5), "claude 6" qualifies (6.0 ≥ 5.5).
   const re4 = /claude[-_ ](\d{1,2})(?!\d)/gi;
@@ -238,15 +243,27 @@ export function detectClaudeModels(text: string): ModelDetection {
     const fam = (m[3] as ModelFamily | undefined) ?? "generic";
     handle(fam, Number(m[1]), Number(m[2]));
   }
-  while ((m = re3.exec(lower))) handle(m[1] as ModelFamily, Number(m[2]), m[3] != null ? Number(m[3]) : null);
+  while ((m = re3.exec(lower))) {
+    const fam = m[1] as ModelFamily;
+    // The standalone-fable guard: without a claude/anthropic prefix an explicit minor
+    // version is required (X.Y). "claude fable 5" still qualifies via re1 — there the
+    // prefix itself is the model context.
+    if (fam === "fable" && m[3] == null) continue;
+    handle(fam, Number(m[2]), m[3] != null ? Number(m[3]) : null);
+  }
   while ((m = re4.exec(lower))) handle("generic", Number(m[1]), null);
 
   // fable stands alone — qualifies only with an explicit model context (false-positive prevention).
   // Strict formulas: "claude fable" / "claude-fable" / "anthropic's fable" /
   // "fable model" — but not just any fable story that mentions Claude (a critical fixed false positive).
+  // "model ... fable" (preceding context, ≤4 non-word chars between) was added for settings pins:
+  // Claude Code's settings.json allows family ids — '"model": "fable"' — and the old check
+  // only looked at fable BEFORE the word model, so a family-only settings pin was invisible.
+  // The gap is tight: "models of fable stories" does NOT match (the "s" is a word char).
   if (
     /\b(?:claude|anthropic)[^\w]{0,3}fable\b/.test(lower) ||
-    /\bfable[^\w]{0,3}(?:model|models|claude|anthropic)\b/.test(lower)
+    /\bfable[^\w]{0,3}(?:model|models|claude|anthropic)\b/.test(lower) ||
+    /\bmodel[^\w]{0,4}fable\b/.test(lower)
   ) {
     addQual("claude-fable", "fable", 5.5);
   }
@@ -271,6 +288,34 @@ export function detectClaudeModels(text: string): ModelDetection {
 }
 
 /**
+ * Detects a model in a CONTROLLED model-field value (settings.json "model",
+ * env ANTHROPIC_MODEL). Unlike detectClaudeModels — which demands surrounding
+ * context to avoid story-prose false positives — here the context is known:
+ * whatever the field holds IS a model identifier. So a bare family name is
+ * decisive: "fable" → family-level pin (own 5.x track, full weight), while
+ * bare "opus"/"sonnet"/"haiku" carry no version and stay below the threshold.
+ * Field evidence (fable-wave fix): '"model": "fable"' in settings was invisible
+ * to every detector path — the value never contains the word "model" itself.
+ */
+export function detectModelFieldValue(s: string): ClaudeModelDef | null {
+  const v = s.trim().toLowerCase();
+  if (!v) return null;
+  // 1) A full registry id or search string: claude-fable-5-2 / opus 5.5
+  const reg = QUALIFYING_MODELS.find(
+    (m) => m.id === v || m.searchStrings.some((ss) => ss.toLowerCase() === v)
+  );
+  if (reg) return reg;
+  // 2) A versioned family id without the claude- prefix: fable-5-2 / fable 5.2
+  const det = detectClaudeModels(v);
+  if (det.qualifying.length > 0) return det.qualifying[0];
+  // 3) A bare family name — only fable qualifies (own premium track, no 4.x heritage)
+  if (v === "fable" || v === "claude-fable") {
+    return QUALIFYING_MODELS.find((m) => m.id === "claude-fable") ?? null;
+  }
+  return null;
+}
+
+/**
  * A strict check for a "model" string coming from the filters.
  * Returns true if the string describes a model below the threshold (4.x and below) — blocked on the server.
  * If the string is also identified with a qualifying model (5.5+) — it is allowed.
@@ -281,10 +326,16 @@ export function isBlockedModelString(s: string): boolean {
   return det.blocked.length > 0 && det.qualifying.length === 0;
 }
 
-/** Filter options for the UI — derived automatically from the registry, so 4.x cannot leak in */
+/** Filter options for the UI — derived automatically from the registry, so 4.x cannot leak in.
+ *  Fable gets its own track label: 5.1/5.2 are below 5.5 yet qualify — displaying
+ *  "(5.5+)" next to them contradicted the classification they receive. */
 export function qualifyingModelOptions(): { value: string; label: string }[] {
-  return QUALIFYING_MODELS.map((m) => ({
-    value: m.id,
-    label: m.family === "fable" ? `✨ ${m.label} (5.5+)` : `${m.label} (5.5+)`,
-  }));
+  return QUALIFYING_MODELS.map((m) => {
+    // The family-level entry (claude-fable) represents the whole own-5.x track —
+    // same for every fable version below 5.5. Only a fable explicitly ≥5.5 says 5.5+.
+    const familyLevel = m.id === `claude-${m.family}`;
+    const track = m.family === "fable" && (familyLevel || m.version < 5.5) ? "own 5.x track" : "5.5+";
+    const spark = m.family === "fable" ? "✨ " : "";
+    return { value: m.id, label: `${spark}${m.label} (${track})` };
+  });
 }

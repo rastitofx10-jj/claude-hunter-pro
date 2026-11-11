@@ -178,6 +178,7 @@ export {
   QUALIFYING_MODELS,
   classifyVersion,
   detectClaudeModels,
+  detectModelFieldValue,
   isBlockedModelString,
   qualifyingModelOptions,
 } from "./claude-models";
