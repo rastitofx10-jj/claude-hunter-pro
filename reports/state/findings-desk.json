@@ -1,7 +1,7 @@
 {
  "version": 1,
  "deskOpened": "2026-11-11T11:16:19.268Z",
- "ticksDone": 3,
+ "ticksDone": 4,
  "reviewed": {
   "simonw/llm-anthropic": {
    "repo": "simonw/llm-anthropic",
@@ -964,15 +964,106 @@
    "archived": false,
    "liveVerdict": "gold",
    "reason": "evidence holds (stars 0→3229, pushed 0d ago)"
+  },
+  "teamchong/pxpipe": {
+   "repo": "teamchong/pxpipe",
+   "sweepFound": 32,
+   "recordedTier": "gold",
+   "recordedStars": 0,
+   "recordedVerdict": "noise",
+   "checkedAt": "2026-11-11T17:17:39.743Z",
+   "liveStars": 7599,
+   "livePushedAt": "2026-11-11T10:55:25Z",
+   "archived": false,
+   "liveVerdict": "gold",
+   "reason": "evidence holds (stars 0→7599, pushed 0d ago)"
+  },
+  "anomalyco/models.dev": {
+   "repo": "anomalyco/models.dev",
+   "sweepFound": 32,
+   "recordedTier": "gold",
+   "recordedStars": 0,
+   "recordedVerdict": "noise",
+   "checkedAt": "2026-11-11T17:17:39.751Z",
+   "liveStars": 7604,
+   "livePushedAt": "2026-11-11T12:33:06Z",
+   "archived": false,
+   "liveVerdict": "gold",
+   "reason": "evidence holds (stars 0→7604, pushed 0d ago)"
+  },
+  "thevibeworks/claude-code-docs": {
+   "repo": "thevibeworks/claude-code-docs",
+   "sweepFound": 32,
+   "recordedTier": "elite",
+   "recordedStars": 172,
+   "recordedVerdict": "watch",
+   "checkedAt": "2026-11-11T17:17:39.786Z",
+   "liveStars": 172,
+   "livePushedAt": "2026-11-11T07:22:06Z",
+   "archived": false,
+   "liveVerdict": "elite",
+   "reason": "evidence holds (stars 172→172, pushed 0d ago)"
+  },
+  "promptfoo/promptfoo": {
+   "repo": "promptfoo/promptfoo",
+   "sweepFound": 32,
+   "recordedTier": "elite",
+   "recordedStars": 27065,
+   "recordedVerdict": "watch",
+   "checkedAt": "2026-11-11T17:17:39.786Z",
+   "liveStars": 27065,
+   "livePushedAt": "2026-11-11T00:29:23Z",
+   "archived": false,
+   "liveVerdict": "elite",
+   "reason": "evidence holds (stars 27065→27065, pushed 1d ago) — survived the bear case"
+  },
+  "simonw/claude-system-prompts": {
+   "repo": "simonw/claude-system-prompts",
+   "sweepFound": 32,
+   "recordedTier": "elite",
+   "recordedStars": 51,
+   "recordedVerdict": "watch",
+   "checkedAt": "2026-11-11T17:17:39.797Z",
+   "liveStars": 51,
+   "livePushedAt": "2026-11-10T06:27:25Z",
+   "archived": false,
+   "liveVerdict": "elite",
+   "reason": "evidence holds (stars 51→51, pushed 1d ago)"
+  },
+  "atomantic/PortOS": {
+   "repo": "atomantic/PortOS",
+   "sweepFound": 32,
+   "recordedTier": "gold",
+   "recordedStars": 0,
+   "recordedVerdict": "noise",
+   "checkedAt": "2026-11-11T17:17:40.204Z",
+   "liveStars": 73,
+   "livePushedAt": "2026-11-11T17:06:50Z",
+   "archived": false,
+   "liveVerdict": "gold",
+   "reason": "evidence holds (stars 0→73, pushed 0d ago)"
+  },
+  "pydantic/pydantic-ai": {
+   "repo": "pydantic/pydantic-ai",
+   "sweepFound": 32,
+   "recordedTier": "gold",
+   "recordedStars": 0,
+   "recordedVerdict": "noise",
+   "checkedAt": "2026-11-11T17:17:40.251Z",
+   "liveStars": 21141,
+   "livePushedAt": "2026-11-11T17:17:31Z",
+   "archived": false,
+   "liveVerdict": "gold",
+   "reason": "evidence holds (stars 0→21141, pushed 0d ago)"
   }
  },
  "needsHuman": [],
  "baseRates": {
-  "reviewsTotal": 74,
-  "confirmedRate": 0.9864864864864865,
+  "reviewsTotal": 81,
+  "confirmedRate": 0.9876543209876543,
   "missingRate": 0,
-  "downgradedRate": 0.013513513513513514,
+  "downgradedRate": 0.012345679012345678,
   "needsHumanOpen": 0,
-  "eliteSurviving": 30
+  "eliteSurviving": 33
  }
 }
