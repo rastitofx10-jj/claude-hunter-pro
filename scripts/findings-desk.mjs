@@ -78,14 +78,13 @@ console.log(
 );
 if (queue.length === 0) {
   console.log("QUEUE_EMPTY | desk idle — everything reviewed within cadence");
-  await finish();
+  await finish(0, null);
 }
 
 // ---- reviewer slot pool (parallel, refill on completion) ----
 let idx = 0;
 let reviews = 0;
 const verdicts = { confirmed: 0, downgraded: 0, escalated: 0, missing: 0, stale: 0, needsHuman: 0 };
-
 async function reviewer() {
   while (idx < queue.length) {
     const [name, rec] = queue[idx++];
@@ -189,15 +188,17 @@ state.baseRates = {
   eliteSurviving: all.filter((r) => r.recordedTier === "elite" && r.liveVerdict === "elite").length,
 };
 
-await finish();
+await finish(reviews, verdicts);
 
 // ---- silent wrap-up: counts only; human items are in the state file ----
-async function finish() {
+async function finish(reviewsThisTick, tickVerdicts) {
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 1), "utf8");
   const br = state.baseRates ?? {};
+  const vSummary = tickVerdicts
+    ? Object.entries(tickVerdicts).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(" ")
+    : "";
   console.log(
-    `DESK_TICK_DONE | reviewed=${reviews || 0} this tick | ticks=${state.ticksDone} | ` +
-      Object.entries(verdicts).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(" ")
+    `DESK_TICK_DONE | reviewed=${reviewsThisTick ?? 0} this tick | ticks=${state.ticksDone}${vSummary ? " | " + vSummary : ""}`
   );
   if (state.needsHuman.length) {
     console.log(`  human queue (filed, silent): ${state.needsHuman.length} item(s) — see ${STATE_FILE} → needsHuman`);

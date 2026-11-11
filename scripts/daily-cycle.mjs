@@ -244,6 +244,12 @@ function sh(cmd) {
   const bf = sh("node scripts/license-backfill.mjs");
   note(bf.ok, "license backfill", bf.out.split("\n")[0] ?? "");
 
+  // 5.5) findings desk — WO2 of chimera #3: the standing review window over the
+  // sweep-findings queue. Runs EVERY cycle (a desk, not an event); drains the
+  // queue within one tick; idempotent (reviewed repos re-enter only after 30d).
+  const desk = sh("node scripts/findings-desk.mjs");
+  note(desk.ok, "findings desk", (desk.out.split("\n").find((l) => l.startsWith("DESK_TICK_DONE")) ?? desk.out.split("\n")[0] ?? ""));
+
   const genesAfter = await countGenes().catch(() => genesBefore);
 
   // 6) snapshot to git (survives env recycles) — never regress: if the DB holds
