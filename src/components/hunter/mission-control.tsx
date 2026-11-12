@@ -210,6 +210,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   done: { label: "Completed", cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
   partial: { label: "Partial", cls: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
   failed: { label: "Failed", cls: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300" },
+  voided: { label: "Voided — fiction", cls: "bg-zinc-200 text-zinc-600 line-through dark:bg-zinc-800 dark:text-zinc-400" },
 };
 
 const OUTCOME_OPTIONS: { value: string; label: string; hint: string }[] = [

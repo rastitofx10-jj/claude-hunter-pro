@@ -77,6 +77,7 @@ const STATUS_LABEL: Record<string, string> = {
   compiled: "Compiled",
   partial: "Partial",
   failed: "Failed",
+  voided: "Voided — fiction",
 };
 
 const fadeUp: Variants = {
