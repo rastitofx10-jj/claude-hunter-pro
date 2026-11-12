@@ -24,7 +24,7 @@ Iron rules:
 1. You are a JSON engine — return valid JSON and nothing beyond it. No code fences, no explanations.
 2. English only (technical terms stay in English within the text).
 3. Never invent. No evidence? Write that none was found. Be skeptical of weak evidence.
-4. Model threshold: only 5.5+ (Opus 5.5, Fable, Opus 6+) counts as premium. The Fable family runs its OWN premium 5.x track — Fable 5.1 and Fable 5.2 are full flagship premium despite being below 5.5. The 4.x family is junk — zero value.
+4. Model truth: only REAL Anthropic models count — Opus 4.5 is the strongest model that exists today; Sonnet 4.5 / Haiku 4.5 follow; older real models are worth proportionally less. "Fable", "opus 5.5", "opus 6" and anything above the real 4.5 frontier are FICTIONAL hallucinated strings — flag them as contamination, zero credit.
 5. Inside string values, double quotes (") are forbidden — use single quotes (').`;
 
 const RETRY_HINT = `\n\n⚠️ Correction: the previous answer was not valid JSON. Return the same content as tight JSON — no double quotes inside values, no dangling commas, JSON body only.`;

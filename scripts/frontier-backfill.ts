@@ -4,7 +4,7 @@
 //   1. every gene's content in the library (the richest corpus — 1,400+ files)
 //   2. every watchlist repo's description + models field
 // Day-one value: if anyone in the mined corpus already mentions a frontier
-// version above the registry (fable 5.3, a brand-new family), the radar knows
+// version above the registry (opus 4.6, a brand-new family), the radar knows
 // NOW instead of waiting for the next sweep to touch that text again.
 // Usage: bunx tsx scripts/frontier-backfill.ts [--dry]
 import { PrismaClient } from "@prisma/client";

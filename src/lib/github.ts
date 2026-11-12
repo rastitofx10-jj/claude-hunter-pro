@@ -169,8 +169,9 @@ export function parseRepoInput(raw: string): { owner: string; repo: string } | n
   return { owner, repo };
 }
 
-// ---------- Claude model registry (strict threshold: 5.5+ only) ----------
-// Source of truth: src/lib/claude-models.ts — the 4.x family is completely blocked.
+// ---------- Claude model registry (REAL models only) ----------
+// Source of truth: src/lib/claude-models.ts — the real 4.x family IS the premium
+// tier (Opus 4.5 = the strongest that exists); fictional strings are contamination.
 export {
   MIN_QUALIFYING_VERSION,
   THRESHOLD_LABEL,
@@ -371,10 +372,17 @@ export function computeListScore(repo: RepoLike): {
   const detection = detectClaudeModels(hay);
   if (detection.qualifying.length > 0) {
     hints += 6;
-    reasons.push(`🧠 5.5+ model: ${detection.qualifying.map((m) => m.label).join(", ")}`);
+    reasons.push(`🧠 Real premium models: ${detection.qualifying.map((m) => m.label).join(", ")}`);
+  }
+  if (detection.fiction.length > 0 && detection.qualifying.length > 0) {
+    reasons.push(`⚠️ Mixed: real models + fictional pins (${detection.fiction.map((f) => f.label).join(", ")}) — partial contamination`);
+  } else if (detection.fictionOnly) {
+    // ⚠️ Only fictional model strings — hallucination contamination, negative trust
+    hints -= 5;
+    reasons.push(`⚠️ Fictional model pins only (${detection.fiction.map((f) => f.label).join(", ")}) — hallucination contamination`);
   } else if (detection.blockedOnly) {
-    // ⛔ Only 4.x-and-below models — zero model points + a block tag
-    reasons.push(`⛔ Only ${detection.blocked.map((b) => b.label).join(", ")} models (below the 5.5 threshold — blocked)`);
+    // ⛔ Only ancient models (claude-2 era) — zero model points + a block tag
+    reasons.push(`⛔ Only ${detection.blocked.map((b) => b.label).join(", ")} models (ancient era — worthless as a 2026 target)`);
   }
   score += Math.min(hints, 18);
 

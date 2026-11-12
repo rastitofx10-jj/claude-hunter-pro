@@ -12,7 +12,7 @@ import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, FRONTIER_MODEL_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
 import { recordQueryYields } from "./adaptive-learning";
-import { loadFrontierLedger, emergingModelQueries } from "./emerging-models";
+import { loadFrontierLedger, emergingModelQueries, promoteWithAuthority } from "./emerging-models";
 import type { QualityRejection } from "./quality-gate";
 
 // ---------- Query arsenal ----------
@@ -49,10 +49,12 @@ export function buildQueryArsenal(seed = 0): SweepQuery[] {
 
   // 3. Repo searches — the broad market of active Claude projects
   // (120 days — previously misnamed monthAgo; the variable name misled everyone)
+  // TRUTH-FIX: used to search "claude opus 5.5" / "claude fable" — fictional models,
+  // zero real results beyond spam. Now searches the real frontier strings.
   const freshSince = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
   queries.push(
-    { q: `claude opus 5.5 stars:>5 pushed:>${freshSince}`, kind: "repo", origin: "market" },
-    { q: `claude fable stars:>3 pushed:>${freshSince}`, kind: "repo", origin: "market" },
+    { q: `claude opus 4.5 stars:>5 pushed:>${freshSince}`, kind: "repo", origin: "market" },
+    { q: `claude sonnet 4.5 stars:>3 pushed:>${freshSince}`, kind: "repo", origin: "market" },
     { q: `claude code agent stars:>100 pushed:>${freshSince}`, kind: "repo", origin: "market" },
     { q: `topic:claude-code stars:>30`, kind: "repo", origin: "topic" },
     { q: `topic:claude-agents stars:>10`, kind: "repo", origin: "topic" },
@@ -70,8 +72,9 @@ export function buildQueryArsenal(seed = 0): SweepQuery[] {
   for (const f of rotateSlice(FRONTIER_REPO_POOL, seed * 2, 3)) {
     queries.push({ q: hydrateFresh(f.q), kind: "repo", origin: "frontier" });
   }
-  // Model frontier — day-one detection of new-model content waves (fable 5.2 & co).
-  // Rotates like the others: a 3-query slice per sweep, full pool covered across runs.
+  // Model frontier — the REAL frontier strings (opus 4.5 / sonnet 4.5 pins) plus
+  // authority-confirmed future waves. Rotates like the others: a 3-query slice per sweep,
+  // full pool covered across runs.
   for (const f of rotateSlice(FRONTIER_MODEL_POOL, seed * 5, 3)) {
     queries.push({ q: hydrateFresh(f.q), kind: f.kind, origin: "frontier-model" });
   }
@@ -81,15 +84,18 @@ export function buildQueryArsenal(seed = 0): SweepQuery[] {
 
 /**
  * The adaptive arsenal — the static build PLUS the live frontier wave from the
- * emerging-model ledger. A confirmed emerging version (≥2 distinct repos vouching)
- * joins WITHOUT rotation: a young wave cannot saturate, and waiting for the
- * rotation to come around is exactly the manual-step latency this kills.
+ * emerging-model ledger. TRUTH-FIX: only AUTHORITY-CONFIRMED entries (org:anthropics
+ * hit) join the arsenal — vouched-but-unverified entries steer nothing. This is also
+ * the authority promotion point: before reading the ledger, vouched entries get their
+ * org:anthropics check, so a real release confirmed this minute hunts this sweep.
  * Origin format: frontier-emerging:<ledgerEntryId> — startsWith("frontier"), so
  * every frontier-category consumer picks it up uniformly.
  */
 export async function buildAdaptiveArsenal(seed = 0): Promise<SweepQuery[]> {
   const base = buildQueryArsenal(seed);
   try {
+    const tokenRow = await db.setting.findUnique({ where: { key: "github_pat" } });
+    await promoteWithAuthority(tokenRow?.value ?? null);
     const ledger = await loadFrontierLedger();
     for (const w of emergingModelQueries(ledger)) {
       base.push({ q: hydrateFresh(w.q), kind: w.kind, origin: `frontier-emerging:${w.entryId}` });
@@ -309,41 +315,29 @@ export function consolidateCandidates(
     for (const s of m.searchStrings) queryToModel.set(s.toLowerCase(), m.id);
   }
   // Frontier-model queries carry their own model proof: GitHub code search matches
-  // the model phrase INSIDE the file's content (`fable 5.2 filename:CLAUDE.md` only
+  // the model phrase INSIDE the file's content (`opus 4.5 filename:CLAUDE.md` only
   // returns files whose content contains the phrase) — so a hit is hard evidence for
-  // the models named in the query itself. Before the fable-wave fix these hits gave
-  // a generic frontierHit (+3) but ZERO model evidence — the wave was found and then
-  // discounted. AND-queries ("opus-5-5" "fable-5-2") grant evidence for every model
-  // they name; the file had to contain all of them.
+  // the models named in the query itself. AND-queries ("claude-sonnet-4-5" "claude-opus-4-5")
+  // grant evidence for every model they name; the file had to contain all of them.
   const frontierModelEvidence = new Map<string, string[]>();
   for (const f of FRONTIER_MODEL_POOL) {
     if (f.kind !== "code") continue;
     const hq = hydrateFresh(f.q).toLowerCase();
-    // Normalize to REGISTERED ids: an unregistered variant (claude-fable-5 from
-    // `"claude-fable-5" filename:SKILL.md`) gets the family-level entry (claude-fable)
-    // so evidence weight stays at the registered 45 — not the generic 12-point fallback.
-    const ids = detectClaudeModels(f.q)
-      .qualifying.map((m) =>
-        QUALIFYING_MODELS.some((r) => r.id === m.id)
-          ? m.id
-          : QUALIFYING_MODELS.find((r) => r.id === `claude-${m.family}`)?.id ?? m.id
-      );
+    // Real registry ids only: the pool hunts the real frontier, and detectClaudeModels
+    // classifies exactly the registered ids as qualifying.
+    const ids = detectClaudeModels(f.q).qualifying.map((m) => m.id);
     if (ids.length > 0) frontierModelEvidence.set(hq, ids);
   }
-  // Emerging-model wave (frontier radar): the query itself names a version ABOVE the
-  // registry — detectClaudeModels synthesizes a def for it; unregistered ids normalize
-  // to the family entry (fable 5.3 → claude-fable, full family weight) exactly like
-  // the static pool. An unknown family (claude-myth-7-1) keeps its own id — the
-  // 12-point fallback weight is honest for an unverified family.
+  // Emerging-model wave (authority-confirmed frontier radar): the query names a
+  // version ABOVE the real registry — detectClaudeModels classifies those as FICTION
+  // (correctly: unverified by the gate). But these queries exist only for entries the
+  // AUTHORITY gate confirmed (org:anthropics hit) — so the fiction-classified id in
+  // the query IS the confirmed model id, and it earns hard evidence at the honest
+  // 12-point fallback weight (unregistered, real, confirmed).
   for (const dq of dynamicModelQueries) {
     const hq = hydrateFresh(dq).toLowerCase();
     if (frontierModelEvidence.has(hq)) continue;
-    const ids = detectClaudeModels(dq)
-      .qualifying.map((m) =>
-        QUALIFYING_MODELS.some((r) => r.id === m.id)
-          ? m.id
-          : QUALIFYING_MODELS.find((r) => r.id === `claude-${m.family}`)?.id ?? m.id
-      );
+    const ids = detectClaudeModels(dq).fiction.map((f) => f.id).filter((id) => id !== "claude-fable");
     if (ids.length > 0) frontierModelEvidence.set(hq, ids);
   }
   // Frontier queries (hydrated to their runtime form) — a hit via one of them is

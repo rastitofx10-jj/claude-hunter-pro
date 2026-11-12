@@ -53,8 +53,9 @@ try {
     const v = ledgerRow?.value ? JSON.parse(ledgerRow.value) : [];
     if (Array.isArray(v)) ledger = v;
   } catch { /* corrupted row — the section simply reports nothing */ }
-  const confirmedWaves = ledger.filter((e) => e && e.confirmed);
-  const unconfirmed = ledger.filter((e) => e && !e.confirmed);
+  const fiction = ledger.filter((e) => e && e.kind === "fiction");
+  const confirmedWaves = ledger.filter((e) => e && e.confirmed && e.kind !== "fiction");
+  const unconfirmed = ledger.filter((e) => e && !e.confirmed && e.kind !== "fiction");
 
   const date = new Date().toISOString().slice(0, 10);
   const lines = [];
@@ -91,7 +92,7 @@ try {
   lines.push("## 3. Frontier watch (the radar sees what the registry doesn't)");
   lines.push("");
   lines.push(
-    "The hunter self-detects frontier versions ABOVE its registered line — no code edit between a model release and the hunt. Confirmation needs " + `${2} distinct repos`,
+    "The hunter self-detects frontier versions ABOVE its real registered line (opus/sonnet/haiku 4.5) — no code edit between a model release and the hunt. A signal needs " + `${2} distinct repo vouches AND an org:anthropics authority hit` + " before it steers the arsenal — text mentions alone confirm nothing.",
   );
   lines.push("");
   if (confirmedWaves.length === 0 && unconfirmed.length === 0) {
@@ -101,6 +102,9 @@ try {
     lines.push(
       `- **${e.label} — LIVE WAVE** (${e.id}): ${e.mentions} mentions across ${e.repos.length} repos since ${String(e.firstSeen).slice(0, 10)}. The arsenal hunts it automatically — pins, skills, contracts, routers, evals.`,
     );
+  }
+  if (fiction.length > 0) {
+    lines.push(`- **${fiction.length} fictional-model signal(s) tracked as contamination** (e.g. ${fiction.slice(0, 2).map((e) => `${e.label} — ${e.mentions} mentions in hallucination-spam repos, 0 org:anthropics hits`).join("; ")}). These models do not exist; the radar records the noise and never hunts it.`);
   }
   for (const e of unconfirmed.slice(0, 6)) {
     lines.push(

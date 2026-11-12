@@ -278,9 +278,10 @@ export async function GET(req: NextRequest) {
     };
 
     if (token) {
-      // Only qualifying models (5.5+) — the 4.x family is not scanned or counted at all.
+      // Only REAL registered models are scanned and counted (the registry IS the 4.x
+      // family — the real premium tier; fictional strings are never searched).
       // Longest-first order + skipping subsumed identifiers: a searched identifier is a substring —
-      // "claude-opus-6" also caught repos with only 6-5 (claude-opus-6-5), falsely reporting Opus 6.
+      // a shorter id also catches repos with only the longer variant, falsely reporting the family.
       const kws: [string, string, number][] = QUALIFYING_MODELS.map((m) => [
         m.searchStrings[0],
         m.label,
@@ -314,18 +315,19 @@ export async function GET(req: NextRequest) {
       warnings.push("Without a token, no in-repo code search is performed (metadata file scanning only)");
     }
 
-    // Text-based detection: settings / CLAUDE.md / README — full separation between qualifying (5.5+) and blocked (4.x and below)
+    // Text-based detection: settings / CLAUDE.md / README — full separation between
+    // qualifying (REAL registered models) vs blocked (ancient era) vs fiction
+    // (hallucinated strings — shown for transparency, zero credit, flagged).
     // The settings model field is a CONTROLLED context — its value IS a model identifier,
-    // so a bare family pin ("fable" / "fable-5-2") is decisive here even without prose
-    // context. Before the fable-wave fix this path only saw the value through the free-text
-    // detector, which demands surrounding context — and the value alone has none.
+    // so a bare family pin ("opus" → Opus 4.5, the family frontier) is decisive here
+    // even without prose context.
     if (settingsModelText) {
       const pinned = detectModelFieldValue(settingsModelText);
       if (pinned) addModel(pinned.id, pinned.label, pinned.weight, "settings", undefined, true, pinned.version);
     }
     const sourceOf = (id: string): string => {
       const smt = settingsModelText.toLowerCase();
-      // settings values legitimately lack the claude- prefix ("fable-5-2") — compare both forms
+      // settings values legitimately lack the claude- prefix ("opus-4-5") — compare both forms
       if (smt.includes(id) || smt.includes(id.replace(/^claude-/, ""))) return "settings";
       const cm = (contents.claudeMd ?? "").toLowerCase();
       if (cm.includes(id) || cm.includes(id.replace(/^claude-/, ""))) return "claude-md";
@@ -335,8 +337,9 @@ export async function GET(req: NextRequest) {
       `${settingsModelText} ${contents.claudeMd ?? ""} ${readme.slice(0, 4000)}`
     );
     // Frontier radar — the same text the detector just scanned also feeds the
-    // emerging-model ledger: an analysis of a repo pinning an unregistered frontier
-    // version (fable 5.3, a brand-new family) is day-one evidence. Never blocks the analysis.
+    // emerging-model ledger: an analysis of a repo pinning a version above the REAL
+    // registry frontier (a future release, a brand-new family) is day-one evidence.
+    // Confirmation stays authority-gated (org:anthropics) — never blocks the analysis.
     try {
       await scanAndRecord(
         `${settingsModelText} ${contents.claudeMd ?? ""} ${readme}`,
@@ -347,8 +350,9 @@ export async function GET(req: NextRequest) {
     for (const m of textDetection.qualifying) {
       addModel(m.id, m.label, m.weight, sourceOf(m.id), undefined, true, m.version);
     }
-    // Blocked (4.x and below): shown for transparency only — weight 0, not counted in the score
-    for (const b of textDetection.blocked) {
+    // Blocked (ancient era) + FICTION (hallucinated strings): transparency only —
+    // weight 0, not counted in the score; fiction carries an explicit warning label.
+    for (const b of [...textDetection.blocked, ...textDetection.fiction]) {
       addModel(b.id, b.label, 0, sourceOf(b.id), undefined, false, b.version);
     }
 
@@ -357,7 +361,7 @@ export async function GET(req: NextRequest) {
     const blockedList = modelList.filter((m) => !m.qualifying);
 
     // ---------- scoring ----------
-    // Model score: qualifying only. No 5.5+ → zero model points.
+    // Model score: qualifying (REAL) models only. No real model → zero model points.
     const modelScore = qualifyingList.length > 0 ? Math.min(45, qualifyingList[0].weight) : 0;
     // Only genuine payment evidence: SDK dependencies (dep), API key (env), MCP servers, cost mentions.
     // Previously: all evidence — including structural (CLAUDE.md/commands/agents/README) — counted toward the
@@ -369,9 +373,9 @@ export async function GET(req: NextRequest) {
       satScore(meta.stargazers_count, 15, 10000) + satScore(meta.forks_count, 5, 1000) + satScore(contributors, 5, 30)
     );
     const usageScore = Math.min(15, priceMentions.length * 3 + tokenMentions.length * 2 + Math.min(claudeCodeMentions, 4) + (builtWithClaude ? 3 : 0));
-    // Threshold rule — only a repo that proves 5.5+ can reach the premium tiers (gold/elite):
-    // without a qualifying model the score is capped at 35 (below the money) — a repo with only 4.x cannot look "gold"
-    // (Previously: paid+traction+usage reached 70/100 on a 4.x-only repo)
+    // Threshold rule — only a repo proving a REAL premium model (the 4.x family IS the
+    // real premium tier) can reach the premium tiers (gold/elite): without a qualifying
+    // model the score is capped at 35 (below the money) — a fiction-only repo cannot look "gold"
     const meetsModelThreshold = qualifyingList.length > 0;
     const rawTotal = Math.max(0, modelScore + paidScore + tractionScore + usageScore);
     const total = Math.min(100, meetsModelThreshold ? rawTotal : Math.min(rawTotal, 35));
@@ -386,23 +390,26 @@ export async function GET(req: NextRequest) {
 
     // ---------- insights (what can we learn / take) ----------
     const insights: string[] = [];
+    const fictionList = modelList.filter((m) => m.label.includes("(fictional)"));
     if (!meetsModelThreshold) {
-      // Strict verdict: no 5.5+ model → not a premium project per the criterion
+      // Strict verdict: no REAL model → not a premium project per the criterion
       insights.push(
-        blockedList.length > 0
-          ? `⛔ Does not meet the threshold: only blocked models detected (${blockedList.map((b) => b.label).join(", ")}) — the criterion requires 5.5 and above (Opus 5.5, Fable, Opus 6+)`
-          : `⛔ Does not meet the threshold: no 5.5+ model detected — the criterion requires Opus 5.5, Fable, or newer`
+        fictionList.length > 0
+          ? `⛔ Fictional model pins only (${fictionList.map((b) => b.label).join(", ")}) — these models do not exist; the repo is hallucination-poisoned, zero credit`
+          : blockedList.length > 0
+          ? `⛔ Does not meet the threshold: only ancient models detected (${blockedList.map((b) => b.label).join(", ")}) — the criterion requires a real premium model (Opus 4.5, Sonnet 4.5...)`
+          : `⛔ Does not meet the threshold: no real Claude model detected`
       );
       // Transparency: what exactly cut the score
-      insights.push(`Raw score ${rawTotal} cut to ${total} — without proof of a 5.5+ model, premium tiers are not granted`);
+      insights.push(`Raw score ${rawTotal} cut to ${total} — without proof of a real premium model, premium tiers are not granted`);
     } else {
-      insights.push(`✅ Meets the model threshold (5.5+): ${qualifyingList.map((m) => m.label).join(", ")}${blockedList.length > 0 ? ` — plus blocked mentions of ${blockedList.map((b) => b.label).join(", ")} (not counted)` : ""}`);
+      insights.push(`✅ Meets the model threshold (real premium): ${qualifyingList.map((m) => m.label).join(", ")}${blockedList.length > 0 ? ` — plus non-counted mentions of ${blockedList.map((b) => b.label).join(", ")}` : ""}${fictionList.length > 0 ? ` — ⚠️ plus fictional pins (${fictionList.map((f) => f.label).join(", ")}) flagged as contamination` : ""}`);
     }
     if (contents.claudeMd) insights.push("Has a CLAUDE.md — worth studying its instruction structure, boundaries, and defined workflows and adapting them to our interface");
     if (commands.length > 0) insights.push(`${commands.length} custom commands (${commands.slice(0, 5).join(", ")}) — the ideas can be adopted for similar commands`);
     if (agents.length > 0) insights.push(`${agents.length} subagents defined (${agents.slice(0, 5).join(", ")}) — a proven multi-agent architecture worth imitating`);
     if (mcpServers.length > 0) insights.push(`Active MCP servers (${mcpServers.join(", ")}) — tool integrations we could hook up as well`);
-    if (qualifyingList.some((m) => m.weight >= 40)) insights.push("Uses a flagship 5.5+ model (Opus 5.5/Fable and above) — the project proves its tasks justify an expensive model; worth examining which workflows exploit this");
+    if (qualifyingList.some((m) => m.weight >= 40)) insights.push("Uses the real flagship (Opus 4.5) — the project proves its tasks justify the strongest model that exists; worth examining which workflows exploit this");
     if (depsFound.length > 0) insights.push(`SDK stack: ${depsFound.join(", ")} — a good starting point for understanding the integration`);
     if (priceMentions.length > 0 || tokenMentions.length > 0) insights.push("Cost/token mentions in the README — an indication of real paid usage at significant scale");
     if (contributors > 5) {

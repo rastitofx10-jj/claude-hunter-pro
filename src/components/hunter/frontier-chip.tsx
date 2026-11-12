@@ -12,10 +12,11 @@ import { apiFetch } from "@/lib/api-client";
 import { useHunterStore } from "@/lib/hunter-store";
 import { useHydrated } from "@/hooks/use-hydrated";
 
-/** The frontier radar chip — appears ONLY when the ledger holds an emerging
- *  frontier version above the registry. A confirmed wave (≥2 repos) pulses;
- *  an unconfirmed single-repo signal stays muted. Clicking it opens the sweep
- *  tab, where the next run hunts the wave automatically. */
+/** The frontier radar chip — shows the REAL registry frontier (Opus 4.5) when
+ *  calm. When the ledger holds an emerging version above the registry, it shows
+ *  that instead: an authority-confirmed wave pulses; vouched-but-unverified
+ *  signals stay muted. Clicking it opens the sweep tab, where the next run
+ *  hunts a confirmed wave automatically. */
 export function FrontierChip({ onOpenSweep }: { onOpenSweep?: () => void }) {
   const token = useHunterStore((s) => s.token);
   const mounted = useHydrated();
@@ -33,7 +34,30 @@ export function FrontierChip({ onOpenSweep }: { onOpenSweep?: () => void }) {
   });
 
   const entries = data?.entries ?? [];
-  if (!mounted || entries.length === 0) return null;
+  if (!mounted) return null;
+  // The calm state is the REAL frontier — no emerging versions above it detected.
+  if (entries.length === 0) {
+    return (
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onOpenSweep}
+              className="hidden items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted md:inline-flex"
+              title="Frontier radar — the real registry frontier; nothing above it detected yet"
+            >
+              <Radar className="h-3.5 w-3.5" aria-hidden />
+              Frontier: Opus 4.5
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs font-mono text-[11px]">
+            Registry current — Opus 4.5 is the strongest real model. No versions above it detected in the wild.
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
   const confirmed = entries.filter((e) => e.confirmed);
   const label =
     confirmed.length > 0
@@ -41,7 +65,7 @@ export function FrontierChip({ onOpenSweep }: { onOpenSweep?: () => void }) {
       : entries[0].label;
   const detail = entries
     .slice(0, 4)
-    .map((e) => `${e.label} (${e.id}) — ${e.mentions} mentions · ${e.repos} repo(s)${e.confirmed ? " · LIVE WAVE — the arsenal hunts it" : " · unconfirmed, waiting for a 2nd repo"}`)
+    .map((e) => `${e.label} (${e.id}) — ${e.mentions} mentions · ${e.repos} repo(s)${e.confirmed ? " · AUTHORITY-CONFIRMED — the arsenal hunts it" : " · vouched, awaiting org:anthropics verification"}`)
     .join("\n");
 
   return (

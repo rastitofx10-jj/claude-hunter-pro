@@ -34,10 +34,10 @@ const check = (name: string, ok: boolean, detail = "") => {
 
 // ---------- 2. normalizeQueryKey ----------
 {
-  const a = normalizeQueryKey('claude fable stars:>3 pushed:>2026-11-01');
-  const b = normalizeQueryKey('claude fable stars:>3 pushed:>2026-11-12');
+  const a = normalizeQueryKey('claude opus 4.5 stars:>3 pushed:>2026-11-01');
+  const b = normalizeQueryKey('claude opus 4.5 stars:>3 pushed:>2026-11-12');
   check("date-normalized keys match across days", a === b, a);
-  check("lowercase normalization", normalizeQueryKey("Fable 5.2") === normalizeQueryKey("fable 5.2"));
+  check("lowercase normalization", normalizeQueryKey("Opus 4.5") === normalizeQueryKey("opus 4.5"));
 }
 
 // ---------- 3. DB roundtrip: record + merge + race-safety ----------

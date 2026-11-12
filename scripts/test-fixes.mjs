@@ -19,7 +19,7 @@ console.log("  head:", JSON.stringify(normalized.slice(0, 90)));
 // Test 2: validator against REAL gen5 dead queries (all repo:anthropic-ai/claude — 0 hits)
 const realRepos = new Set(["simonw/llm-anthropic", "anthropics/claude-code", "anthropics/skills", "kilimcininkoroglu/m365bridge"]);
 const deadQueries = [
-  'repo:anthropic-ai/claude "5.5+" in:code',
+  'repo:anthropic-ai/claude "4.5" in:code',
   'repo:anthropic-ai/claude "premium model" in:readme',
   'repo:anthropic-ai/claude "model family" in:readme',
 ];
@@ -44,10 +44,10 @@ function validateEvolvedQueries(rawQueries, realRepos, deadQueries, maxKeep = 10
 const gen6Proposals = [
   'repo:anthropic-ai/claude "model_name" in:code',
   'repo:anthropic-ai/claude "model_version" in:code',
-  'repo:simonw/llm-anthropic "claude-fable" in:file',
-  'repo:anthropics/claude-code "5.5" in:file',
-  '"ANTHROPIC_MODEL" "claude-opus-5-5" language:python',
-  'path:.claude/skills "opus 5.5"',
+  'repo:simonw/llm-anthropic "claude-opus-4-5" in:file',
+  'repo:anthropics/claude-code "4.5" in:file',
+  '"ANTHROPIC_MODEL" "claude-opus-4-5" language:python',
+  'path:.claude/skills "opus 4.5"',
 ];
 const { kept, dropped } = validateEvolvedQueries(gen6Proposals, realRepos, deadQueries);
 console.log("TEST2 validator:");

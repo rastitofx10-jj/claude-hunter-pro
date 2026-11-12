@@ -328,8 +328,8 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const repoQ = arsenal.filter((q) => q.kind === "repo"); // 10 — always all (2.1s spacing, cheap quota)
   let left = Math.max(0, staticBudget - repoQ.length);
   const frontierQ = rankByYield(arsenal.filter((q) => q.origin.startsWith("frontier")), ystats); // frontier + frontier-model + frontier-emerging —
-  // the whole frontier dimension. (Before: a strict === "frontier" match silently dropped
-  // every frontier-model query — the fable-wave queries NEVER ran inside a live hunt.)
+  // the whole frontier dimension. (History: a strict === "frontier" match once silently dropped
+  // every frontier-model query — a past strict-match bug once silently dropped them.)
   const capQ = rankByYield(arsenal.filter((q) => q.origin === "capability"), ystats); // 4
   const regQ = rankByYield(arsenal.filter((q) => q.origin.startsWith("registry")), ystats); // 15
   // capability floor (2) survives even when evolved queries squeeze the budget

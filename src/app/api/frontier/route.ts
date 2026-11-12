@@ -4,14 +4,17 @@ import { QUALIFYING_MODELS } from "@/lib/claude-models";
 
 export const dynamic = "force-dynamic";
 
-/** The frontier radar — what the ledger knows about versions ABOVE the registry.
- *  Confirmed entries (≥2 repos) are live waves the arsenal is already hunting. */
+/** The frontier radar — what the ledger knows about versions ABOVE the real
+ *  registry. Confirmed entries are AUTHORITY-VERIFIED waves (org:anthropics hit)
+ *  the arsenal is already hunting; vouched-but-unverified entries steer nothing;
+ *  fiction entries are contamination records, excluded from the wave feed. */
 export async function GET() {
   try {
     const ledger = await loadFrontierLedger();
-    const registered = QUALIFYING_MODELS.filter((m) => m.id !== `claude-${m.family}`).length;
+    const registered = QUALIFYING_MODELS.length;
     return NextResponse.json({
       entries: ledger
+        .filter((e) => e.kind !== "fiction")
         .sort((a, b) => b.mentions - a.mentions)
         .map((e) => ({
           id: e.id,

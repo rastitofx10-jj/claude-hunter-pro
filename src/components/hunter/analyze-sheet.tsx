@@ -129,20 +129,22 @@ export function AnalyzeSheet({
               {data.score.meetsModelThreshold ? (
                 <Alert className="border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
                   <Sparkles className="h-4 w-4" />
-                  <AlertTitle className="text-sm">Meets the model threshold (5.5+)</AlertTitle>
+                  <AlertTitle className="text-sm">Meets the model threshold (real premium)</AlertTitle>
                   <AlertDescription className="text-xs">
-                    Flagship models at version 5.5 and above were detected — the project passes the strict criterion.
+                    Real premium models were detected (Opus 4.5 / Sonnet 4.5 / Haiku 4.5...) — the project passes the strict criterion.
                   </AlertDescription>
                 </Alert>
               ) : (
                 <Alert variant="destructive">
                   <TriangleAlert className="h-4 w-4" />
-                  <AlertTitle className="text-sm">⛔ Below threshold — 5.5+ required</AlertTitle>
+                  <AlertTitle className="text-sm">⛔ Below threshold — a real premium model required</AlertTitle>
                   <AlertDescription className="text-xs">
-                    No model at version 5.5+ was detected (Opus 5.5, Fable, Opus 6+).
-                    {data.models.some((m) => !m.qualifying)
-                      ? " Only below-threshold models were found (the 4.x family and lower) — they are completely blocked and contribute nothing to the score."
-                      : " The 4.x family is completely blocked in this tool."}
+                    No real Claude model was detected (Opus 4.5, Sonnet 4.5...).
+                    {data.models.some((m) => m.label.includes("(fictional)"))
+                      ? " Fictional model pins (hallucinated strings like 'fable') were found — they do not exist and contribute nothing."
+                      : data.models.some((m) => !m.qualifying)
+                      ? " Only ancient-era models were found — they contribute nothing to the score."
+                      : ""}
                   </AlertDescription>
                 </Alert>
               )}
@@ -169,7 +171,7 @@ export function AnalyzeSheet({
               <div className="rounded-xl border bg-card p-4 space-y-3">
                 <p className="text-sm font-semibold">Token Investment Score — Breakdown</p>
                 {[
-                  { label: "Premium 5.5+ models (Opus 5.5/Fable…)", v: data.score.modelScore, max: 45 },
+                  { label: "Premium real models (Opus 4.5…)", v: data.score.modelScore, max: 45 },
                   { label: "Payment & API evidence", v: data.score.paidScore, max: 30 },
                   { label: "Traction & community activity", v: data.score.tractionScore, max: 25 },
                   { label: "Cost/token mentions", v: data.score.usageScore, max: 15 },
@@ -218,9 +220,9 @@ export function AnalyzeSheet({
                           {m.label}
                         </span>
                         {m.qualifying ? (
-                          <Badge className="bg-orange-100 text-[10px] text-orange-800 hover:bg-orange-100 dark:bg-orange-900 dark:text-orange-200">✅ 5.5+ · weight {m.weight}</Badge>
+                          <Badge className="bg-orange-100 text-[10px] text-orange-800 hover:bg-orange-100 dark:bg-orange-900 dark:text-orange-200">✅ Real · weight {m.weight}</Badge>
                         ) : (
-                          <Badge variant="destructive" className="text-[10px]">⛔ Blocked (below 5.5) · weight 0</Badge>
+                          <Badge variant="destructive" className="text-[10px]">{m.label.includes("(fictional)") ? "⚠️ Fictional · weight 0" : "⛔ Ancient · weight 0"}</Badge>
                         )}
                         {m.hits != null && <Badge variant="outline" className="text-[10px]">{m.hits} files</Badge>}
                         <span className="text-xs text-muted-foreground">Sources: {m.sources.join(", ")}</span>

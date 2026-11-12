@@ -1,0 +1,184 @@
+{
+  "ranAt": "2026-11-12T20:18:25.655Z",
+  "dry": false,
+  "ledger": {
+    "before": 1,
+    "fictionReclassified": [
+      "claude-fable-5-5 (was kind=emerging, confirmed=true, mentions=41, repos=8)"
+    ]
+  },
+  "repos": {
+    "total": 23,
+    "modelsReset": 23,
+    "modelsResetToNull": 23,
+    "scoresRecomputed": 23,
+    "scoreDeltas": [
+      {
+        "fullName": "LibreChat-AI/LibreChat",
+        "before": 100,
+        "after": 31
+      },
+      {
+        "fullName": "1jehuang/jcode",
+        "before": 100,
+        "after": 23
+      },
+      {
+        "fullName": "OrchestratorInc/agent-orchestrator",
+        "before": 80,
+        "after": 29
+      },
+      {
+        "fullName": "Wei-Shaw/sub2api",
+        "before": 78,
+        "after": 26
+      },
+      {
+        "fullName": "thewaltero/mythos-router",
+        "before": 86,
+        "after": 18
+      },
+      {
+        "fullName": "modu-ai/moai-adk",
+        "before": 76,
+        "after": 24
+      },
+      {
+        "fullName": "duolahypercho/fusion-fable",
+        "before": 63,
+        "after": 14
+      },
+      {
+        "fullName": "suitedaces/dorabot",
+        "before": 68,
+        "after": 15
+      },
+      {
+        "fullName": "intelligentnode/IntelliNode",
+        "before": 64,
+        "after": 12
+      },
+      {
+        "fullName": "vercel-labs/durable-harness",
+        "before": 64,
+        "after": 21
+      },
+      {
+        "fullName": "robonuggets/skill-creator-plus",
+        "before": 84,
+        "after": 16
+      },
+      {
+        "fullName": "edvardgrishin27/nativeprompt",
+        "before": 98,
+        "after": 15
+      },
+      {
+        "fullName": "YuvalSarel1/cones",
+        "before": 64,
+        "after": 17
+      },
+      {
+        "fullName": "NousResearch/hermes-agent",
+        "before": 100,
+        "after": 23
+      },
+      {
+        "fullName": "anthropics/claude-code",
+        "before": 90,
+        "after": 34
+      },
+      {
+        "fullName": "NanmiCoder/cc-haha",
+        "before": 89,
+        "after": 29
+      },
+      {
+        "fullName": "farion1231/cc-switch",
+        "before": 85,
+        "after": 26
+      },
+      {
+        "fullName": "stablyai/orca",
+        "before": 100,
+        "after": 29
+      },
+      {
+        "fullName": "luongnv89/claude-howto",
+        "before": 100,
+        "after": 29
+      },
+      {
+        "fullName": "code-yeongyu/oh-my-openagent",
+        "before": 100,
+        "after": 20
+      },
+      {
+        "fullName": "asgeirtj/system_prompts_leaks",
+        "before": 100,
+        "after": 31
+      },
+      {
+        "fullName": "Imbad0202/academic-research-skills",
+        "before": 100,
+        "after": 26
+      },
+      {
+        "fullName": "shanraisshan/claude-code-best-practice",
+        "before": 100,
+        "after": 29
+      }
+    ]
+  },
+  "missions": {
+    "total": 28,
+    "voided": 24,
+    "kept": 4,
+    "voidedNames": [
+      "orchestrator-vulnerability-hunt (was done)",
+      "jcode-acquisition-initiative (was done)",
+      "claude-opus-access-orchestration (was done)",
+      "librechat-integration-analysis (was done)",
+      "claude-optimization-pattern-reverse-engineer (was done)",
+      "claude-opus-api-acquisition (was done)",
+      "claude-premium-api-harvest (was done)",
+      "claude-code-api-recon (was done)",
+      "claude-fable-reverse-engineer (was done)",
+      "fable-api-access-acquisition (was done)",
+      "claude-system-prompt-reverse-engineer (was done)",
+      "librechat-partnership-approach (was done)",
+      "premium-model-fusion-platform (was done)",
+      "claude-opus-integration-verification (was done)",
+      "claude-capability-reverse-engineer (was done)",
+      "opus-capability-audit (was done)",
+      "librechat-integration-outreach (was done)",
+      "premium-api-integration-offensive (was done)",
+      "claude-prompt-harvest (was done)",
+      "premium-api-access-acquisition (was done)",
+      "prompt-reverse-engineering (was done)",
+      "premium-model-reverse-engineering (was done)",
+      "claude-55-enterprise-access (was done)",
+      "premium-api-team-assembly (was done)"
+    ]
+  },
+  "learning": {
+    "queriesBefore": 67,
+    "queriesRemoved": 40,
+    "queriesKept": 27,
+    "removedSamples": [
+      "claude-fable-5-2",
+      "\"claude-opus-5-5\" \"claude-fable-5-2\"",
+      "\"fable 5.2\" eval",
+      "fable 5.2 filename:claude.md",
+      "\"fable-5-2\" or \"fable-5.2\" system prompt",
+      "claude fable stars:>3 pushed:>{date}",
+      "claude-fable",
+      "claude fable"
+    ]
+  },
+  "genes": {
+    "total": 1531,
+    "kept": 1531,
+    "note": "kept — mined files are real content from real repos; only the model attribution was fabricated and is reset"
+  }
+}

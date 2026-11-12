@@ -382,7 +382,7 @@ export function GenesisPanel() {
                 <Zap className="h-4 w-4" /> Autonomous harvest — one click and the library explodes
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                The engine discovers elite repos on its own from 5.5+ code searches (opus-5-5 · fable · opus-6 · 6-5 · 7), ranks them by skill richness, and mines the 6 richest
+                The engine discovers elite repos on its own from real-frontier code searches (opus-4-5 · sonnet-4-5 · haiku-4-5), ranks them by skill richness, and mines the 6 richest
               </p>
             </div>
             <Button
