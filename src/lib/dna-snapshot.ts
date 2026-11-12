@@ -30,8 +30,10 @@ const iso = (d: Date) => d.toISOString();
  * counts, and the seven table arrays with dates as ISO strings.
  */
 /** The non-secret Setting keys that must survive a recycle — the hunter's
- * learned state. Anything else in Setting (the PAT) stays out on purpose. */
-const LEARNING_KEYS = ["mineAttempts", "queryYieldStats"] as const;
+ * learned state. Anything else in Setting (the PAT) stays out on purpose.
+ * v1.2: frontierLedger joins — without it every recycle reset the emerging-model
+ * radar to zero, and the next model release would lose its accumulated evidence. */
+const LEARNING_KEYS = ["mineAttempts", "queryYieldStats", "frontierLedger"] as const;
 
 export async function writeDnaSnapshot(): Promise<void> {
   // All seven public tables in one parallel round — same reads the script does,

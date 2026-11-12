@@ -8,7 +8,7 @@
 import { db } from "./db";
 import { safeJsonParse } from "./ai-json";
 import {
-  buildQueryArsenal,
+  buildAdaptiveArsenal,
   runQueryArsenal,
   consolidateCandidates,
   enrichCandidates,
@@ -17,6 +17,7 @@ import {
   type Candidate,
   type QueryReport,
 } from "./deep-sweep";
+import { scanAndRecord } from "./emerging-models";
 import { runSwarm, SWARM_TRIAGE_COVERAGE, type SwarmResult } from "./intel-swarm";
 import { resolveToken } from "./server-token";
 import { parseAudit } from "./auditor";
@@ -68,8 +69,13 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     // ---------- Stage A: queries ----------
     // Frontier rotation: each completed sweep seeds the next slice — the sweep
     // probes different frontier coordinates every run instead of repeating.
+    // The adaptive arsenal also appends the CONFIRMED emerging-model wave from
+    // the frontier ledger — unrotated, capped, day-one.
     const doneSweeps = await db.sweepRun.count({ where: { status: "done" } });
-    const arsenal = buildQueryArsenal(doneSweeps);
+    const arsenal = await buildAdaptiveArsenal(doneSweeps);
+    const emergingQs = arsenal
+      .filter((q) => q.origin.startsWith("frontier-emerging"))
+      .map((q) => q.q);
     const reports: QueryReport[] = [];
     await updateRun(runId, { phase: "queries", progress: 1 });
 
@@ -82,9 +88,27 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       });
     });
 
+    // Frontier radar feed — every text this sweep touched is a chance to notice
+    // the next frontier version before anyone registers it: repo descriptions,
+    // topics, and the file paths the code search matched. Fire-and-collect, never
+    // blocking the sweep on the ledger.
+    try {
+      let emergingSeen = 0;
+      for (const h of repoHits) {
+        emergingSeen += (await scanAndRecord(
+          `${h.fullName} ${h.description ?? ""} ${h.topics.join(" ")}`,
+          h.fullName,
+        )).length;
+      }
+      for (const h of codeHits) {
+        emergingSeen += (await scanAndRecord(h.path, h.repo, h.path)).length;
+      }
+      if (emergingSeen > 0) console.log(`[sweep] frontier radar: ${emergingSeen} emerging signals recorded`);
+    } catch { /* radar must never stall the sweep */ }
+
     // ---------- Stage B: consolidation + enrichment ----------
     await updateRun(runId, { phase: "enrich", progress: 41 });
-    let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits);
+    let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits, emergingQs);
     const enriched = await enrichCandidates(candidates, token, 30);
     await updateRun(runId, { phase: "mine", progress: 52 });
 

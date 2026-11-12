@@ -35,6 +35,7 @@ import { SweepPanel } from "@/components/hunter/sweep-panel";
 import { LiveHuntPanel } from "@/components/hunter/live-hunt-panel";
 import { HistoryPanel } from "@/components/hunter/history-panel";
 import { RateChip } from "@/components/hunter/rate-chip";
+import { FrontierChip } from "@/components/hunter/frontier-chip";
 import { TokenBanner } from "@/components/hunter/token-banner";
 import { ThemeToggle } from "@/components/hunter/theme-toggle";
 import { CommandPalette } from "@/components/hunter/command-palette";
@@ -281,6 +282,7 @@ export default function ClaudeHunterPage() {
             >
               🔒 {THRESHOLD_LABEL} only · 4.x blocked
             </span>
+            <FrontierChip onOpenSweep={() => setActiveTab("sweep")} />
             <RateChip />
             <ThemeToggle />
           </div>

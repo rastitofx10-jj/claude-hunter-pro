@@ -12,6 +12,7 @@ import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, FRONTIER_MODEL_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
 import { recordQueryYields } from "./adaptive-learning";
+import { loadFrontierLedger, emergingModelQueries } from "./emerging-models";
 import type { QualityRejection } from "./quality-gate";
 
 // ---------- Query arsenal ----------
@@ -76,6 +77,27 @@ export function buildQueryArsenal(seed = 0): SweepQuery[] {
   }
 
   return queries;
+}
+
+/**
+ * The adaptive arsenal — the static build PLUS the live frontier wave from the
+ * emerging-model ledger. A confirmed emerging version (≥2 distinct repos vouching)
+ * joins WITHOUT rotation: a young wave cannot saturate, and waiting for the
+ * rotation to come around is exactly the manual-step latency this kills.
+ * Origin format: frontier-emerging:<ledgerEntryId> — startsWith("frontier"), so
+ * every frontier-category consumer picks it up uniformly.
+ */
+export async function buildAdaptiveArsenal(seed = 0): Promise<SweepQuery[]> {
+  const base = buildQueryArsenal(seed);
+  try {
+    const ledger = await loadFrontierLedger();
+    for (const w of emergingModelQueries(ledger)) {
+      base.push({ q: hydrateFresh(w.q), kind: w.kind, origin: `frontier-emerging:${w.entryId}` });
+    }
+  } catch {
+    // ledger unavailable — the static arsenal still stands (the radar is an instrument, not a wall)
+  }
+  return base;
 }
 
 // ---------- Candidate discovery ----------
@@ -245,10 +267,14 @@ export async function runQueryArsenal(
 /** Stage B — consolidating findings into evidence-ranked candidates, with strict source separation:
  *  — contentEvidence: GitHub code search matched the string inside a real file's content (verified)
  *  — textEvidence: the string appears only in description/topics/path (not proof of code)
- *  — evidence=hard if and only if there is contentEvidence. A description never gets promoted to "code". */
+ *  — evidence=hard if and only if there is contentEvidence. A description never gets promoted to "code".
+ *  dynamicModelQueries: hydrated query strings from the emerging-model wave that ran this sweep —
+ *  a hit via one of them is hard evidence for the model family it names (same content-match
+ *  guarantee as the static frontier-model pool), and counts as a frontier hit. */
 export function consolidateCandidates(
   codeHits: CodeHit[],
-  repoHits: RepoHit[]
+  repoHits: RepoHit[],
+  dynamicModelQueries: string[] = []
 ): Candidate[] {
   const map = new Map<string, Candidate>();
 
@@ -304,6 +330,22 @@ export function consolidateCandidates(
       );
     if (ids.length > 0) frontierModelEvidence.set(hq, ids);
   }
+  // Emerging-model wave (frontier radar): the query itself names a version ABOVE the
+  // registry — detectClaudeModels synthesizes a def for it; unregistered ids normalize
+  // to the family entry (fable 5.3 → claude-fable, full family weight) exactly like
+  // the static pool. An unknown family (claude-myth-7-1) keeps its own id — the
+  // 12-point fallback weight is honest for an unverified family.
+  for (const dq of dynamicModelQueries) {
+    const hq = hydrateFresh(dq).toLowerCase();
+    if (frontierModelEvidence.has(hq)) continue;
+    const ids = detectClaudeModels(dq)
+      .qualifying.map((m) =>
+        QUALIFYING_MODELS.some((r) => r.id === m.id)
+          ? m.id
+          : QUALIFYING_MODELS.find((r) => r.id === `claude-${m.family}`)?.id ?? m.id
+      );
+    if (ids.length > 0) frontierModelEvidence.set(hq, ids);
+  }
   // Frontier queries (hydrated to their runtime form) — a hit via one of them is
   // ecosystem evidence of its own: SDK imports, MCP configs, hooks contracts,
   // curated topics/awesome lists.
@@ -311,6 +353,7 @@ export function consolidateCandidates(
     ...FRONTIER_CODE_POOL.map((f) => f.q.toLowerCase()),
     ...FRONTIER_REPO_POOL.map((f) => hydrateFresh(f.q).toLowerCase()),
     ...FRONTIER_MODEL_POOL.map((f) => hydrateFresh(f.q).toLowerCase()),
+    ...dynamicModelQueries.map((q) => hydrateFresh(q).toLowerCase()),
   ]);
 
   for (const hit of codeHits) {

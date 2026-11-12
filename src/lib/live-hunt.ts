@@ -20,7 +20,7 @@ import { db } from "@/lib/db";
 import { safeJsonParse } from "./ai-json";
 import { tierOf } from "./github";
 import {
-  buildQueryArsenal,
+  buildAdaptiveArsenal,
   runQueryArsenal,
   consolidateCandidates,
   enrichCandidates,
@@ -31,6 +31,7 @@ import {
   type QueryReport,
   type SweepQuery,
 } from "./deep-sweep";
+import { scanAndRecord } from "./emerging-models";
 import { loadYieldStats, rankByYield } from "./adaptive-learning";
 import {
   triageBatch,
@@ -304,7 +305,7 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   if (!token) {
     throw new LiveHuntError("No GitHub token on the server — the live hunt requires a token (Settings → Token)", 400);
   }
-  const arsenal = buildQueryArsenal(ctx.generation);
+  const arsenal = await buildAdaptiveArsenal(ctx.generation);
 
   // Accumulated knowledge — once per hunt (seeding and the novelty metric share it)
   const known = await previousKnownRepos();
@@ -326,7 +327,9 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const staticBudget = Math.max(0, MAX_HUNT_QUERIES - evolved.length);
   const repoQ = arsenal.filter((q) => q.kind === "repo"); // 10 — always all (2.1s spacing, cheap quota)
   let left = Math.max(0, staticBudget - repoQ.length);
-  const frontierQ = rankByYield(arsenal.filter((q) => q.origin === "frontier"), ystats); // 9 — the anti-saturation dimension
+  const frontierQ = rankByYield(arsenal.filter((q) => q.origin.startsWith("frontier")), ystats); // frontier + frontier-model + frontier-emerging —
+  // the whole frontier dimension. (Before: a strict === "frontier" match silently dropped
+  // every frontier-model query — the fable-wave queries NEVER ran inside a live hunt.)
   const capQ = rankByYield(arsenal.filter((q) => q.origin === "capability"), ystats); // 4
   const regQ = rankByYield(arsenal.filter((q) => q.origin.startsWith("registry")), ystats); // 15
   // capability floor (2) survives even when evolved queries squeeze the budget
@@ -340,7 +343,23 @@ async function stageHunt(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   const queries = [...staticQ, ...evolved];
 
   const { reports, codeHits, repoHits } = await runQueryArsenal(token, queries, () => {});
-  let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits);
+
+  // Frontier radar feed — the hunt's own catch (descriptions, topics, matched paths)
+  // feeds the emerging-model ledger. A single-repo mention stays recorded but
+  // unconfirmed; the next repo that mentions it turns the signal into a wave.
+  try {
+    for (const h of repoHits) {
+      await scanAndRecord(`${h.fullName} ${h.description ?? ""} ${h.topics.join(" ")}`, h.fullName);
+    }
+    for (const h of codeHits) {
+      await scanAndRecord(h.path, h.repo, h.path);
+    }
+  } catch { /* radar must never stall the hunt */ }
+
+  const emergingQs = queries
+    .filter((q) => q.origin.startsWith("frontier-emerging"))
+    .map((q) => q.q);
+  let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits, emergingQs);
   const enriched = await enrichCandidates(candidates, token, 20);
   const flat = flattenForSwarm(candidates);
 

@@ -5,8 +5,8 @@
  *      (this exact wipe killed the harvest data twice). The snapshot lives in git,
  *      so the library survives any recycle; restore with scripts/dna-restore.mjs.
  * SAFETY: only public intelligence is exported (DNA mined from public repos,
- *         hunts, missions, sweeps, chimera). From the Setting table ONLY the two
- *         learning keys (mineAttempts, queryYieldStats) are exported — never the
+ *         hunts, missions, sweeps, chimera). From the Setting table ONLY the three
+ *         learning keys (mineAttempts, queryYieldStats, frontierLedger) are exported — never the
  *         GitHub PAT.
  * Usage: node scripts/dna-snapshot.mjs
  */
@@ -30,7 +30,7 @@ try {
     db.liveHunt.findMany({ orderBy: { id: "asc" } }),
     db.sweepRun.findMany({ orderBy: { id: "asc" } }),
     db.searchHistory.findMany({ orderBy: { id: "asc" } }),
-    db.setting.findMany({ where: { key: { in: ["mineAttempts", "queryYieldStats"] } } }),
+    db.setting.findMany({ where: { key: { in: ["mineAttempts", "queryYieldStats", "frontierLedger"] } } }),
   ]);
 
   // Learning state (v1.1) — same keys the in-app writer exports; a recycle must

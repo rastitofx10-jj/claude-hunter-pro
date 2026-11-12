@@ -22,6 +22,7 @@ import { db } from "./db";
 import { FRONTIER_CODE_POOL, rotateSlice, hydrateFresh, daySeed } from "./frontier-queries";
 import { gateArtifacts, type QualityRejection } from "./quality-gate";
 import { recordQueryYields } from "./adaptive-learning";
+import { scanAndRecord } from "./emerging-models";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -282,6 +283,16 @@ export async function harvestRepo(
     else updatedCount++;
     kinds.add(a.kind);
   }
+
+  // Frontier radar feed — the mined files are the richest text the hunter ever
+  // touches (full SKILL.md / CLAUDE.md / settings content). Every gene mined is a
+  // chance to notice the next frontier version the registry doesn't know yet.
+  // Attribution is exact: repo + the real file path. Never blocks the harvest.
+  try {
+    for (const a of artifacts) {
+      if (a.content) await scanAndRecord(a.content, fullName, a.path);
+    }
+  } catch { /* radar must never stall the harvest */ }
 
   return {
     repo: fullName,

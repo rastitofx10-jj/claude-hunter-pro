@@ -186,7 +186,7 @@ try {
   //    post-recycle case); on a live DB the newer state wins (never clobbered).
   //    Old snapshots without learningState simply skip — backward compatible.
   let learning = 0;
-  for (const key of ["mineAttempts", "queryYieldStats"]) {
+  for (const key of ["mineAttempts", "queryYieldStats", "frontierLedger"]) {
     const val = snap.learningState?.[key];
     if (val === undefined || val === null) continue;
     const existing = await db.setting.findUnique({ where: { key } });

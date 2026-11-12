@@ -12,6 +12,7 @@ import {
 } from "@/lib/github";
 import type { AnalyzeResponse, EvidenceItem, ModelHit, RepoCore, ClaudeFileInfo } from "@/lib/hunter-types";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
+import { scanAndRecord } from "@/lib/emerging-models";
 
 export const dynamic = "force-dynamic";
 
@@ -333,6 +334,16 @@ export async function GET(req: NextRequest) {
     const textDetection = detectClaudeModels(
       `${settingsModelText} ${contents.claudeMd ?? ""} ${readme.slice(0, 4000)}`
     );
+    // Frontier radar — the same text the detector just scanned also feeds the
+    // emerging-model ledger: an analysis of a repo pinning an unregistered frontier
+    // version (fable 5.3, a brand-new family) is day-one evidence. Never blocks the analysis.
+    try {
+      await scanAndRecord(
+        `${settingsModelText} ${contents.claudeMd ?? ""} ${readme}`,
+        full,
+        "analyze",
+      );
+    } catch { /* radar must never stall the analysis */ }
     for (const m of textDetection.qualifying) {
       addModel(m.id, m.label, m.weight, sourceOf(m.id), undefined, true, m.version);
     }
