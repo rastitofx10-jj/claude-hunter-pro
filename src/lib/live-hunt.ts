@@ -2,7 +2,7 @@
 // Live hunt — a full autonomous kill chain in a single click.
 // The idea: all the engines we've built run on one closed chain, with live data:
 //
-//  hunt    — a live volley of GitHub queries (server token) → candidates above the 5.5+ threshold
+//  hunt    — a live volley of GitHub queries (server token) → candidates with real premium models
 //  swarm   — smart triage + investment profiles (LLM)
 //  attack  — market patterns + attack plan + query evolution + briefing (LLM)
 //  mine    — live DNA mining from the leading targets (GitHub → DNA library)
@@ -652,7 +652,7 @@ function deriveGoal(swarm: SwarmStageState | null, attack: AttackStageState | nu
   if (core) {
     return `${core} — based on the live intel from the hunt (leader: ${topName})`;
   }
-  return `Analyze and extract an advantage from the Claude 5.5+ premium investment exposed in the live hunt (leader: ${topName})`;
+  return `Analyze and extract an advantage from the real premium-model investment (Opus 4.5 class) exposed in the live hunt (leader: ${topName})`;
 }
 
 async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {

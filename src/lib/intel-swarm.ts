@@ -124,13 +124,13 @@ function parseTriage(j: Record<string, unknown>, batch: CandidateFlat[]): Triage
 /** Triage prompt — returns a verdict for every candidate in the batch */
 export async function triageBatch(batch: CandidateFlat[]): Promise<TriageVerdict[]> {
   const list = batch.map((c, i) => candidateLine(c, i)).join("\n---\n");
-  const prompt = `A list of candidates from a GitHub sweep (model threshold 5.5+ only):
+  const prompt = `A list of candidates from a GitHub sweep (real-model truth gate):
 
 ${list}
 
 Perform a comparative intelligence triage. The rules:
 — "Hard-verified" evidence = the string was found inside a real file's content — a necessary condition for elite, but not sufficient.
-— elite = only the truly strongest against the goal: proven monetary investment in 5.5+ premium models and real .claude capabilities. If all candidates look similar, rank them against each other and give elite only to the strongest third — the rest watch, with reasoning about what they lack.
+— elite = only the truly strongest against the goal: proven monetary investment in REAL premium models (Opus 4.5 class) and real .claude capabilities. If all candidates look similar, rank them against each other and give elite only to the strongest third — the rest watch, with reasoning about what they lack.
 — "Soft" evidence = a mention in the description only — elite is forbidden, watch at most. You must not claim the model was used in code.
 — No evidence = noise.
 — Marking the entire list elite is forbidden. Real spread: if you judged again and again and everyone is always elite — your triage is worthless.
@@ -175,7 +175,7 @@ function parseProfiles(j: Record<string, unknown>, batch: CandidateFlat[]): Shar
 /** Profiles prompt — for top-tier candidates only */
 export async function sharpProfiles(batch: CandidateFlat[]): Promise<SharpProfile[]> {
   const list = batch.map((c, i) => candidateLine(c, i)).join("\n---\n");
-  const prompt = `The top of the sweep — candidates with the hardest evidence of investment in Claude 5.5+ models:
+  const prompt = `The top of the sweep — candidates with the hardest evidence of investment in real premium Claude models:
 
 ${list}
 
@@ -204,7 +204,7 @@ export async function patternSynthesis(
 
 ${list}
 
-Find cross-repo patterns: what are people building with 5.5+ models? Which product types are paying? Where is the market heading?
+Find cross-repo patterns: what are people building with the real premium models (Opus 4.5 / Sonnet 4.5)? Which product types are paying? Where is the market heading?
 {"patterns": [{"pattern": "pattern name", "repos": ["owner/name"], "insight": "what it means for our product"}], "stackConsensus": ["recurring technologies"], "marketShift": "2-3 sentences: where the premium-Claude-usage market is heading"}`;
   const j = await llmJson(prompt);
   const patternsRaw = Array.isArray(j.patterns) ? j.patterns : [];
@@ -297,11 +297,11 @@ And we found ${elite.length} elite repos: ${elite.slice(0, 15).map((c) => c.full
 Strict rules:
 1. A query with 0 results is dead — its pattern must not be repeated. Already identified dead ones: ${deadList}
 2. Inventing repo:owner/name qualifiers is forbidden — an owner/name is legal only from the real elite list above, and only if you want to drill deeper into a specific repo.
-3. A query returning hundreds of thousands of results is more noise than signal — narrow it with specific evidence words (e.g. file names, config strings, environment variable names) that exist in the code of 5.5+ model consumers.
+3. A query returning hundreds of thousands of results is more noise than signal — narrow it with specific evidence words (e.g. file names, config strings, environment variable names) that exist in the code of real premium-model consumers.
 4. Aim for 8-12 queries, each expected to return 5-200 quality results.
 
 Propose the next round: which GitHub queries will expose what we missed?
-{"nextQueries": ["8-12 new queries in GitHub syntax (code/repo search), focused even more sharply on evidence of 5.5+ models"], "blindSpots": ["what the current sweep does not see"], "rationale": "why these in particular"}`;
+{"nextQueries": ["8-12 new queries in GitHub syntax (code/repo search), focused even more sharply on evidence of real premium models"], "blindSpots": ["what the current sweep does not see"], "rationale": "why these in particular"}`;
   const j = await llmJson(prompt);
   return {
     nextQueries: strArr(j.nextQueries, 12),

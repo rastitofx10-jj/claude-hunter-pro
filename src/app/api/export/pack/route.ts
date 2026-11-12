@@ -27,7 +27,7 @@ export async function GET() {
     const L: string[] = [];
     L.push(`# 🧬 Claude Hunter — DNA Codex`);
     L.push(
-      `> Auto-generated · ${new Date().toLocaleString("he-IL")} · ${artifacts.length} genes from ${new Set(artifacts.map((a) => a.sourceRepo)).size} sources (${fieldCount} born from the field) · model threshold 5.5+`
+      `> Auto-generated · ${new Date().toLocaleString("he-IL")} · ${artifacts.length} genes from ${new Set(artifacts.map((a) => a.sourceRepo)).size} sources (${fieldCount} born from the field) · real-model truth gate`
     );
     L.push(
       `\n## Installation for any project\n\n1. Create a \`skills/\` folder at the project root (or \`.claude/skills/\` for Claude Code).\n2. Copy each file according to the path written in its header.\n3. The CLAUDE.md addendum at the end of the file — pour it into your CLAUDE.md.`

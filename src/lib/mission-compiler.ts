@@ -239,7 +239,7 @@ export async function selectDnaForGoal(goal: string, cap = 8): Promise<ScoredDna
 const TIMEOUT_MS = 110_000;
 
 const COMPILER_ROLE = `You are the Mission Compiler in the Claude Hunter system.
-Your job: take a natural-language goal + real DNA mined from the world's expensive Claude projects (model threshold 5.5+),
+Your job: take a natural-language goal + real DNA mined from the world's expensive Claude projects (real-model truth gate),
 and compose an operational battle plan that Claude Code can execute step-by-step, with a ready-to-paste prompt sequence.
 
 Iron rules:

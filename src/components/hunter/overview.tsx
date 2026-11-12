@@ -256,7 +256,7 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
                 <Satellite className="h-3.5 w-3.5" /> Launch a deep sweep
               </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => onNavigate("search")}>
-                <Search className="h-3.5 w-3.5" /> Search 5.5+
+                <Search className="h-3.5 w-3.5" /> Search real models
               </Button>
             </div>
           </CardContent>

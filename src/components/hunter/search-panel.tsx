@@ -31,7 +31,7 @@ import { qualifyingModelOptions, THRESHOLD_RULE_TEXT } from "@/lib/claude-models
 import type { SearchBody } from "@/lib/hunter-types";
 
 const TOPIC_CHIPS = ["claude-code", "claude-ai", "claude", "anthropic", "mcp", "mcp-server", "ai-agents", "llm", "rag"];
-// ⛔ Auto-generated from the strict registry — qualifying models only (5.5+). No 4.x here at all.
+// Auto-generated from the REAL registry — real models only, fiction blocked from filters.
 // Note: Radix Select doesn't accept value="" — we use the "none"/"all" sentinels and map back.
 export const MODEL_OPTIONS = [
   { value: "none", label: "No model filter" },
@@ -188,7 +188,7 @@ export function SearchPanel({
             <div className="space-y-1">
               <Label className="flex items-center gap-1 text-xs">
                 Premium model
-                <span title={THRESHOLD_RULE_TEXT} className="cursor-help text-[10px] text-orange-600">🔒 5.5+</span>
+                <span title={THRESHOLD_RULE_TEXT} className="cursor-help text-[10px] text-orange-600">🔒 real models</span>
               </Label>
               <Select
                 value={value.model || "none"}

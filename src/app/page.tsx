@@ -261,7 +261,7 @@ export default function ClaudeHunterPage() {
                 Claude Hunter <span className="text-orange-600">🎯</span>
               </h1>
               <p className="hidden truncate text-[11px] text-muted-foreground sm:block">
-                Competitive intelligence for premium-Claude projects — 5.5+ threshold locked in code
+                Competitive intelligence for premium-Claude projects — real-model truth gate locked in code
               </p>
             </div>
           </div>

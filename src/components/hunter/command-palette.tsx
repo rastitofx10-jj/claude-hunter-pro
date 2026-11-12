@@ -38,7 +38,7 @@ const NAV: { tab: TabKey; label: string; icon: typeof Search; hint: string }[] =
   { tab: "mission", label: "Missions", icon: Target, hint: "Mission compilation + autopilot" },
   { tab: "sweep", label: "Deep Sweep", icon: Satellite, hint: "Full intelligence operation + review" },
   { tab: "genesis", label: "Genesis — DNA Library", icon: Dna, hint: "Mining, chimeras, codex" },
-  { tab: "search", label: "Search", icon: Search, hint: "repos + code with a 5.5+ threshold" },
+  { tab: "search", label: "Search", icon: Search, hint: "repos + code, real-model gate" },
   { tab: "watchlist", label: "Watchlist", icon: Bookmark, hint: "Source repos + battle synthesis" },
   { tab: "history", label: "History", icon: History, hint: "Past searches to rerun" },
 ];

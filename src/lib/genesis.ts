@@ -97,7 +97,7 @@ export async function generateChimera(
   const digest = dnaDigest(sources);
   const repoList = sources.map((s) => s.repo).join(", ");
 
-  const prompt = `The mined DNA (real capability files, model threshold 5.5+):
+  const prompt = `The mined DNA (real capability files, real-model truth gate):
 
 ${digest}
 

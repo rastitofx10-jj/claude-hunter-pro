@@ -72,7 +72,7 @@ Iron rules:
 2. English. Double quotes (") are forbidden inside string values — use a single quote (').
 3. Evidence-based suspicion: a refutation must quote the exact claim and point at the contradicting datum from the data in front of you. If there is no real contradiction — return an empty array. It is absolutely forbidden to invent refutations, strings that never appeared (such as undefined), or contradictions when everything is verified.
 4. A lawful distinction: the investment score (inv) and moneyLevel are marked professional estimates produced by the system — not facts. Do not flag them as fabrications. A fabrication = a concrete fact (star count, date, file name, quote, size) that does not appear in the data.
-5. Defined system terminology is not slop: hard evidence = a 5.5+ model string verified inside real file content, usually with an attached path. Do not flag the term itself.
+5. Defined system terminology is not slop: hard evidence = a REAL model string (e.g. claude-opus-4-5) verified inside real file content, usually with an attached path. Do not flag the term itself.
 6. Real slop = a generic sentence that fits any AI project without an identifying detail, or a number/fact that does not exist in the data.`;
 
 async function llmJson(prompt: string): Promise<Record<string, unknown>> {

@@ -17,6 +17,7 @@
 //      magnum-opus chapters never create a frontier signal.
 import {
   detectClaudeModels,
+  detectModelFieldValue,
   isBlockedModelString,
   type ClaudeModelDef,
 } from "../src/lib/claude-models";
@@ -112,7 +113,7 @@ const blockedIn = (text: string, id: string) =>
   check("fable 5.5 (the old 'confirmed wave') is gate-FICTION", fictionIn("claude-fable-5-5 pins"));
   check("fable 5.5 never emerges on the radar", ids("claude-fable-5-5 everywhere").length === 0);
   check("fable 5.2 never emerges", ids("written for fable 5.2").length === 0);
-  check("fable settings pin → no model field value", require("../src/lib/claude-models").detectModelFieldValue("fable") === null);
+  check("fable settings pin → no model field value", detectModelFieldValue("fable") === null);
   check("fable filter is blocked (no quota for hallucinations)", isBlockedModelString("fable") === true);
   check("fictionOnly flag fires on pure-fiction text", detectClaudeModels("claude-fable-5-2 and claude-opus-5-5 pins").fictionOnly === true);
 }

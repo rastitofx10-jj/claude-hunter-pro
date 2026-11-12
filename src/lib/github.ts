@@ -329,7 +329,7 @@ export interface RepoLike {
 }
 
 /**
- * Detects only qualifying models (≥5.5). 4.x-and-below models are not returned
+ * Detects only REAL registered models. Fictional strings are flagged separately
  * here — use detectClaudeModels for the full separation including blocked ones.
  */
 export function detectModelsInText(text: string): ClaudeModelDef[] {

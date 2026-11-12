@@ -78,7 +78,7 @@ export interface ModelHit {
   sources: string[];
   hits?: number;
   version?: number;
-  /** false = blocked model (below the 5.5 threshold, including the 4.x family) — weight 0, not counted in the score */
+  /** false = not a real qualifying model (ancient era or fictional string) — weight 0, not counted in the score */
   qualifying: boolean;
 }
 
@@ -101,11 +101,11 @@ export interface AnalyzeResponse {
   score: {
     total: number;
     tier: TierKey;
-    modelScore: number; // max 45 — qualifying models only (5.5+)
+    modelScore: number; // max 45 — real qualifying models only
     paidScore: number; // max 30
     tractionScore: number; // max 25
     usageScore: number; // max 15
-    /** true only if at least one model ≥5.5 was detected */
+    /** true only if at least one REAL registered model was detected */
     meetsModelThreshold: boolean;
   };
   models: ModelHit[];

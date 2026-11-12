@@ -11,7 +11,7 @@ export const maxDuration = 300;
  * would double the quota burn and concurrently mine the same repos (previously: no lock at all) */
 let harvestRunning = false;
 
-/** Autonomous harvest: discover elite 5.5+ repos ← mine DNA ← the library explodes */
+/** Autonomous harvest: discover elite real-model repos ← mine DNA ← the library explodes */
 export async function POST(req: NextRequest) {
   if (harvestRunning) {
     return NextResponse.json({ error: "A harvest is already running — wait for it to finish" }, { status: 409 });

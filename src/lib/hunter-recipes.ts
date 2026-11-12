@@ -20,8 +20,8 @@ export const RECIPES: Recipe[] = [
   {
     id: "opus55-code",
     emoji: "🧠",
-    title: "Code running Opus 5.5",
-    desc: "Code search for claude-opus-5-5 — the direct evidence of flagship 5.5+ model usage (the strict threshold)",
+    title: "Code running Opus 4.5",
+    desc: "Code search for claude-opus-4-5 — the direct evidence of the strongest real model",
     body: { mode: "code", model: "claude-opus-5-5" },
   },
   {

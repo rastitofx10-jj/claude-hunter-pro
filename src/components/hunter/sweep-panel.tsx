@@ -215,7 +215,7 @@ export function SweepPanel() {
             Deep Sweep — Full Intelligence Operation
           </CardTitle>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            A full arsenal of GitHub queries (code + repos, every listed 5.5+ model) → metadata enrichment → DNA mining
+            A full arsenal of GitHub queries (code + repos, every real registered model) → metadata enrichment → DNA mining
             from the elite → <strong>prompt swarm</strong>: 8 professional prompts — triage, investment profiles, market
             patterns, attack plan, query evolution, and an executive briefing.
           </p>

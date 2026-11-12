@@ -142,8 +142,8 @@ function repoDigest(a: AnalyzeResponse): string {
     `Description: ${a.repo.description ?? "none"}`,
     `Stars: ${a.repo.stars} · forks: ${a.repo.forks} · contributors: ${a.contributors} · primary language: ${a.repo.language ?? "?"}`,
     `Investment score: ${a.score.total}/100 (models ${a.score.modelScore}/45, payment ${a.score.paidScore}/30, traction ${a.score.tractionScore}/25, usage ${a.score.usageScore}/15)`,
-    `Meets the 5.5+ threshold: ${a.score.meetsModelThreshold ? "yes" : "no"}`,
-    qual.length ? `Qualifying models (5.5+): ${qual.map((m) => `${m.label}${m.hits ? ` [${m.hits} files]` : ""} (sources: ${m.sources.join("/")})`).join("; ")}` : "Qualifying models: none",
+    `Meets the real-premium-model threshold: ${a.score.meetsModelThreshold ? "yes" : "no"}`,
+    qual.length ? `Real models detected: ${qual.map((m) => `${m.label}${m.hits ? ` [${m.hits} files]` : ""} (sources: ${m.sources.join("/")})`).join("; ")}` : "Real models detected: none",
     blocked.length ? `Blocked models found (4.x and below, weight 0): ${blocked.map((m) => m.label).join(", ")}` : "",
     a.evidence.length ? `Payment evidence: ${a.evidence.map((e) => e.label).join("; ")}` : "Payment evidence: none",
     a.commands.length ? `Claude Code commands: /${a.commands.join(", /")}` : "",
@@ -226,7 +226,7 @@ export async function generateBattleSynthesis(items: WatchItem[]): Promise<Battl
     })
     .join("\n---\n");
 
-  const prompt = `Our watchlist (${items.length} repos identified as paid-Claude projects, model threshold 5.5+):
+  const prompt = `Our watchlist (${items.length} repos identified as paid-Claude projects, real-model truth gate):
 
 ${list}
 

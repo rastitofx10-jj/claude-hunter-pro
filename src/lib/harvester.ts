@@ -1,12 +1,12 @@
 // ============================================================
 // Autonomous harvester (Auto-Harvester) — the pipeline connecting the hunter to the library:
-// GitHub 5.5+ code search ← ranking skill-rich repos ← DNA mining ← library update
+// GitHub real-model code search ← ranking skill-rich repos ← DNA mining ← library update
 // One click ← the library explodes with real genes from the global elite.
 // Runs server-side only.
 //
 // Round 5 improvements (measured live):
 // - Metadata enrichment: 25 REST calls ← a single GraphQL call (cost: 1 point)
-// - Queries derived from the model registry (6 ids of 5.5+) instead of 2 hardcoded —
+// - Queries derived from the real model registry instead of 2 hardcoded —
 //   3x wider coverage per harvest
 // - Every failure is visible: a failed query / a repo that failed to mine — reported in the result,
 //   nothing is silently swallowed (before: "harvest finished · 0 mined" with no explanation)
@@ -144,7 +144,7 @@ export async function batchRepoMeta(
   return out;
 }
 
-/** Discover elite repos from 5.5+ code searches and rank by skill richness and stars */
+/** Discover elite repos from real-model code searches and rank by skill richness and stars */
 export async function discoverEliteRepos(
   token: string | null,
   opts?: { enrichCount?: number }
