@@ -5,7 +5,14 @@ import { runNextAutopilotPhase, AutopilotError, parseAutopilotState } from "@/li
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MAX_PHASES_PER_RUN = 4;
+// round 8: the loop allowed up to 4 sequential phases against a declared 300s budget —
+// the sibling step route documents the per-phase worst case at ~220s (2 attempts × 110s
+// timeout + queue wait). 4 × 220 = 880s: any enforced budget kills the request mid-run,
+// the client sees a failure even though phases persisted. Now: a phase only STARTS if
+// its worst case still fits the remaining budget (~270s safe window), so 1–2 typical
+// phases fit and the honest `remaining` field tells the client to keep stepping.
+const RUN_BUDGET_MS = 270_000;
+const PHASE_WORST_CASE_MS = 220_000;
 
 /**
  * Full run (backward compatible): runs stage-by-stage through the exact same engine
@@ -32,10 +39,13 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     let firstRun = true;
 
     // Loop over the same step-by-step engine — until there are no more stages
+    const runStart = Date.now();
+    let finalState = preState;
     for (;;) {
-      if (steps.length + failures.length >= MAX_PHASES_PER_RUN) break;
+      if (Date.now() - runStart + PHASE_WORST_CASE_MS > RUN_BUDGET_MS) break; // worst case no longer fits — stop honestly
       const r = await runNextAutopilotPhase(numId);
       totalPhases = r.totalPhases;
+      finalState = r.state;
       if (firstRun && r.done && r.executed === null && r.failure === null) {
         // The mission was already fully executed — not an error, there is simply nothing to run
         return NextResponse.json({
@@ -62,13 +72,25 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       );
     }
 
+    // round 8: the old formula `totalPhases - (preDone + steps.length + failures.length)`
+    // DOUBLE-COUNTED a phase that failed transiently and then succeeded on retry (it sat
+    // in both pre-state failures and this run's steps) — remaining was under-reported and
+    // superseded failures were shown as final. Computed from the FINAL state instead:
+    // remaining = phases neither executed nor permanently failed.
+    const executedIdx = new Set(finalState.steps.map((s) => s.phaseIndex));
+    const permFailedIdx = new Set(
+      finalState.failures.filter((f) => !f.transient || (f.attempts ?? 2) >= 2).map((f) => f.phaseIndex),
+    );
+    const pendingCount = Array.from({ length: totalPhases }, (_, i) => i)
+      .filter((i) => !executedIdx.has(i) && !permFailedIdx.has(i)).length;
+
     return NextResponse.json({
       ok: true,
       steps,
       failures,
       totalPhases,
       // remaining = stages not yet executed, both from previous runs and from this one
-      remaining: Math.max(0, totalPhases - (preDone + steps.length + failures.length)),
+      remaining: pendingCount,
     });
   } catch (e) {
     if (e instanceof AutopilotError) {

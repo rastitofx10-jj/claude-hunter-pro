@@ -28,6 +28,13 @@ import { detectClaudeModels, computeListScore } from "../src/lib/github";
 const db = new PrismaClient();
 const dry = process.argv.includes("--dry");
 
+// round 8: guarded parse for DB JSON columns — a malformed row is skipped (returns
+// null), never a mid-migration crash with half-committed state and no audit file.
+function safeParse(raw: string | null | undefined): unknown {
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 // The fiction fingerprint: strings that exist only in the hallucination ecosystem.
 const FICTION_RE = /\b(?:fable|claude[-_ ]?(?:fable|opus|sonnet|haiku)[-_ ]?[567](?:[-_ ]?\d)?|claude[-_ ]?[567]\b|opus[ ._ -]?[567]\b|sonnet[ ._ -]?[567]\b|haiku[ ._ -]?[567]\b|version[ ._ -]?5\.5|5\.5\+)/i;
 const isFictionText = (s: string | null | undefined) => !!s && FICTION_RE.test(s);
@@ -54,8 +61,13 @@ const audit: Audit = {
 
 try {
   // ---------- 1. Ledger ----------
+  // round 8: three unguarded JSON.parse on DB JSON columns (ledger line ~58, mission
+  // report line ~115, stats line ~128) — one malformed row crashed the migration
+  // MID-RUN with half-committed state and no audit file; worse, the mission parse sat
+  // inside `if (!dry)`, so --dry validated clean while the real run died at the same
+  // mission. safeParse everywhere now: a malformed row is recorded and skipped.
   const ledgerRow = await db.setting.findUnique({ where: { key: "frontierLedger" } });
-  const ledger: any[] = ledgerRow ? JSON.parse(ledgerRow.value) : [];
+  const ledger: any[] = Array.isArray(safeParse(ledgerRow?.value)) ? safeParse(ledgerRow?.value) : [];
   audit.ledger.before = ledger.length;
   for (const e of ledger) {
     // Any fable entry or any above-real-frontier id that was "confirmed" by the
@@ -112,7 +124,7 @@ try {
           voidedAt: new Date().toISOString(),
           reason: "VOIDED BY TRUTH MIGRATION: the mission's goal was distilled from fabricated model intel (fictional models — fable / opus 5.5+ — that do not exist). The mission hunted hallucinations.",
         };
-        const existingReport = m.report ? JSON.parse(m.report) : {};
+        const existingReport = m.report ? safeParse(m.report) : {};
         await db.mission.update({
           where: { id: m.id },
           data: { status: "voided", report: JSON.stringify({ ...existingReport, ...reason }) },
@@ -125,7 +137,7 @@ try {
 
   // ---------- 4. Learning query book ----------
   const statsRow = await db.setting.findUnique({ where: { key: "queryYieldStats" } });
-  const stats: Record<string, unknown> = statsRow ? JSON.parse(statsRow.value) : {};
+  const stats: Record<string, unknown> = safeParse(statsRow?.value) ?? {};
   audit.learning.queriesBefore = Object.keys(stats).length;
   const kept: Record<string, unknown> = {};
   for (const [q, v] of Object.entries(stats)) {

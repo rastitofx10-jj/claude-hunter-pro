@@ -10,15 +10,30 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    // Explicit take — previously: findMany unbounded with full content; the automatic harvest keeps
-    // growing the library and the export swelled without limit (exactly the anti-pattern that mission/route.ts
-    // already fixed in a previous round).
+    // round 8 honesty fix: the old `findMany({ take: 600 })` under SQLite BINARY
+    // collation silently included only the 98 alphabetically-first repos — 1152/1752
+    // genes dropped, **every single field: gene (the evolutionary loop) excluded**, while
+    // the header still claimed "(N born from the field)" for genes not in the file.
+    // Now: field genes are ALWAYS included unconditionally (they are few and they are
+    // the product of the whole system), mined genes stay capped, and the header + stats
+    // say exactly what is included vs omitted. No more silent truncation.
     const EXPORT_TAKE = 600;
-    const [artifacts, chimeras, fieldCount] = await Promise.all([
-      db.dnaArtifact.findMany({ orderBy: [{ sourceRepo: "asc" }, { path: "asc" }], take: EXPORT_TAKE }),
+    const [fieldArtifacts, minedArtifacts, chimeras, totalGenes, fieldCount] = await Promise.all([
+      db.dnaArtifact.findMany({
+        where: { sourceRepo: { startsWith: "field:" } },
+        orderBy: [{ sourceRepo: "asc" }, { path: "asc" }],
+      }),
+      db.dnaArtifact.findMany({
+        where: { NOT: { sourceRepo: { startsWith: "field:" } } },
+        orderBy: [{ sourceRepo: "asc" }, { path: "asc" }],
+        take: EXPORT_TAKE,
+      }),
       db.chimera.findMany({ orderBy: { id: "desc" }, take: 10 }),
+      db.dnaArtifact.count(),
       db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
     ]);
+    const artifacts = [...fieldArtifacts, ...minedArtifacts];
+    const omitted = Math.max(0, totalGenes - artifacts.length);
 
     if (artifacts.length === 0) {
       return NextResponse.json({ error: "The library is empty — there is nothing to export. Run a harvest or mining first." }, { status: 400 });
@@ -27,7 +42,9 @@ export async function GET() {
     const L: string[] = [];
     L.push(`# 🧬 Claude Hunter — DNA Codex`);
     L.push(
-      `> Auto-generated · ${new Date().toLocaleString("he-IL")} · ${artifacts.length} genes from ${new Set(artifacts.map((a) => a.sourceRepo)).size} sources (${fieldCount} born from the field) · real-model truth gate`
+      `> Auto-generated · ${new Date().toLocaleString("he-IL")} · ${artifacts.length} of ${totalGenes} genes from ${new Set(artifacts.map((a) => a.sourceRepo)).size} sources (${fieldCount} born from the field${
+        omitted > 0 ? `, ${omitted} mined genes omitted — export cap ${EXPORT_TAKE}, field genes always included` : " — complete library"
+      }) · real-model truth gate`
     );
     L.push(
       `\n## Installation for any project\n\n1. Create a \`skills/\` folder at the project root (or \`.claude/skills/\` for Claude Code).\n2. Copy each file according to the path written in its header.\n3. The CLAUDE.md addendum at the end of the file — pour it into your CLAUDE.md.`
@@ -69,7 +86,7 @@ export async function GET() {
     const content = L.join("\n");
     return NextResponse.json({
       filename: `claude-hunter-dna-codex-${Date.now()}.md`,
-      stats: { artifacts: artifacts.length, sources: bySource.size, chimeras: chimeras.length, bytes: content.length },
+      stats: { artifacts: artifacts.length, totalGenes, fieldGenes: fieldCount, omitted, sources: bySource.size, chimeras: chimeras.length, bytes: content.length },
       content,
     });
   } catch (e) {

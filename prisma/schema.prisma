@@ -85,7 +85,7 @@ model Mission {
   id              Int      @id @default(autoincrement())
   goal            String   // The goal in natural language
   context         String?  // Additional context from the user
-  status          String   @default("compiled") // compiled | in_progress | partial | done | failed (partial was added in round 6 — the old comment omitted it and contradicted the code)
+  status          String   @default("compiled") // compiled | in_progress | partial | done | failed | voided (partial was added in round 6; round 8 documented 'voided' — written by truth-migration as a TERMINAL fiction-purge state, rank 4 in mission-status.ts, 24/30 production rows carry it — the old comment omitted it and contradicted the code)
   missionName     String   // Codename for the mission
   plan            String   // JSON: array of phases with steps
   dnaRefs         String?  // JSON: selected DnaArtifact ids + rationales

@@ -24,10 +24,14 @@ export async function POST(req: NextRequest) {
   }
   // Prompt protection: a body without valid models/evidence flowed "undefined" into the prompt
   // and caused a generic 500 inside generateRepoIntel (previously: the prompt received "undefined/100" etc.)
-  if (body.models !== undefined && !Array.isArray(body.models)) {
+  // round 8: only PRESENT-and-wrong fields were rejected — a body that simply OMITTED
+  // models/evidence passed both checks and still crashed deep in repoDigest
+  // (a.models.filter on undefined) with a misleading "the AI failed" 500.
+  // Presence is now required: this route accepts analysis RESULTS, which always carry both.
+  if (!Array.isArray(body.models)) {
     return NextResponse.json({ error: "The models field must be an array" }, { status: 400 });
   }
-  if (body.evidence !== undefined && !Array.isArray(body.evidence)) {
+  if (!Array.isArray(body.evidence)) {
     return NextResponse.json({ error: "The evidence field must be an array" }, { status: 400 });
   }
 

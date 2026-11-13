@@ -8,6 +8,8 @@
 
 import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
 import { llmComplete } from "./zai";
+import { db } from "./db";
+import { detectClaudeModels } from "./claude-models";
 import type { CandidateFlat } from "./deep-sweep";
 
 export class SwarmError extends Error {
@@ -108,8 +110,17 @@ function parseTriage(j: Record<string, unknown>, batch: CandidateFlat[]): Triage
     if (!valid.has(fullName)) continue;
     const v = str(o.verdict).toLowerCase();
     // The contract language is English (elite|watch|noise); legacy Hebrew fallbacks were removed with the Hebrew contract.
+    // round 8: substring matching made "not elite" → ELITE — an explicitly rejected
+    // candidate got elite status, mining priority, and audit attention. Exact token
+    // first; the substring chain stays only as a fallback for decorated answers,
+    // with negated forms excluded.
     const verdict: TriageVerdict["verdict"] =
-      v.includes("elite") ? "elite" : v.includes("watch") ? "watch" : "noise";
+      v === "elite" ? "elite"
+      : v === "watch" ? "watch"
+      : v === "noise" ? "noise"
+      : /\belite\b/.test(v) && !/\b(?:not|non|never|no|anti)\s+elite\b/.test(v) ? "elite"
+      : /\bwatch\b/.test(v) ? "watch"
+      : "noise";
     const conf = Number(o.confidence ?? o.confidenceScore ?? 50);
     out.push({
       fullName,
@@ -303,11 +314,48 @@ Strict rules:
 Propose the next round: which GitHub queries will expose what we missed?
 {"nextQueries": ["8-12 new queries in GitHub syntax (code/repo search), focused even more sharply on evidence of real premium models"], "blindSpots": ["what the current sweep does not see"], "rationale": "why these in particular"}`;
   const j = await llmJson(prompt);
+  // round 8 — the second truth-gate layer for evolved queries (same discipline as the
+  // chimera gate, born after chimera #5): the prompt clause was the ONLY barrier on
+  // this path. A hallucinated "claude-opus-5-5 filename:CLAUDE.md" passed every check in
+  // validateEvolvedQueries (length / repo: validity / dead-pattern / duplicates), was
+  // persisted into SweepRun.briefing and hunt evidence, DISPLAYED in the sweep UI —
+  // and EXECUTED in generation 2+, burning the scarce code-search quota hunting a
+  // fiction. Now: every query passes detectClaudeModels; fiction minus authority-
+  // confirmed waves is dropped here, with the reason recorded so the briefing shows it.
+  const confirmedWaves = await authorityConfirmedWaveIds().catch(() => new Set<string>());
+  const rawQueries = strArr(j.nextQueries, 12);
+  const dropped: string[] = [];
+  const nextQueries = rawQueries.filter((q) => {
+    const fiction = detectClaudeModels(q).fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
+    if (fiction.length > 0) {
+      dropped.push(`"${q}" (${fiction.join(", ")})`);
+      return false;
+    }
+    return true;
+  });
   return {
-    nextQueries: strArr(j.nextQueries, 12),
-    blindSpots: strArr(j.blindSpots, 6),
-    rationale: str(j.rationale),
+    nextQueries,
+    blindSpots: [...strArr(j.blindSpots, 6)],
+    rationale:
+      str(j.rationale) +
+      (dropped.length
+        ? ` [truth gate: ${dropped.length} proposed query(ies) dropped — fictional/unconfirmed model ids: ${dropped.join("; ")}]`
+        : ""),
   };
+}
+
+/** Fiction ids the radar has authority-confirmed as REAL waves (org:anthropics hit) —
+ *  those may be hunted; they are not contamination. (Same source as the genesis gate.) */
+async function authorityConfirmedWaveIds(): Promise<Set<string>> {
+  const row = await db.setting.findUnique({ where: { key: "frontierLedger" } });
+  if (!row) return new Set();
+  try {
+    const entries = JSON.parse(row.value) as Array<{ id?: string; confirmed?: boolean }>;
+    if (!Array.isArray(entries)) return new Set();
+    return new Set(entries.filter((e) => e?.confirmed && typeof e.id === "string").map((e) => e.id as string));
+  } catch {
+    return new Set(); // an unreadable ledger never widens the filter
+  }
 }
 
 // ---------- P8: executive briefing ----------

@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generatedAt": "2026-11-13T11:17:11.782Z",
+ "generatedAt": "2026-11-13T15:14:43.177Z",
  "note": "WO5 of chimera #3 (verified-mutation-flywheel): every verdict recorded; base rates feed the next adversarial pass.",
  "baseRates": {
   "huntsTotal": 32,
@@ -10,7 +10,7 @@
   "avgCodeHitsPerSweep": 2265.030303030303,
   "avgCandidatesPerSweep": 2314.3939393939395,
   "enrichmentRate": 0.006520458265139116,
-  "chimerasBorn": 5,
+  "chimerasBorn": 6,
   "genesTotal": 1752
  },
  "generations": [
@@ -750,6 +750,18 @@
     "wilsonwaters/3d-printing",
     "openwebf/webf",
     "instructure/instructure-ui"
+   ]
+  },
+  {
+   "id": 6,
+   "name": "adversarial-verification-orchestrator",
+   "born": "2026-11-13",
+   "parents": [
+    "promptfoo/promptfoo",
+    "anomalyco/models.dev",
+    "diegosouzapw/awesome-omni-skill",
+    "rjmurillo/ai-agents",
+    "code-yeongyu/oh-my-openagent"
    ]
   }
  ]

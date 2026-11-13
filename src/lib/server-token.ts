@@ -8,7 +8,9 @@ import type { NextRequest } from "next/server";
 // (upsert) so the server can use it in future calls without the header.
 // ============================================================
 
-const TOKEN_KEY = "github_pat";
+// round 8: exported — the key literal was duplicated in live-hunt.ts; renaming one
+// side would silently orphan the other module's token path. One key, one source.
+export const TOKEN_KEY = "github_pat";
 /**
  * Lenient validity check: GitHub itself is the source of truth (capture happens only after a 200 from GitHub),
  * so any reasonable string of suitable length is accepted — no strictness about prefixes that may change.

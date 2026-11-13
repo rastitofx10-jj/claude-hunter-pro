@@ -19,9 +19,11 @@ try {
   const row = await db.setting.findUnique({ where: { key: "github_pat" } });
   if (!row?.value) { console.error("NO_PAT"); process.exit(1); }
 
+  // round 8: the one unguarded fetch in the verifier family — a stalled connection
+  // hung the script indefinitely (cron-wrapper deadlock). 15s hard timeout now.
   const res = await fetch(
     "https://api.github.com/repos/rastitofx10-jj/claude-hunter-pro/branches/main",
-    { headers: { Authorization: `Bearer ${row.value}`, Accept: "application/vnd.github+json" } }
+    { headers: { Authorization: `Bearer ${row.value}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15_000) }
   );
   if (res.status !== 200) { console.error("API_ERR", res.status); process.exit(1); }
   const j = await res.json();

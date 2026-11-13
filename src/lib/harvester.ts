@@ -61,7 +61,10 @@ interface GhSearchResp {
 export interface HarvestRepoReport {
   repo: string;
   stars: number;
+  /** round 8: post-gate KEPT count (what the library actually holds after this mine) */
   artifacts: number;
+  /** round 8: raw files found pre-gate — discovery truth, kept for transparency */
+  rawFound?: number;
   kinds: string[];
   newCount: number;
   updatedCount?: number;
@@ -301,7 +304,15 @@ export async function harvestRepo(
   return {
     repo: fullName,
     stars: pre?.stars ?? 0,
-    artifacts: pkg.artifacts.length,
+    // round 8 — honest artifacts semantics: this was the RAW pre-gate count. The
+    // empty-mine memory (deep-sweep strikes) and "repos yielded genes" KPIs read
+    // this field — a repo whose every artifact was rejected by the quality gate
+    // reported artifacts>0, got NO strike, wasn't blocked by minedNames either
+    // (0 kept genes) → re-mined from GitHub on EVERY sweep/hunt forever, burning
+    // the scarce quota; the "X/Y repos yielded genes" numbers counted rejects.
+    // Now: artifacts = POST-GATE kept count; rawFound keeps the discovery truth.
+    artifacts: artifacts.length,
+    rawFound: pkg.artifacts.length,
     kinds: Array.from(kinds),
     newCount,
     updatedCount,

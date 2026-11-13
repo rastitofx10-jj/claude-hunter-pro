@@ -254,8 +254,20 @@ export async function promoteWithAuthority(
   maxChecks = 3
 ): Promise<{ checked: number; confirmed: number }> {
   const ledger = await loadFrontierLedger();
+  // round 8: authorityCheckedAt was WRITE-ONLY (nothing ever read it) — a definitive
+  // miss (org:anthropics does NOT contain the id) left the entry in pending, costing
+  // one real code-search query (the 10/min quota the codebase paces at 6.5s) on EVERY
+  // sweep/hunt/arsenal build, forever, for spam-vouched entries that will never confirm.
+  // It is read now: a definitive miss backs off 7 days before it can be re-checked.
+  const AUTHORITY_MISS_BACKOFF_MS = 7 * 24 * 3600_000;
   const pending = ledger
-    .filter((e) => e.vouchReached && !e.confirmed && !e.authorityHit && e.kind !== "fiction")
+    .filter((e) => {
+      if (!e.vouchReached || e.confirmed || e.authorityHit || e.kind === "fiction") return false;
+      if (e.authorityCheckedAt && Date.now() - new Date(e.authorityCheckedAt).getTime() < AUTHORITY_MISS_BACKOFF_MS) {
+        return false; // definitively checked recently — backoff window
+      }
+      return true;
+    })
     .sort((a, b) => b.mentions - a.mentions)
     .slice(0, maxChecks);
   if (pending.length === 0) return { checked: 0, confirmed: 0 };

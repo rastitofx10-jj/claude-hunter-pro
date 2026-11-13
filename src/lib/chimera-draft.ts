@@ -25,6 +25,19 @@ import type { WorkOrder } from "./genesis";
 
 const DRAFT_DIR = path.join(process.cwd(), "reports", "state", "chimera-drafts");
 
+// round 8: draftId is USER-CONTROLLED and reaches path.join unvalidated —
+// `draftId=../../dna-snapshot` resolved OUTSIDE the draft dir and deleted the
+// disaster-recovery snapshot (and publishDraft would delete any traversed .json
+// after a successful create). Generated ids are exactly 8 hex chars; anything else
+// is rejected before it ever touches the filesystem.
+const DRAFT_ID_RE = /^[a-f0-9]{8}$/;
+function draftPath(draftId: string) {
+  if (!DRAFT_ID_RE.test(draftId)) {
+    throw new Error(`invalid draftId "${draftId.slice(0, 40)}" — expected 8 hex chars`);
+  }
+  return path.join(DRAFT_DIR, `${draftId}.json`);
+}
+
 /** A principle / work-order entry — the generator emits strings or {title, spec} objects.
  *  WorkOrder (genesis) is named explicitly: an interface without an index signature
  *  is not assignable to Record<string, unknown> — a known TS strictness rule that
@@ -127,9 +140,13 @@ export async function validateChimeraCandidate(c: ChimeraCandidate): Promise<Val
   });
 
   // G5 — skill body: frontmatter + length, no placeholder junk
+  // (round 8: frontmatter check required \n and broke on CRLF bodies that the
+  //  gene gate (quality-gate.ts) deliberately accepts; the junk check matched the
+  //  bare word "undefined" — legitimate TS prose like `typeof x === "undefined"`
+  //  permanently failed the gate. Now: placeholder-SHAPED matches only.)
   const md = c.skillMd ?? "";
-  const hasFront = /^---\n[\s\S]*?\n---/.test(md);
-  const noJunk = !/(TODO|XXX|FIXME|【|undefined)/.test(md);
+  const hasFront = /^---\r?\n[\s\S]*?\r?\n---/.test(md);
+  const noJunk = !/((TODO|FIXME|XXX)\s*[:=]|【|\bundefined\b\s*[:=,}\]]|\bNaN\b\s*[:=,}\]])/.test(md);
   gates.push({
     gate: "G5-skill-md",
     ok: md.length >= 800 && hasFront && noJunk,
@@ -149,10 +166,10 @@ export async function validateChimeraCandidate(c: ChimeraCandidate): Promise<Val
 
 // ------------------------------------------------------------
 // Draft file store — atomic writes, same tmp+rename discipline as snapshots
+// (draftPath lives at the top of the module — round 8: it guards every path
+// resolution with the 8-hex-char format check, so it is defined once, early,
+// before any function that can touch the filesystem with a user-supplied id.)
 // ------------------------------------------------------------
-function draftPath(draftId: string) {
-  return path.join(DRAFT_DIR, `${draftId}.json`);
-}
 
 export async function saveDraft(c: ChimeraCandidate): Promise<DraftRecord> {
   const validation = await validateChimeraCandidate(c);
@@ -178,10 +195,23 @@ export async function saveDraft(c: ChimeraCandidate): Promise<DraftRecord> {
 export async function listDrafts(): Promise<DraftRecord[]> {
   try {
     const files = (await readdir(DRAFT_DIR)).filter((f) => f.endsWith(".json"));
-    const drafts = await Promise.all(
+    // round 8: Promise.all + one bad file (corrupt JSON / missing createdAt) rejected
+    // the WHOLE list and the outer catch returned [] — every valid draft vanished
+    // from the UI as if lost. allSettled + per-file guard: a bad file is skipped and
+    // logged, never fatal to the rest.
+    const settled = await Promise.allSettled(
       files.map(async (f) => JSON.parse(await readFile(path.join(DRAFT_DIR, f), "utf8")) as DraftRecord)
     );
-    return drafts.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const drafts: DraftRecord[] = [];
+    settled.forEach((s, i) => {
+      if (s.status === "fulfilled" && s.value && typeof s.value.createdAt === "string") {
+        drafts.push(s.value);
+      } else {
+        const reason = s.status === "rejected" ? String(s.reason?.message ?? s.reason) : "not a draft shape";
+        console.error(`[chimera-draft] skipping unreadable draft file ${files[i]}: ${reason}`);
+      }
+    });
+    return drafts.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   } catch {
     return [];
   }
@@ -205,30 +235,53 @@ export async function deleteDraft(draftId: string): Promise<boolean> {
   }
 }
 
-/** Publish: re-validate (batch, all gates, fresh) then create the live row. */
+/** Publish: re-validate (batch, all gates, fresh) then create the live row.
+ * round 8: a double-click on Publish ran two concurrent publishes — both passed
+ * validation before either created → two identical live rows (Chimera.name has no
+ * unique constraint). An in-flight guard per draftId closes the window in-process. */
+const publishingDrafts = new Set<string>();
+
 export async function publishDraft(draftId: string): Promise<
-  { ok: true; id: number; validation: ValidationResult } | { ok: false; error: string; validation?: ValidationResult }
+  { ok: true; id: number; validation: ValidationResult; draftCleanupFailed?: boolean } | { ok: false; error: string; validation?: ValidationResult }
 > {
-  const draft = await getDraft(draftId);
-  if (!draft) return { ok: false, error: `draft ${draftId} not found` };
-
-  // batch re-validation — the ratchet: the same gates, checked again NOW
-  const validation = await validateChimeraCandidate(draft);
-  if (!validation.passed) {
-    return { ok: false, error: "re-validation failed — draft stale or invalid", validation };
+  if (!DRAFT_ID_RE.test(draftId)) return { ok: false, error: "invalid draftId" };
+  if (publishingDrafts.has(draftId)) {
+    return { ok: false, error: "publish already in flight for this draft — retry once it settles" };
   }
+  publishingDrafts.add(draftId);
+  try {
+    const draft = await getDraft(draftId);
+    if (!draft) return { ok: false, error: `draft ${draftId} not found` };
 
-  const saved = await db.chimera.create({
-    data: {
-      name: draft.chimeraName,
-      oneLiner: draft.oneLiner ?? null,
-      sources: draft.sources.join(","),
-      skillMd: draft.skillMd,
-      principles: JSON.stringify(draft.principles),
-      workOrders: JSON.stringify(draft.workOrders),
-      breakthrough: draft.breakthrough ?? null,
-    },
-  });
-  await deleteDraft(draftId);
-  return { ok: true, id: saved.id, validation };
+    // batch re-validation — the ratchet: the same gates, checked again NOW
+    const validation = await validateChimeraCandidate(draft);
+    if (!validation.passed) {
+      return { ok: false, error: "re-validation failed — draft stale or invalid", validation };
+    }
+
+    // re-check name uniqueness right before the create (the validation above can
+    // race a concurrent create from the synthesize path)
+    const clash = await db.chimera.findFirst({ where: { name: draft.chimeraName } });
+    if (clash) {
+      return { ok: false, error: `name collides with chimera #${clash.id} — rename the draft`, validation };
+    }
+
+    const saved = await db.chimera.create({
+      data: {
+        name: draft.chimeraName,
+        oneLiner: draft.oneLiner ?? null,
+        sources: draft.sources.join(","),
+        skillMd: draft.skillMd,
+        principles: JSON.stringify(draft.principles),
+        workOrders: JSON.stringify(draft.workOrders),
+        breakthrough: draft.breakthrough ?? null,
+      },
+    });
+    // round 8: the delete result was ignored — a failed cleanup left a re-publishable
+    // draft (silent duplicate on the second publish). Report it instead of swallowing.
+    const cleaned = await deleteDraft(draftId);
+    return { ok: true, id: saved.id, validation, draftCleanupFailed: !cleaned };
+  } finally {
+    publishingDrafts.delete(draftId);
+  }
 }

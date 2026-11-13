@@ -140,8 +140,11 @@ export async function generateChimera(
   // "elite-parallel-orchestrator" — the LLM copies the example name out of the
   // schema line. The example is now banned explicitly, existing names are
   // injected into the prompt, and a colliding name gets a deterministic suffix.
+  // round 8: take:100 with id asc only ever saw the OLDEST 100 names — past chimera
+  // #101 the ban list silently truncated and the collision family could return.
+  // The table is tiny; the full list costs nothing.
   const existingNames: string[] = await db.chimera
-    .findMany({ select: { name: true }, orderBy: { id: "asc" }, take: 100 })
+    .findMany({ select: { name: true }, orderBy: { id: "asc" } })
     .then((rows) => rows.map((r) => r.name).filter(Boolean));
 
   const prompt = `The mined DNA (real capability files, real-model truth gate):
@@ -208,7 +211,12 @@ Return 3-5 work orders, sorted by value to the product.`;
       // post-birth truth scan over EVERY output field (not just skillMd — the
       // contamination in chimera #5 sat in a routing block, but workOrders carry
       // claudePrompt strings too)
-      const wholeOutput = JSON.stringify([j.skillMd, j.oneLiner, j.principles, j.workOrders, j.breakthrough]);
+      // round 8: chimeraName was NOT in the scanned array — a name like
+      // "fable-5-1-router" or "claude-opus-5-5-router" passed sanitizeSlug untouched
+      // and leaked into db.chimera.name, the UI, and the .claude/skills/<name>/
+      // injection path with no gate. Given the LLM copied the example name three
+      // times running, name contamination is a proven failure mode.
+      const wholeOutput = JSON.stringify([j.chimeraName, j.skillMd, j.oneLiner, j.principles, j.workOrders, j.breakthrough]);
       const contamination = scanChimeraContamination(wholeOutput, confirmedWaves);
       if (contamination.length > 0 && attempt < 2) {
         truthFeedback = contamination.join(", ");
@@ -219,8 +227,14 @@ Return 3-5 work orders, sorted by value to the product.`;
       // Name-collision fallback (belt-and-suspenders): if the LLM ignored the
       // ban, a deterministic suffix keeps records distinguishable — the same
       // physical collision that silently dropped chimera #5 from restores.
+      // round 8: the suffixed name was never RE-CHECKED — a third "elite-parallel-
+      // orchestrator" could collide with a pre-existing -gen suffix. Loop until free.
       let name = sanitizeSlug(j.chimeraName, "elite-chimera");
-      if (existingNames.includes(name)) name = `${name}-gen${existingNames.length + 1}`;
+      if (existingNames.includes(name)) {
+        let n = existingNames.length + 1;
+        while (existingNames.includes(`${name}-gen${n}`)) n++;
+        name = `${name}-gen${n}`;
+      }
       return {
         chimeraName: name,
         oneLiner: str(j.oneLiner),

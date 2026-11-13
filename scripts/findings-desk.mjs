@@ -30,7 +30,11 @@ const argOf = (flag) => {
 
 const db = new PrismaClient();
 const STATE_FILE = "reports/state/findings-desk.json";
-const RECHECK_DAYS = Number(argOf("--recheck-days") ?? 30);
+// round 8: `--recheck-days` as the LAST argv token made argOf() return undefined →
+// Number(undefined)=NaN → recheckMs=NaN → `now - x > NaN` always false → re-checking
+// silently disabled forever. A non-numeric/missing value falls back to the default 30.
+const RECHECK_ARG = argOf("--recheck-days");
+const RECHECK_DAYS = RECHECK_ARG != null && Number.isFinite(Number(RECHECK_ARG)) ? Number(RECHECK_ARG) : 30;
 const SLOTS = 5; // parallel reviewer slots (assay: keep the pool full, refill on completion)
 
 // ---- state ----
@@ -88,11 +92,41 @@ const verdicts = { confirmed: 0, downgraded: 0, escalated: 0, missing: 0, stale:
 async function reviewer() {
   while (idx < queue.length) {
     const [name, rec] = queue[idx++];
-    const v = await review(name, rec);
+    // round 8: review() had no guard — gh() swallows JSON-parse failures and returns
+    // {status:200, body:null}; `live.stargazers_count` then threw, Promise.all rejected,
+    // the top-level await threw, and finish()/writeFileSync never ran: every review
+    // completed earlier in the tick was LOST and the process died unhandled.
+    let v;
+    try {
+      v = await review(name, rec);
+    } catch (e) {
+      v = {
+        outcome: "needsHuman",
+        record: {
+          repo: name,
+          sweepFound: rec.sweep,
+          recordedTier: rec.tier,
+          checkedAt: new Date().toISOString(),
+          liveVerdict: "unverified",
+          reason: `desk internal error: ${String(e?.message ?? e).slice(0, 120)}`,
+        },
+        file: {
+          repo: name,
+          filedAt: new Date().toISOString(),
+          reason: "desk internal error — retry next tick",
+          evidence: { tier: rec.tier, stars: rec.stars, sweep: rec.sweep },
+        },
+      };
+    }
     verdicts[v.outcome]++;
     if (v.outcome === "needsHuman") state.needsHuman.push(v.file);
     else state.needsHuman = state.needsHuman.filter((h) => h.repo !== name);
-    state.reviewed[name] = v.record;
+    // round 8 blackout fix: a needsHuman outcome wrote state.reviewed[name] with
+    // checkedAt=now — the queue filter then excluded the repo for a full 30 days while
+    // the filed reason literally said "retry next tick". A transient failure (5xx/0/
+    // timeout/non-JSON body) no longer marks the repo reviewed: it re-enters next tick.
+    // Only a real verdict (confirmed/downgraded/missing) closes the cadence window.
+    if (v.outcome !== "needsHuman") state.reviewed[name] = v.record;
     reviews++;
   }
 }
@@ -129,6 +163,20 @@ async function review(name, rec) {
     };
   }
   const live = res.body;
+  // round 8: a 200 with a non-JSON body (proxy page, truncated response) left live=null
+  // and `live.stargazers_count` below crashed the whole tick — guarded as needsHuman.
+  if (!live || typeof live.stargazers_count !== "number") {
+    return {
+      outcome: "needsHuman",
+      record: { ...record, liveVerdict: "unverified", reason: "GitHub 200 with unreadable body" },
+      file: {
+        repo: name,
+        filedAt: checkedAt,
+        reason: "verification unreachable (unreadable body) — retry next tick",
+        evidence: { tier: rec.tier, stars: rec.stars, sweep: rec.sweep },
+      },
+    };
+  }
   record.liveStars = live.stargazers_count;
   record.livePushedAt = live.pushed_at;
   record.archived = !!live.archived;
@@ -181,7 +229,9 @@ state.ticksDone++;
 const all = Object.values(state.reviewed);
 state.baseRates = {
   reviewsTotal: all.length,
-  confirmedRate: rate(all.filter((r) => r.liveVerdict !== "gone" && !String(r.reason ?? "").includes("stale") && !String(r.reason ?? "").includes("sag") && !String(r.reason ?? "").includes("ARCHIVED")).length, all.length),
+  // round 8: "unverified" records (needsHuman outcomes) were counted as confirmed —
+  // a network hiccup inflated the WO5 confirmed base rate. Excluded now.
+  confirmedRate: rate(all.filter((r) => r.liveVerdict !== "gone" && r.liveVerdict !== "unverified" && !String(r.reason ?? "").includes("stale") && !String(r.reason ?? "").includes("sag") && !String(r.reason ?? "").includes("ARCHIVED") && !String(r.reason ?? "").startsWith("desk internal")).length, all.length),
   missingRate: rate(all.filter((r) => r.liveVerdict === "gone").length, all.length),
   downgradedRate: rate(all.filter((r) => String(r.reason ?? "").match(/stale|sag|ARCHIVED/)).length, all.length),
   needsHumanOpen: state.needsHuman.length,

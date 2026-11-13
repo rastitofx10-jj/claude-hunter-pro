@@ -24,7 +24,12 @@ const genesTotal = await db.dnaArtifact.count();
 const entries = [];
 let prevDna = 0;
 for (const h of hunts) {
-  const dnaAfter = h.dnaAfter ?? null;
+  // round 8: schema default dnaAfter=0 — failed/interrupted hunts carry 0, which passed
+  // `!= null`, reset prevDna to 0, and credited the NEXT completed hunt with the whole
+  // library as genesAdded (avgGenesPerHuntGen massively inflated — this file is the
+  // base-rate ammunition for the next adversarial pass). 0 is treated as unset now,
+  // and attribution is gated on the hunt actually finishing.
+  const dnaAfter = h.status === "done" && (h.dnaAfter ?? 0) > 0 ? h.dnaAfter : null;
   const genesAdded = dnaAfter != null ? Math.max(0, dnaAfter - prevDna) : null;
   if (dnaAfter != null) prevDna = dnaAfter;
   entries.push({
@@ -85,13 +90,15 @@ const out = {
   chimeras: chimeraHistory,
 };
 
-writeFileSync("reports/state/change-history.json", JSON.stringify(out, null, 1), "utf8");
-
 // diff-aware console note
-const prev = existsSync("reports/state/change-history.json.bak")
-  ? safeParse(readFileSync("reports/state/change-history.json.bak", "utf8"))
+// round 8: the old code diffed against a .bak file that NOTHING ever writes — newGens
+// was always the full count presented as "(+N)" new. The previous content is captured
+// in memory BEFORE the overwrite now, so the diff is real.
+const prevRaw = existsSync("reports/state/change-history.json")
+  ? safeParse(readFileSync("reports/state/change-history.json", "utf8"))
   : null;
-const newGens = prev ? entries.length - (prev.generations ?? []).length : entries.length;
+writeFileSync("reports/state/change-history.json", JSON.stringify(out, null, 1), "utf8");
+const newGens = prevRaw ? entries.length - (prevRaw.generations ?? []).length : entries.length;
 console.log(
   `HISTORY_OK | gens=${entries.length} (+${newGens}) sweeps=${sweepHistory.length} chimeras=${chimeraHistory.length} genes=${genesTotal}`
 );

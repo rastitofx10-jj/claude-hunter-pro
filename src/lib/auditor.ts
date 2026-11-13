@@ -15,7 +15,7 @@
 import { db } from "./db";
 import { extractJson, safeJsonParse, str, strArr } from "./ai-json";
 import { llmComplete } from "./zai";
-import { ghFetch, ghFetchRaw, ghSearchWithBackoff } from "./github";
+import { ghFetch, ghFetchRaw, ghSearchWithBackoff, GhError } from "./github";
 import { QUALIFYING_MODELS } from "./claude-models";
 import { resolveToken } from "./server-token";
 import type { NextRequest } from "next/server";
@@ -93,24 +93,33 @@ async function llmJson(prompt: string): Promise<Record<string, unknown>> {
 /** Ground truth: fetch the raw file and grep for the strings. It used to receive only the
  * strings of the last claim — when the claims were two different models, the file was
  * grepped with the second model's strings and could fail falsely
- * ("refuted" even though the evidence was real). */
+ * ("refuted" even though the evidence was real).
+ * round 8: a transport failure (403 rate-limit on the contents API, timeout, 5xx) was
+ * swallowed into `return null` — the check then landed in `refuted` (verified:false,
+ * NO error field) and was fed to the anti-slop LLM as "ground truth that cannot be
+ * disputed": a legitimate repo's evidence got permanently marked refuted for a
+ * failure of the auditor's own network call. Now only a 404/422 (file gone) or a
+ * clean miss refutes; everything else THROWS and the caller records check.error. */
 async function grepRawFile(
   fullName: string,
   path: string,
   needles: string[],
   token: string | null
 ): Promise<string | null> {
+  let content: string;
   try {
-    const content = await ghFetchRaw(
+    content = await ghFetchRaw(
       `/repos/${fullName}/contents/${path.split("/").map(encodeURIComponent).join("/")}`,
       token
     );
-    const lower = content.toLowerCase();
-    for (const n of needles) {
-      if (lower.includes(n)) return path;
-    }
-  } catch {
-    return null;
+  } catch (e) {
+    const status = e instanceof GhError ? e.status : 0;
+    if (status === 404 || status === 422) return null; // file deleted/renamed — a clean miss
+    throw e; // 403/429/5xx/network — an API error is not a refutation
+  }
+  const lower = content.toLowerCase();
+  for (const n of needles) {
+    if (lower.includes(n)) return path;
   }
   return null;
 }
@@ -168,6 +177,9 @@ export async function verifyEvidenceLive(
           }
         }
       }
+      // round 8 note: grepRawFile now THROWS on transport errors — the catch below marks
+      // the check with error ("technical failure", not refuted) instead of letting a
+      // rate-limited contents-API call silently refute real evidence.
     } catch (e) {
       check = {
         fullName: f.fullName,

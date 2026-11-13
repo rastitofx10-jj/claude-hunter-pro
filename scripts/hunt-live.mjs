@@ -36,7 +36,7 @@ async function phaseToken() {
     console.error(`FAIL | token store → ${r.status}: ${JSON.stringify(r.body)}`);
     process.exit(1);
   }
-  console.log(`PASS | token stored server-side | hasToken=${r.body.hasToken} masked=${r.body.masked ?? r.body.tokenPreview ?? "?"}`);
+  console.log(`PASS | token stored server-side | exists=${r.body.exists ?? r.body.hasToken ?? "?"} masked=${r.body.masked ?? r.body.tokenPreview ?? "?"}`);
   // quota snapshot
   const q = await j("/api/rate-limit", {}, 30_000);
   if (q.status === 200) {
@@ -49,6 +49,9 @@ async function phaseToken() {
 async function phaseHunt() {
   let huntId = null;
   const list = await j("/api/live-hunt");
+  // round 8: a non-200 list call (body null) silently degraded to "no running hunt" →
+  // POST start → spurious 409 with a misleading error. Report the actual GET failure.
+  if (list.status !== 200) { console.error(`FAIL | hunt list → ${list.status}: ${JSON.stringify(list.body).slice(0, 200)}`); process.exit(1); }
   const running = (list.body?.items ?? []).find((h) => h.status === "running");
   if (running) {
     huntId = running.id;
@@ -120,8 +123,31 @@ async function phaseHarvest() {
 // ---------- phase: sweep ----------
 async function phaseSweep() {
   const list = await j("/api/sweep");
+  // round 8: same list-status discipline as phaseHunt (a 500 used to masquerade as "no active sweep")
+  if (list.status !== 200) { console.error(`FAIL | sweep list → ${list.status}: ${JSON.stringify(list.body).slice(0, 200)}`); process.exit(1); }
   const active = list.body?.active;
   let sweepId = active?.id ?? null;
+  if (sweepId) {
+    // round 8: zombie guard — ported from daily-cycle.mjs. A sweep whose server died
+    // mid-run stays "running" forever from GET's perspective; every run of this phase
+    // "resumed" it, polled 540s, timed out, exited 1 — and the rerun hit the same zombie
+    // indefinitely. updatedAt older than 10 min while claiming to run = dead → restart.
+    const full = (list.body?.items ?? []).find((i) => i.id === sweepId);
+    const stale = full?.updatedAt ? Date.now() - new Date(full.updatedAt).getTime() > 10 * 60_000 : false;
+    if (stale) {
+      console.log(`  zombie sweep #${sweepId} detected (no progress 10 min) — marking failed, starting fresh`);
+      try {
+        const { PrismaClient } = await import("@prisma/client");
+        const pdb = new PrismaClient();
+        await pdb.sweepRun.updateMany({
+          where: { status: "running" },
+          data: { status: "failed", error: "run interrupted (server recycled mid-sweep) — auto-marked" },
+        });
+        await pdb.$disconnect();
+      } catch { /* DB fix best-effort */ }
+      sweepId = null;
+    }
+  }
   if (sweepId) console.log(`  resuming sweep #${sweepId} (phase=${active.phase})`);
   else {
     const start = await j("/api/sweep", { method: "POST" }, 30_000);
@@ -159,10 +185,12 @@ async function phaseStatus() {
   const sweeps = await j("/api/sweep");
   console.log("=== STATUS ===");
   console.log(`genes=${Array.isArray(geneItems) ? geneItems.length : genes.body?.total ?? "?"}`);
-  console.log(`hunts=${(hunts.body?.items ?? []).length} (done=${(hunts.body?.items ?? []).filter((h) => h.status === "done").length})`);
-  console.log(`sweeps=${(sweeps.body?.items ?? []).length}`);
+  // round 8: the list routes are capped (take:12 / take:50) — the counts printed the
+  // PAGE length, not the library truth. The routes expose `total` for exactly this.
+  console.log(`hunts=${hunts.body?.total ?? (hunts.body?.items ?? []).length} (done=${hunts.body?.totalDone ?? (hunts.body?.items ?? []).filter((h) => h.status === "done").length})`);
+  console.log(`sweeps=${sweeps.body?.total ?? (sweeps.body?.items ?? []).length} (recent=${(sweeps.body?.items ?? []).length})`);
   const m = missions.body?.items ?? missions.body?.missions ?? [];
-  console.log(`missions=${Array.isArray(m) ? m.length : "?"}`);
+  console.log(`missions=${missions.body?.total ?? (Array.isArray(m) ? m.length : "?")}`);
 }
 
 const phase = process.argv[2] ?? "status";

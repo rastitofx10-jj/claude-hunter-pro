@@ -18,7 +18,16 @@ if (!existsSync(FILE)) {
   process.exit(1);
 }
 
-const snap = JSON.parse(readFileSync(FILE, "utf8"));
+// round 8: this parse sat BEFORE the try — a corrupt/partial snapshot crashed with a
+// raw SyntaxError + stack trace, the friendly RESTORE_FAIL path never ran, and db.$disconnect()
+// in the finally was skipped. The parse is inside the try now.
+let snap;
+try {
+  snap = JSON.parse(readFileSync(FILE, "utf8"));
+} catch (e) {
+  console.error("RESTORE_FAIL | snapshot unreadable (corrupt or partially written):", e.message);
+  process.exit(1);
+}
 const dt = (s) => (s ? new Date(s) : new Date());
 
 try {
@@ -41,7 +50,18 @@ try {
         notes: r.notes,
         createdAt: dt(r.createdAt),
       },
-      update: { score: r.score, stars: r.stars, notes: r.notes },
+      update: {
+        score: r.score,
+        stars: r.stars,
+        notes: r.notes,
+        // round 8: the update branch never restored these — a partially-populated DB
+        // (rows exist, licenses/models null) stayed stale even though the snapshot held
+        // the backfilled values; only a later license-backfill healed genes, never watchlist
+        license: r.license ?? null,
+        models: r.models,
+        evidence: r.evidence,
+        description: r.description,
+      },
     });
     repos++;
   }
@@ -52,8 +72,40 @@ try {
   // contiguous 1..N — any future deletion (quality purge, fiction purge) would make
   // every restore renumber the table and silently point dnaRefs at the WRONG genes.
   // Explicit ids make the mapping structural, not coincidental.
+  // round 8 P2002 guard: the upsert matched by natural key but CREATED with the explicit
+  // snapshot id — on a partially re-grown DB (any hunt/harvest ran before restore; the
+  // app auto-mines eagerly) a new gene already occupied that id at a DIFFERENT (repo,path)
+  // → primary-key collision → RESTORE_FAIL mid-loop, earlier rows committed, later rows
+  // skipped. Now: id-first (heal), natural-key second (update), create only when neither
+  // exists — and the update branch restores the fields it never touched.
   let genes = 0;
+  let geneIdSkips = 0;
   for (const a of snap.dnaArtifacts ?? []) {
+    const byId = await db.dnaArtifact.findUnique({ where: { id: a.id } });
+    if (byId) {
+      if (byId.sourceRepo === a.sourceRepo && byId.path === a.path) {
+        // same gene, partially populated — heal the fields restore never touched
+        await db.dnaArtifact.update({
+          where: { id: a.id },
+          data: {
+            content: a.content,
+            description: a.description,
+            size: a.size,
+            license: a.license ?? null,
+            name: a.name,
+            kind: a.kind,
+            rawUrl: a.rawUrl,
+          },
+        });
+        genes++;
+        continue;
+      }
+      // id occupied by a DIFFERENT gene (post-wipe regrowth) — the snapshot gene has no
+      // safe home; skip loudly rather than crash half-way through the library
+      geneIdSkips++;
+      console.warn(`  gene id ${a.id} (${a.sourceRepo}/${a.path}) collides with a re-grown gene — skipped`);
+      continue;
+    }
     await db.dnaArtifact.upsert({
       where: { sourceRepo_path: { sourceRepo: a.sourceRepo, path: a.path } },
       create: {
@@ -69,7 +121,15 @@ try {
         license: a.license ?? null,
         createdAt: dt(a.createdAt),
       },
-      update: { content: a.content, description: a.description, size: a.size },
+      update: {
+        content: a.content,
+        description: a.description,
+        size: a.size,
+        license: a.license ?? null,
+        name: a.name,
+        kind: a.kind,
+        rawUrl: a.rawUrl,
+      },
     });
     genes++;
   }
@@ -216,7 +276,7 @@ try {
   }
 
   console.log(
-    `RESTORE_OK | repos=${repos} genes=${genes} chimeras=${chimeras} missions=${missions} hunts=${hunts} sweeps=${sweeps} history=${history} learning=${learning}`,
+    `RESTORE_OK | repos=${repos} genes=${genes}${geneIdSkips ? ` geneIdSkips=${geneIdSkips}` : ""} chimeras=${chimeras} missions=${missions} hunts=${hunts} sweeps=${sweeps} history=${history} learning=${learning}`,
   );
   const total = await db.dnaArtifact.count();
   console.log(`  library now: ${total} genes`);

@@ -19,6 +19,7 @@
 import { db } from "@/lib/db";
 import { safeJsonParse } from "./ai-json";
 import { tierOf } from "./github";
+import { TOKEN_KEY } from "./server-token";
 import {
   buildAdaptiveArsenal,
   runQueryArsenal,
@@ -114,7 +115,7 @@ interface HuntCtx {
 
 async function getStoredToken(): Promise<string | null> {
   try {
-    const row = await db.setting.findUnique({ where: { key: "github_pat" } });
+    const row = await db.setting.findUnique({ where: { key: TOKEN_KEY } });
     if (row?.value?.trim()) return row.value.trim();
   } catch {
     // fall back to env
@@ -898,17 +899,11 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   // Mission status update — forward-only (one rule from the mission-status module), report history is preserved
   // Report idempotency: a grow retry doesn't duplicate records — the previous record from the same source
   // is replaced. Before: a retry after a mission-update failure added a duplicate report.
-  const nextStatus = OUTCOME_STATUS[outcome] ?? mission.status;
-  const finalStatus = advanceStatus(mission.status, nextStatus);
-  let reportHistory: Array<Record<string, unknown>> = [];
-  try {
-    const prev: unknown = mission.report ? JSON.parse(mission.report) : null;
-    if (Array.isArray(prev)) reportHistory = prev.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
-    else if (prev && typeof prev === "object") reportHistory = [prev as Record<string, unknown>];
-  } catch {
-    reportHistory = [];
-  }
-  reportHistory = reportHistory.filter((r) => r.source !== `livehunt-${ctx.id}`);
+  // round 8: the read at the top of stageGrow is up to ~110s stale (distillation + DNA
+  // birth). A manual field report landing in that window was silently ERASED by this
+  // last-writer-wins update — the exact lost-update race the manual report route already
+  // fixed with transaction + re-read + CAS. Port of that fix: fresh re-read, history
+  // rebuilt from the FRESH value, compare-and-swap on (status, report), 3 attempts.
   const newReport = {
     outcome,
     notes: notes || null,
@@ -919,10 +914,41 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     source: `livehunt-${ctx.id}`,
     reportedAt: new Date().toISOString(),
   };
-  await db.mission.update({
-    where: { id: missionId },
-    data: { status: finalStatus, report: JSON.stringify([...reportHistory, newReport].slice(-20)) },
-  });
+  let growErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const fresh = await db.mission.findUnique({ where: { id: missionId }, select: { status: true, report: true } });
+      if (!fresh) throw new LiveHuntError(`Mission #${missionId} has disappeared`, 404);
+      let freshHistory: Array<Record<string, unknown>> = [];
+      try {
+        const prev: unknown = fresh.report ? JSON.parse(fresh.report) : null;
+        if (Array.isArray(prev)) freshHistory = prev.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
+        else if (prev && typeof prev === "object") freshHistory = [prev as Record<string, unknown>];
+      } catch {
+        freshHistory = [];
+      }
+      freshHistory = freshHistory.filter((r) => r.source !== `livehunt-${ctx.id}`);
+      const freshFinalStatus = advanceStatus(fresh.status, OUTCOME_STATUS[outcome] ?? fresh.status);
+      const finalReportJson = JSON.stringify([...freshHistory, newReport].slice(-20));
+      // CAS with Prisma-null semantics (report IS NULL matches a never-reported mission)
+      const cas = await db.mission.updateMany({
+        where: { id: missionId, status: fresh.status, report: fresh.report },
+        data: { status: freshFinalStatus, report: finalReportJson },
+      });
+      if (cas.count === 0) {
+        const retry = new Error("GROW_REPORT_CHANGED_RETRY");
+        retry.name = "GrowReportChangedRetry";
+        throw retry;
+      }
+      growErr = null;
+      break;
+    } catch (e) {
+      if (e instanceof Error && e.name === "GrowReportChangedRetry" && attempt < 2) continue;
+      growErr = e;
+      break;
+    }
+  }
+  if (growErr) throw growErr;
 
   const summary = `${distillMethod === "ai" ? "AI-distilled" : "local distillation"} · ${distilled.lessons.length} lessons${
     bornDnaId ? ` · DNA #${bornDnaId} born into the library 🧬` : dnaBirthError ? ` · DNA birth failed (${dnaBirthError.slice(0, 80)})` : " · no new DNA"
@@ -1039,7 +1065,9 @@ export async function startLiveHunt(): Promise<{ id: number }> {
       where: { status: "running", updatedAt: { lt: staleCutoff } },
       data: { status: "failed", error: "The run was interrupted (the server was restarted) — marked automatically" },
     });
-    const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true } });
+    // deterministic newest-first (round 8: no orderBy made the 409 winner arbitrary
+    // if two rows were ever running simultaneously)
+    const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true }, orderBy: { id: "desc" } });
     if (active) {
       throw new LiveHuntError("A live hunt is already running — wait for it to finish", 409);
     }
@@ -1271,22 +1299,43 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
 }
 
 /** Retry the current stage after a failure */
+// round 8: the old body was check-then-act with no lock and an unconditional update —
+// two parallel retry POSTs both read "failed", both passed, both flipped to running;
+// and the active-check raced a concurrent startLiveHunt. Now: an in-process retry
+// flag (same discipline as startingHunt) + a conditional updateMany (only a row still
+// in "failed" flips) + an active check that excludes this hunt deterministically.
+let retryingHunt = false;
 export async function retryLiveHunt(id: number): Promise<LiveHuntState> {
-  if (startingHunt) {
-    throw new LiveHuntError("A hunt start is already in progress — one moment", 409);
+  if (startingHunt || retryingHunt) {
+    throw new LiveHuntError("A hunt start/retry is already in progress — one moment", 409);
   }
-  const row = await db.liveHunt.findUnique({ where: { id } });
-  if (!row) throw new LiveHuntError("Hunt not found", 404);
-  if (row.status !== "failed") throw new LiveHuntError("Only a failed hunt can be retried", 400);
-  // Before: a retry without an active-run check broke the single-run rule — two running rows,
-  // start stuck on 409 forever, and both chains competing for the LLM queue and GitHub quota.
-  const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true } });
-  if (active && active.id !== id) {
-    throw new LiveHuntError(`Live hunt #${active.id} is already running — only one run at a time`, 409);
+  retryingHunt = true;
+  try {
+    const row = await db.liveHunt.findUnique({ where: { id } });
+    if (!row) throw new LiveHuntError("Hunt not found", 404);
+    if (row.status !== "failed") throw new LiveHuntError("Only a failed hunt can be retried", 400);
+    // Before: a retry without an active-run check broke the single-run rule — two running rows,
+    // start stuck on 409 forever, and both chains competing for the LLM queue and GitHub quota.
+    const active = await db.liveHunt.findFirst({
+      where: { status: "running", id: { not: id } },
+      select: { id: true },
+      orderBy: { id: "desc" },
+    });
+    if (active) {
+      throw new LiveHuntError(`Live hunt #${active.id} is already running — only one run at a time`, 409);
+    }
+    // conditional flip — a parallel retryer that won the race leaves count 0
+    const cas = await db.liveHunt.updateMany({
+      where: { id, status: "failed" },
+      data: { status: "running", error: null },
+    });
+    if (cas.count === 0) {
+      throw new LiveHuntError("Hunt state changed while retrying — refresh and retry", 409);
+    }
+    const updated = await db.liveHunt.findUnique({ where: { id } });
+    if (!updated) throw new LiveHuntError("Hunt not found", 404);
+    return serializeLiveHunt(updated);
+  } finally {
+    retryingHunt = false;
   }
-  const updated = await db.liveHunt.update({
-    where: { id },
-    data: { status: "running", error: null },
-  });
-  return serializeLiveHunt(updated);
 }

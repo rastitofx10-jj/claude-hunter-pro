@@ -36,8 +36,27 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const b = (await req.json()) as WatchBody;
-    if (!b.fullName || !b.owner || !b.name || !b.url) {
-      return NextResponse.json({ error: "Required fields are missing (fullName/owner/name/url)" }, { status: 400 });
+    // round 8: wrong-typed fields ({"fullName":5}) passed the truthiness check and then
+    // .slice threw → a 500 "Save failed" that should have been a 400. Type-guard the
+    // required fields; coerce the numeric ones.
+    if (
+      !b ||
+      typeof b.fullName !== "string" ||
+      typeof b.owner !== "string" ||
+      typeof b.name !== "string" ||
+      typeof b.url !== "string" ||
+      !b.fullName ||
+      !b.owner ||
+      !b.name ||
+      !b.url
+    ) {
+      return NextResponse.json({ error: "Required fields are missing or invalid (fullName/owner/name/url)" }, { status: 400 });
+    }
+    if (b.stars !== undefined && typeof b.stars !== "number") {
+      return NextResponse.json({ error: "stars must be a number" }, { status: 400 });
+    }
+    if (b.score !== undefined && typeof b.score !== "number") {
+      return NextResponse.json({ error: "score must be a number" }, { status: 400 });
     }
     // Basic URL validation — it is rendered as an <a href> in the UI; previously any value was accepted.
     if (!/^https:\/\/github\.com\//.test(b.url)) {

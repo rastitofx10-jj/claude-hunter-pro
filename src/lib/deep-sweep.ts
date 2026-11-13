@@ -474,7 +474,11 @@ export async function enrichCandidates(
 
 export interface MinedRepoReport {
   repo: string;
+  /** round 8: post-gate KEPT count — strikes & "yielded genes" read this; a repo whose
+   *  every artifact was quality-rejected now correctly counts as a strike candidate */
   artifacts: number;
+  /** round 8: raw files found pre-gate — discovery truth, kept for transparency */
+  rawFound?: number;
   newCount: number;
   updatedCount: number;
   skippedStubs: number;
@@ -579,6 +583,7 @@ export async function mineTopCandidates(
         const rep: MinedRepoReport = {
           repo: v.repo,
           artifacts: v.artifacts,
+          rawFound: v.rawFound,
           newCount: v.newCount,
           updatedCount: v.updatedCount ?? 0,
           skippedStubs: v.skippedStubs ?? 0,
@@ -606,6 +611,9 @@ export async function mineTopCandidates(
   // Race-safe: instead of writing the stale run-local copy (load-at-start → save-at-end,
   // which a concurrent recorder could clobber), the transaction re-reads the current
   // row and applies only THIS run's diffs (strikes to add, productive repos to unblock).
+  // round 8: `artifacts` is now the POST-GATE kept count — a repo whose every file was
+  // rejected by the quality gate yields 0 and earns its strike (previously it reported
+  // raw>0, never struck, never blocked by minedNames → re-mined on GitHub forever).
   const strikesToAdd = reports
     .filter((rep) => !rep.error && rep.artifacts === 0)
     .map((rep) => rep.repo);

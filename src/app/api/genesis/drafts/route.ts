@@ -34,16 +34,27 @@ export async function POST(req: NextRequest) {
   }
   if (!draftId) return NextResponse.json({ error: "draftId required" }, { status: 400 });
 
-  const res = await publishDraft(draftId);
-  if (!res.ok) {
-    return NextResponse.json({ error: res.error, validation: res.validation }, { status: 409 });
+  // round 8: publishDraft performs unguarded DB reads + create — any Prisma error
+  // escaped the handler as a non-JSON framework 500. Same contract as every other
+  // route: clean JSON errors only.
+  try {
+    const res = await publishDraft(draftId);
+    if (!res.ok) {
+      return NextResponse.json({ error: res.error, validation: res.validation }, { status: 409 });
+    }
+    return NextResponse.json({ ok: true, id: res.id, published: draftId, validation: res.validation, draftCleanupFailed: res.draftCleanupFailed ?? false });
+  } catch (e) {
+    console.error("[genesis/drafts publish]", e);
+    return NextResponse.json({ error: "Draft publish failed" }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, id: res.id, published: draftId, validation: res.validation });
 }
 
 export async function DELETE(req: NextRequest) {
   const draftId = (new URL(req.url).searchParams.get("draftId") ?? "").trim();
   if (!draftId) return NextResponse.json({ error: "draftId required" }, { status: 400 });
+  // round 8: ok:false was returned with HTTP 200 — apiFetch saw no `error` field and
+  // the UI silently "succeeded" at deleting nothing. Now: 404 with a real error.
   const ok = await deleteDraft(draftId);
+  if (!ok) return NextResponse.json({ error: "draft not found or already deleted" }, { status: 404 });
   return NextResponse.json({ ok, deleted: draftId });
 }

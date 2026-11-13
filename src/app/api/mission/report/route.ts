@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { distillFieldReport, MissionError } from "@/lib/mission-compiler";
 import { isTimeoutError, isPrismaNotFound } from "@/lib/ai-json";
-import { advanceStatus, OUTCOME_STATUS } from "@/lib/mission-status";
+import { advanceStatus, OUTCOME_STATUS, TERMINAL_STATUSES } from "@/lib/mission-status";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -78,6 +78,15 @@ export async function POST(req: NextRequest) {
   try {
     const mission = await db.mission.findUnique({ where: { id: missionId } });
     if (!mission) return NextResponse.json({ error: "Mission not found" }, { status: 404 });
+    // round 8: voided missions are fiction-purged and TERMINAL — a field report here
+    // would advanceStatus them back to done/partial and BIRTH new field:mission-<id>
+    // DNA from the very fiction the truth migration purged. Rejected outright.
+    if (TERMINAL_STATUSES.includes(mission.status)) {
+      return NextResponse.json(
+        { error: `Mission is ${mission.status} (fiction-purged) — field reports are closed for it` },
+        { status: 409 }
+      );
+    }
 
     let phaseTitles: string[] = [];
     try {
@@ -197,8 +206,12 @@ export async function POST(req: NextRequest) {
           const finalReportJson = JSON.stringify([...reportHistory, newReport].slice(-20));
 
           // CAS: if status/report changed outside the transaction — thrown out and retried on a fresh value
+          // (round 8: `fresh.report ?? ""` compiled to `report = ''` which NEVER matches SQL NULL —
+          //  every first field report on a freshly-compiled mission failed all 3 CAS attempts and
+          //  died as a 500. Prisma translates `report: null` into `report IS NULL`, which is the
+          //  actual pre-report state. Empirically proven: CAS count 0 with ?? "", count 1 with null.)
           const cas = await tx.mission.updateMany({
-            where: { id: missionId, status: fresh.status, report: fresh.report ?? "" },
+            where: { id: missionId, status: fresh.status, report: fresh.report },
             data: { status: finalStatus, report: finalReportJson },
           });
           if (cas.count === 0) {

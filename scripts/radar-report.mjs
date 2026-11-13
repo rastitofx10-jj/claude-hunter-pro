@@ -26,6 +26,14 @@ try {
   ]);
 
   // ---- aggregates ----
+  // round 8: an empty library (fresh wipe / failed restore) divided by genes.length=0
+  // and wrote literal "NaN%" / "Skills dominate (NaN%)" into the COMMITTED public report.
+  // Guard the divisions; an empty library skips straight to an honest skip note.
+  if (genes.length === 0) {
+    console.error("RADAR_SKIP | empty library — nothing to report (run a hunt/restore first)");
+    await db.$disconnect();
+    process.exit(1);
+  }
   const byKind = {};
   for (const g of genes) byKind[g.kind] = (byKind[g.kind] ?? 0) + 1;
   const byLicense = {};

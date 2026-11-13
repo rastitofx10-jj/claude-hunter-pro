@@ -14,7 +14,7 @@
 import { db } from "@/lib/db";
 import { safeJsonParse, isTimeoutError } from "./ai-json";
 import { executePhase, extractHandoff, type AutopilotStep, type MissionPhase } from "./mission-compiler";
-import { advanceStatus } from "./mission-status";
+import { advanceStatus, TERMINAL_STATUSES } from "./mission-status";
 
 export interface AutopilotFailure {
   phaseIndex: number;
@@ -113,6 +113,12 @@ export function runNextAutopilotPhase(missionId: number): Promise<NextPhaseResul
 async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhaseResult> {
   const mission = await db.mission.findUnique({ where: { id: missionId } });
   if (!mission) throw new AutopilotError("Mission not found", 404);
+  // round 8: a voided (fiction-purged) mission is TERMINAL — executing phases on it
+  // and then distilling a report would resurrect the mission AND birth new DNA from
+  // the very fiction the truth migration purged. Closed outright.
+  if (TERMINAL_STATUSES.includes(mission.status)) {
+    throw new AutopilotError(`Mission is ${mission.status} (fiction-purged) — autopilot is closed for it`, 409);
+  }
 
   const planRaw = safeJsonParse<{ phases?: MissionPhase[] } | null>(mission.plan, null);
   const plan = planRaw ?? {}; // "null" in the DB → null → guard against a crash
@@ -201,15 +207,29 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   // One failure record per phase (the last one wins) — a retry does not accumulate duplicate rows
   const failureMap = new Map(state.failures.map((f) => [f.phaseIndex, f]));
   if (failResult) failureMap.set(failResult.phaseIndex, failResult);
+  // round 8: a phase that succeeds on retry kept its STALE failure record — the UI and
+  // the full-run route reported the superseded transient failure as if it were final.
+  // The phase just executed — its failure history is closed.
+  if (executed) failureMap.delete(executed.phaseIndex);
   const newState: AutopilotState = {
     steps: executed ? [...state.steps, executed] : state.steps,
     failures: [...failureMap.values()].sort((a, b) => a.phaseIndex - b.phaseIndex),
   };
 
   // Are there no more pending phases after this one?
+  // round 8: a TRANSIENT failure (timeout, attempts=1) on the LAST pending phase was
+  // counted as terminal here — allDone=true stopped the client pump (mission-control
+  // breaks on allDone||done), the full-run loop, and live-hunt's stageExecute (which
+  // advances the hunt to grow and distills the mission as "partial"), so the retry the
+  // transient mechanism promises NEVER fired. Only a PERMANENT failure (non-transient,
+  // or transient that spent its retry) may close a phase.
   const nowExecuted = new Set(newState.steps.map((s) => s.phaseIndex));
-  const nowFailed = new Set(newState.failures.map((f) => f.phaseIndex));
-  const allDone = phases.every((_, i) => nowExecuted.has(i) || nowFailed.has(i));
+  const nowFailedPermanent = new Set(
+    newState.failures
+      .filter((f) => !f.transient || (f.attempts ?? 2) >= 2)
+      .map((f) => f.phaseIndex),
+  );
+  const allDone = phases.every((_, i) => nowExecuted.has(i) || nowFailedPermanent.has(i));
 
   // Status: all failures = failed; otherwise it stays in_progress until the
   // field report. One-way transition rule: partial/done are never demoted back

@@ -28,7 +28,14 @@ const note = (ok, label, detail = "") => {
 
 const j = async (path, init, timeoutMs = 320_000) => {
   // one retry on transient network errors — undici's default headers-timeout is 300s,
-  // and a cold dev-server compiling a route can hold a request open that long
+  // and a cold dev-server compiling a route can hold a request open that long.
+  // round 8 (two fixes):
+  //  a) the regex was case-sensitive — AbortSignal.timeout() rejects with a DOMException
+  //     whose .name is "TimeoutError", which /TIMEOUT/ never matched, so the script's OWN
+  //     timeouts never retried. Now case-insensitive.
+  //  b) the retry re-issued non-idempotent POSTs (harvest burns quota, hunt "next" can
+  //     double-advance a step). Now only GETs retry; a failed POST surfaces honestly.
+  const method = (init?.method ?? "GET").toUpperCase();
   const once = async () => {
     const res = await fetch(`${BASE}${path}`, {
       ...init,
@@ -43,7 +50,7 @@ const j = async (path, init, timeoutMs = 320_000) => {
     return await once();
   } catch (e) {
     const name = e?.cause?.code ?? e?.code ?? e?.name ?? "";
-    if (!/TIMEOUT|ECONN|EAI_AGAIN|SOCKET/.test(name)) throw e;
+    if (method !== "GET" || !/timeout|econn|eai_again|socket/i.test(String(name))) throw e;
     await sleep(8000);
     return await once();
   }
@@ -70,10 +77,16 @@ async function ensureToken() {
   let r = await j("/api/settings/token", {}, 20_000).catch(() => null);
   // API returns {exists, masked, updatedAt} — accept both shapes (older drafts said hasToken)
   if (r?.body?.hasToken || r?.body?.exists) return true;
-  // post-recycle: store from upload file
-  const FILE = "upload/טוקן טיטפקס10.secret";
-  if (!existsSync(FILE)) return false;
-  const raw = readFileSync(FILE, "utf8").trim();
+  // post-recycle: store from upload file.
+  // round 8: this looked for a Hebrew-named file that does NOT exist on disk
+  // (the real file is upload/token.secret — the name hunt-live.mjs uses). The result:
+  // after every env recycle (PAT lives in the DB, dna-restore deliberately skips it)
+  // ensureToken() → DB empty → fallback missing → FATAL — the self-healing cycle died
+  // at step 1, BEFORE the restore step ever ran. Now: both known names, absolute paths.
+  const candidates = ["/home/z/my-project/upload/token.secret", "/home/z/my-project/upload/טוקן טיטפקס10.secret"];
+  const found = candidates.find((f) => existsSync(f));
+  if (!found) return false;
+  const raw = readFileSync(found, "utf8").trim();
   if (raw.length < 20) return false;
   const s = await j("/api/settings/token", { method: "POST", body: JSON.stringify({ token: raw }) }, 30_000);
   return s.status === 200;
@@ -191,10 +204,22 @@ function sh(cmd) {
   // 1.5) restore-if-thin — env recycles wipe db/custom.db; the git snapshot is the
   //      source of truth. Idempotent upserts: a full DB gains nothing, a wiped DB
   //      gets the whole library back (incl. hunt history → generation continuity).
+  // round 8: the old catch conflated "snapshot missing (first run)" with "snapshot
+  //      CORRUPT/UNREADABLE" — a corrupt read set snapGenes=0, which silently disabled
+  //      BOTH the restore trigger AND the never-regress guard, so the cycle ran on a
+  //      thin DB and dna-snapshot.mjs overwrote the 20MB source-of-truth with the thin
+  //      library. Fail closed now: missing → 0 (first run); corrupt → refuse to snapshot.
   let snapGenes = 0;
+  let snapUnreadable = false;
   try {
     snapGenes = JSON.parse(readFileSync("/home/z/my-project/reports/state/dna-snapshot.json", "utf8")).counts?.dnaArtifacts ?? 0;
-  } catch { /* no snapshot yet — first ever run */ }
+  } catch (e) {
+    const code = e?.code ?? "";
+    if (code !== "ENOENT") snapUnreadable = true; // corrupt/partial file — NOT a first run
+  }
+  if (snapUnreadable) {
+    note(false, "snapshot guard", "dna-snapshot.json unreadable (corrupt?) — snapshot phase SKIPPED to protect the committed library; investigate before next cycle");
+  }
   if (snapGenes > (await countGenes().catch(() => 0))) {
     const r = sh("node scripts/dna-restore.mjs");
     note(r.ok, "restore", r.out.split("\n")[0] ?? "");
@@ -254,7 +279,9 @@ function sh(cmd) {
 
   // 6) snapshot to git (survives env recycles) — never regress: if the DB holds
   //    fewer genes than the committed snapshot, snapshotting would erase history
-  if (genesAfter < snapGenes) {
+  if (snapUnreadable) {
+    note(false, "snapshot", "skipped — source snapshot unreadable this cycle (fail closed; see snapshot guard above)");
+  } else if (genesAfter < snapGenes) {
     note(false, "snapshot", `refused — db ${genesAfter} < snapshot ${snapGenes} genes; would erase history`);
   } else {
     const snap = sh("node scripts/dna-snapshot.mjs");

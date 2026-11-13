@@ -15,8 +15,12 @@ const db = new PrismaClient();
 async function resolveToken() {
   const row = await db.setting.findUnique({ where: { key: "github_pat" } });
   if (row?.value) return row.value;
-  const FILE = "upload/טוקן טיטפקס10.secret";
-  if (existsSync(FILE)) {
+  // round 8: this looked for a Hebrew-named file that does NOT exist on disk
+  // (the real file is upload/token.secret — the name hunt-live.mjs uses) → post-recycle
+  // this script threw "no GitHub token available" on every run. Both names, absolute.
+  const candidates = ["/home/z/my-project/upload/token.secret", "/home/z/my-project/upload/טוקן טיטפקס10.secret"];
+  const FILE = candidates.find((f) => existsSync(f));
+  if (FILE) {
     const raw = readFileSync(FILE, "utf8").trim();
     if (raw.length > 20) {
       await db.setting.upsert({
@@ -54,9 +58,20 @@ async function fetchLicenses(fullNames, token) {
     });
     if (!res.ok) throw new Error(`GitHub GraphQL ${res.status}`);
     const data = await res.json();
+    // round 8: `data.errors` was never inspected — a 200-with-errors response
+    // (secondary rate limit, partial failure) made every `node` undefined, which
+    // the loop below treated exactly like "repo exists with no license" → repos
+    // permanently pinned as license:"none" (all rights reserved). And since the
+    // backfill only ever selects license:null rows, a transient API error became a
+    // permanent false legal label that propagates into the public radar report.
+    // A failed chunk is skipped wholesale now — the repos stay null for the next cycle.
+    if (Array.isArray(data?.errors) && data.errors.length > 0) {
+      console.warn(`  GraphQL partial failure (${data.errors.length} errors) — chunk of ${chunk.length} skipped, retry next cycle`);
+      continue;
+    }
     chunk.forEach((name, j) => {
       const node = data?.data?.[`r${j}`];
-      if (node === null) return; // repo deleted/renamed — leave for next cycle
+      if (node === null || node === undefined) return; // repo deleted/renamed (or unreachable) — leave for next cycle
       const spdx = node?.licenseInfo?.spdxId ?? null;
       // NOASSERTION = יש רישיון אך לא מזוהה סטנדרטית — נשמר כתווית אמת
       if (spdx) out.set(name, spdx === "NOASSERTION" ? "other" : spdx);

@@ -15,6 +15,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
+  // round 8: a null body or non-array items ({"items":"abc"}) crashed on `.filter`
+  // OUTSIDE the route's try — a raw framework 500 broke the JSON error contract.
+  if (!body || !Array.isArray(body.items ?? [])) {
+    return NextResponse.json({ error: "items must be an array" }, { status: 400 });
+  }
+
   // Full validation before the prompt: previously non-numeric fields flowed into the prompt as "score undefined/100"
   const items = (body.items ?? []).filter(
     (i) =>

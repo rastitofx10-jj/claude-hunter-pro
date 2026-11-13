@@ -11,7 +11,8 @@
  * Usage: node scripts/dna-snapshot.mjs
  */
 import { PrismaClient } from "@prisma/client";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
 const db = new PrismaClient();
 
@@ -68,8 +69,16 @@ try {
     searchHistory: history.map((h) => ({ ...h, createdAt: iso(h.createdAt) })),
   };
 
+  // round 8: a single-shot writeFileSync of the ~20MB snapshot — the ONE event this
+  // system is built around (the env recycle killing processes mid-run) could truncate
+  // it mid-write, and a truncated snapshot then chained into restore crashes and
+  // bypassed never-regress guards downstream. tmp + rename (atomic on POSIX), with a
+  // pid+uuid tmp name so this script can never share a partial file with the in-app
+  // writer (which uses the same discipline with its own unique tmp).
   mkdirSync("reports/state", { recursive: true });
-  writeFileSync("reports/state/dna-snapshot.json", JSON.stringify(snapshot, null, 1), "utf8");
+  const tmp = `reports/state/dna-snapshot.json.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(snapshot, null, 1), "utf8");
+  renameSync(tmp, "reports/state/dna-snapshot.json");
   console.log(`SNAPSHOT_OK | genes=${artifacts.length} repos=${savedRepos.length} chimeras=${chimeras.length} missions=${missions.length} hunts=${hunts.length} sweeps=${sweeps.length} history=${history.length}`);
   console.log("  → reports/state/dna-snapshot.json (commit this to survive env recycles)");
 } catch (e) {

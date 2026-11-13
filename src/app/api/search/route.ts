@@ -77,6 +77,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
+  // round 8: the body was only `as SearchBody`-cast — a JSON null body or wrong-typed
+  // fields ({"model":5}, {"topics":5}) crashed BEFORE the route's try block → a raw
+  // framework 500 that broke the JSON error contract. Narrow first, 400 otherwise
+  // (the same discipline mission/route.ts already applies).
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+  if (body.model !== undefined && typeof body.model !== "string") {
+    return NextResponse.json({ error: "model must be a string" }, { status: 400 });
+  }
+  if (body.topics !== undefined && !Array.isArray(body.topics)) {
+    return NextResponse.json({ error: "topics must be an array" }, { status: 400 });
+  }
+  if (body.query !== undefined && typeof body.query !== "string") {
+    return NextResponse.json({ error: "query must be a string" }, { status: 400 });
+  }
+  if (body.language !== undefined && typeof body.language !== "string") {
+    return NextResponse.json({ error: "language must be a string" }, { status: 400 });
+  }
+  if (body.sort !== undefined && typeof body.sort !== "string") {
+    return NextResponse.json({ error: "sort must be a string" }, { status: 400 });
+  }
+
   const mode = body.mode === "code" ? "code" : "repos";
   const perPage = Math.min(Math.max(body.perPage ?? 24, 6), 60);
   const page = Math.max(body.page ?? 1, 1);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { GhError } from "@/lib/github";
 import { mineDna } from "@/lib/dna-miner";
+import { gateArtifacts } from "@/lib/quality-gate";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 
 export const dynamic = "force-dynamic";
@@ -45,8 +46,14 @@ export async function POST(req: NextRequest) {
       });
     }
     // Save/update in the DNA library
+    // round 8: this route upserted RAW pkg.artifacts — gateArtifacts (the stub/
+    // structure/placeholder gate) is applied only in harvestRepo's path, so the
+    // manual Genesis mine was a bypass door for exactly the "gene #133 entered with
+    // 11 bytes" defect class, feeding stub genes into mission compilation and the
+    // codex export. Same gate, same discipline, single source.
+    const { kept, rejected } = gateArtifacts(pkg.artifacts);
     const fullName = `${owner}/${repo}`;
-    for (const a of pkg.artifacts) {
+    for (const a of kept) {
       await db.dnaArtifact.upsert({
         where: { sourceRepo_path: { sourceRepo: fullName, path: a.path } },
         create: {
@@ -69,7 +76,16 @@ export async function POST(req: NextRequest) {
         },
       });
     }
-    return NextResponse.json({ ...pkg, warnings });
+    if (rejected.length > 0) {
+      warnings.push(`${rejected.length} low-quality gene(s) rejected at ingestion (stub/structure/placeholder gate) — only verified capability files enter the library`);
+    }
+    return NextResponse.json({
+      ...pkg,
+      artifacts: kept.length,
+      rawFound: pkg.artifacts.length,
+      qualityRejected: rejected.slice(0, 6),
+      warnings,
+    });
   } catch (e) {
     const msg = e instanceof GhError ? e.message : "Mining failed";
     const status = e instanceof GhError ? e.status : 500;

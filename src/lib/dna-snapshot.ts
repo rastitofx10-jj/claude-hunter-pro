@@ -19,6 +19,7 @@
 
 import { db } from "./db";
 import { mkdir, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 /** Date → ISO string, so the JSON is fully deterministic (same normalization the script does) */
@@ -35,7 +36,25 @@ const iso = (d: Date) => d.toISOString();
  * radar to zero, and the next model release would lose its accumulated evidence. */
 const LEARNING_KEYS = ["mineAttempts", "queryYieldStats", "frontierLedger"] as const;
 
+// round 8: four subsystems (sweep stage-D, hunt verdict, harvest, synthesis) fire
+// writeDnaSnapshot() fire-and-forget with NO lock — two overlapping writers opened the
+// SAME `.tmp` with O_TRUNC, interleaved writes, and the slow writer's rename hit ENOENT:
+// the merged final file failed JSON.parse ("Unexpected non-whitespace character after JSON")
+// — and dna-restore.mjs parses it unguarded, so disaster recovery would hard-fail exactly
+// when the recycle strikes. Two-part fix: (1) a unique tmp name per writer — two writers
+// can never touch the same partial file; (2) an in-process promise queue — one writer at
+// a time per process (each Next.js worker), so the tmp dance is fully serialized.
+let snapshotQueueTail: Promise<void> = Promise.resolve();
+
 export async function writeDnaSnapshot(): Promise<void> {
+  const run = snapshotQueueTail.then(() => writeDnaSnapshotNow());
+  // the chain swallows a failure so the NEXT writer still runs — the CALLER
+  // gets the real outcome via `run` (all four callers attach .catch(console.error))
+  snapshotQueueTail = run.catch(() => {});
+  return run;
+}
+
+async function writeDnaSnapshotNow(): Promise<void> {
   // All seven public tables in one parallel round — same reads the script does,
   // minus the rest of the Setting table on purpose (the PAT never enters a snapshot).
   const [artifacts, savedRepos, chimeras, missions, hunts, sweeps, history, learningRows] = await Promise.all([
@@ -87,9 +106,17 @@ export async function writeDnaSnapshot(): Promise<void> {
 
   const stateDir = path.join(process.cwd(), "reports", "state");
   const target = path.join(stateDir, "dna-snapshot.json");
-  const tmp = `${target}.tmp`;
+  // unique per writer (pid + uuid): concurrent writers can never share a partial file
+  const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
   await mkdir(stateDir, { recursive: true });
   await writeFile(tmp, JSON.stringify(snapshot, null, 1), "utf8");
   // Atomic swap — a reader (the restore script, git) never sees a half-written snapshot
-  await rename(tmp, target);
+  try {
+    await rename(tmp, target);
+  } catch (e) {
+    // best-effort cleanup of OUR partial file — never leave orphans in reports/state
+    console.error("[dna-snapshot] rename failed:", e);
+    try { await import("node:fs/promises").then((fs) => fs.rm(tmp, { force: true })); } catch { /* tmp already gone */ }
+    throw e;
+  }
 }

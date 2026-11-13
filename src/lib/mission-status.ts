@@ -12,7 +12,16 @@ export const STATUS_RANK: Record<string, number> = {
   partial: 2,
   done: 3,
   failed: 1,
+  // round 8: 'voided' (fiction-purged missions, written by scripts/truth-migration.ts
+  // as a TERMINAL state) was absent — `?? 0` made advanceStatus("voided","done")
+  // return "done", un-voiding 24/30 production missions and letting the report route
+  // birth NEW field:mission-<id> DNA from the very fiction the migration purged.
+  // Rank 4 = above done: voided is now sticky — nothing outranks it.
+  voided: 4,
 };
+
+/** Terminal statuses — no field report, no autopilot phase, no status advance past these. */
+export const TERMINAL_STATUSES: readonly string[] = ["voided"];
 
 /** Field-result → mission status mapping */
 export const OUTCOME_STATUS: Record<string, string> = {
