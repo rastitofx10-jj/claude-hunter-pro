@@ -87,10 +87,12 @@ Execute cross-platform development:
 
 ### Performance Optimization
 
-- Model routing based on task requirements:
-  - Sub-agents: Sonnet 5.5 for build/fix work
-  - Reviews: Fable 5.1 or Opus 5.5
-  - Main session: Fable 5.1 or Opus 5.5
+- Model routing based on task requirements (REAL registry only — truth-gated):
+  - Sub-agents: Haiku 4.5 for build/fix work (fast, real)
+  - Reviews: Opus 4.5 (the strongest real model today)
+  - Main session: Opus 4.5 or Sonnet 4.5
+  - Frontier waves (Opus 4.6 / 4.7 / 5.5): adopted day-one once org:anthropics authority confirms; unconfirmed single-source signals (e.g. Sonnet 5.5) never steer routing
+  - Fictional strings (Fable, claude 5/6/7): zero credit — hallucination contamination, never routed
 - Maintain optimal token usage per model
 - Auto-scale resources based on workload
 

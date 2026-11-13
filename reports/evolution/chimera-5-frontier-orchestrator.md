@@ -48,6 +48,26 @@ by maintenance.
 The full operational SKILL.md (4,497 chars) is stored in the DB (`chimera #5`)
 and exported here. Paste into any Claude Code session to activate.
 
+## Post-birth correction — fiction routing purged (2026-11-13)
+
+The raw synthesis absorbed the wave noise with the wave signal: its
+"Performance Optimization" section routed work to **Fable 5.1** (fiction,
+zero credit) and **Sonnet 5.5** (single-source unconfirmed signal). Both are
+exactly what the device directive bans. The DB record and this export were
+patched the same day:
+
+| As synthesized (contaminated) | As corrected (truth-gated) |
+|---|---|
+| Sub-agents: Sonnet 5.5 | Sub-agents: Haiku 4.5 (fast, real) |
+| Reviews: Fable 5.1 or Opus 5.5 | Reviews: Opus 4.5 (the strongest real model today) |
+| Main session: Fable 5.1 or Opus 5.5 | Main session: Opus 4.5 or Sonnet 4.5 |
+
+Plus an explicit routing law baked into the skill: frontier waves (4.6/4.7/5.5)
+are adopted day-one **only after org:anthropics authority confirms**;
+unconfirmed single-source signals never steer routing; fictional strings get
+zero credit. The record shows its own correction — same discipline as the
+voided fiction-era missions.
+
 ---
 *Evidence: chimera #5 record — sources = the 5 repos above, born from 33
 frontier-pinned genes (opus 4.6: 43 mentions / 13 repos; 4.7: 8/2; 5.5: 32/15 —
