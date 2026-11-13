@@ -90,6 +90,13 @@ export async function POST(req: NextRequest) {
   if (body.topics !== undefined && !Array.isArray(body.topics)) {
     return NextResponse.json({ error: "topics must be an array" }, { status: 400 });
   }
+  // Round 9 — ITEM-level typing: the array check passed {"topics":[5]}, then
+  // `t.trim()` below (line ~123, BEFORE the route's try) threw a raw TypeError —
+  // a framework 500 breaking the JSON error contract. The exact class round 8
+  // fixed for {"topics":5}; the sibling input slipped through.
+  if (body.topics !== undefined && !body.topics.every((t) => typeof t === "string")) {
+    return NextResponse.json({ error: "topics must contain strings only" }, { status: 400 });
+  }
   if (body.query !== undefined && typeof body.query !== "string") {
     return NextResponse.json({ error: "query must be a string" }, { status: 400 });
   }
@@ -104,7 +111,7 @@ export async function POST(req: NextRequest) {
   const perPage = Math.min(Math.max(body.perPage ?? 24, 6), 60);
   const page = Math.max(body.page ?? 1, 1);
 
-  // ⛔ Strict server-side blocking: a model filter below the threshold (4.x and below) is rejected immediately
+  // ⛔ Strict server-side blocking: a fictional model string (above the real 4.5 frontier) is rejected immediately
   if (body.model?.trim() && isBlockedModelString(body.model.trim())) {
     return NextResponse.json(
       { error: `⛔ Blocked model: ${THRESHOLD_RULE_TEXT}` },
@@ -159,7 +166,7 @@ export async function POST(req: NextRequest) {
       );
       // The token from the header was validated against GitHub — saved for server use
       await captureTokenFrom(req);
-      // ⛔ Full blocking rule: repos showing *only* 4.x and below models — completely hidden from the results
+      // ⛔ Full blocking rule: repos showing *only* ancient (Claude ≤2-era) models — completely hidden from the results
       let items: ScoredRepo[] = [];
       let blockedHidden = 0;
       for (const r of data.items) {
@@ -243,7 +250,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ⛔ Full blocking rule in code mode too: repos showing only 4.x — hidden
+    // ⛔ Full blocking rule in code mode too: repos showing only ancient-era models — hidden
     let blockedHidden = 0;
     let items: ScoredRepo[] = [];
     for (const { repo, matches } of groups.values()) {

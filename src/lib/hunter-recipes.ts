@@ -18,18 +18,11 @@ export const RECIPES: Recipe[] = [
     body: { mode: "repos", query: "claude code", topics: ["claude-code"], minStars: 5, pushedWithinDays: 90, sort: "stars" },
   },
   {
-    id: "opus55-code",
+    id: "opus45-skill-files",
     emoji: "🧠",
-    title: "Code running Opus 4.5",
-    desc: "Code search for claude-opus-4-5 — the direct evidence of the strongest real model",
-    body: { mode: "code", model: "claude-opus-5-5" },
-  },
-  {
-    id: "opus6-code",
-    emoji: "🚀",
-    title: "Code running Opus 6",
-    desc: "Code search for claude-opus-6 — projects on the newest generation, above the threshold",
-    body: { mode: "code", model: "claude-opus-6" },
+    title: "Opus 4.5 inside skill files",
+    desc: "Code search for claude-opus-4-5 in SKILL.md files — direct evidence of the strongest real model",
+    body: { mode: "code", query: "filename:SKILL.md", model: "claude-opus-4-5" },
   },
   {
     id: "anthropic-key",

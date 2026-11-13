@@ -10,6 +10,7 @@ import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
 import { llmComplete } from "./zai";
 import { db } from "./db";
 import { detectClaudeModels } from "./claude-models";
+import { detectEmergingModels } from "./emerging-models";
 import type { CandidateFlat } from "./deep-sweep";
 
 export class SwarmError extends Error {
@@ -322,13 +323,21 @@ Propose the next round: which GitHub queries will expose what we missed?
   // and EXECUTED in generation 2+, burning the scarce code-search quota hunting a
   // fiction. Now: every query passes detectClaudeModels; fiction minus authority-
   // confirmed waves is dropped here, with the reason recorded so the briefing shows it.
+  // Round 9 — UNKNOWN families join the gate: a hallucinated new-family id
+  // (claude-nova-5-0 — zero detectClaudeModels hits, the radar's "candidate" class)
+  // passed the filter and was persisted/displayed. Candidate-kind emerging signals
+  // minus confirmed waves now drop exactly like known-family fiction.
   const confirmedWaves = await authorityConfirmedWaveIds().catch(() => new Set<string>());
   const rawQueries = strArr(j.nextQueries, 12);
   const dropped: string[] = [];
   const nextQueries = rawQueries.filter((q) => {
     const fiction = detectClaudeModels(q).fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
-    if (fiction.length > 0) {
-      dropped.push(`"${q}" (${fiction.join(", ")})`);
+    const unknownFamily = detectEmergingModels(q)
+      .map((s) => s.id)
+      .filter((id) => !confirmedWaves.has(id));
+    const bad = [...fiction, ...new Set(unknownFamily)];
+    if (bad.length > 0) {
+      dropped.push(`"${q}" (${bad.join(", ")})`);
       return false;
     }
     return true;
@@ -431,7 +440,13 @@ export async function runSwarm(
   // Triage in batches of 12
   const batches = chunk(candidates.slice(0, SWARM_TRIAGE_COVERAGE), 12);
   const triage: TriageVerdict[] = [];
-  const totalPrompts = batches.length * 2 + 4;
+  // Round 9 — honest totals: the OLD `batches.length * 2 + 4` assumed profile
+  // batches == triage batches, but elite is capped at 12 (≤2 profile batches of 6):
+  // with 1 triage batch the progress showed 7/6, with 2 it ended at 9/10 — never 100%.
+  // During triage the honest upper bound is batches + 2 profile batches + 4 singles;
+  // once elite is known the exact total replaces it for the rest of the run.
+  const estTotalPrompts = batches.length + 2 + 4;
+  let totalPrompts = estTotalPrompts;
 
   for (const batch of batches) {
     try {
@@ -440,11 +455,12 @@ export async function runSwarm(
     } catch (e) {
       failures.push(`triage: ${e instanceof Error ? e.message : "error"}`);
     }
-    await onProgress?.(calls, totalPrompts);
+    await onProgress?.(calls, estTotalPrompts);
   }
 
   const eliteNames = new Set(triage.filter((t) => t.verdict === "elite").map((t) => t.fullName));
   const elite = candidates.filter((c) => eliteNames.has(c.fullName)).slice(0, 12);
+  totalPrompts = batches.length + Math.ceil(elite.length / 6) + 4;
   const watchNames = new Set(triage.filter((t) => t.verdict === "watch").map((t) => t.fullName));
   const watch = candidates.filter((c) => watchNames.has(c.fullName)).slice(0, 12);
 

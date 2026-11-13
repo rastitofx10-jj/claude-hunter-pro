@@ -9,11 +9,16 @@ export const dynamic = "force-dynamic";
 /**
  * Valid state transitions in the mission state machine — you can move forward, not backward
  * (previously: PATCH accepted any transition, including done → compiled).
+ * Round 9 — `partial → in_progress` removed: it was a BACKWARD move (rank 2→1 in
+ * mission-status.ts's advanceStatus, which refuses it) contradicting this table's
+ * own header; the report route's CAS layer would re-assert the higher rank on the
+ * next field report anyway, churning status. Lateral re-run from failed (rank 1 →
+ * in_progress rank 1) stays allowed, and `voided` is terminal (rank 4).
  */
 const ALLOWED_TRANSITIONS: Record<string, Set<string>> = {
   compiled: new Set(["in_progress", "partial", "done", "failed"]),
   in_progress: new Set(["partial", "done", "failed"]),
-  partial: new Set(["in_progress", "done", "failed"]),
+  partial: new Set(["done", "failed"]),
   failed: new Set(["in_progress", "partial", "done"]),
   done: new Set([]), // final — no going back
 };

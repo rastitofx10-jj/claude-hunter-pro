@@ -11,6 +11,7 @@ import type { MinedArtifact } from "./dna-miner";
 import { extractJson, isTimeoutError, sanitizeSlug, str, strArr } from "./ai-json";
 import { llmComplete } from "./zai";
 import { detectClaudeModels } from "./claude-models";
+import { detectEmergingModels } from "./emerging-models";
 import { db } from "./db";
 
 export class GenesisError extends Error {
@@ -52,7 +53,7 @@ const TIMEOUT_MS = 110_000;
 
 /** Fiction ids the radar has authority-confirmed as REAL waves (org:anthropics hit) —
  *  those may be referenced as pending adoption; they are not contamination. */
-async function authorityConfirmedWaveIds(): Promise<Set<string>> {
+export async function authorityConfirmedWaveIds(): Promise<Set<string>> {
   try {
     const row = await db.setting.findUnique({ where: { key: "frontierLedger" } });
     if (!row) return new Set();
@@ -65,10 +66,20 @@ async function authorityConfirmedWaveIds(): Promise<Set<string>> {
 }
 
 /** Scan every output field for fictional/unconfirmed model strings.
- *  Returns the offending ids (fiction minus authority-confirmed waves). */
-function scanChimeraContamination(text: string, confirmedWaves: Set<string>): string[] {
+ *  Returns the offending ids (fiction minus authority-confirmed waves).
+ *  Round 9 — UNKNOWN families join the scan: a hallucinated new-family id
+ *  (claude-nova-5-0) produced zero detectClaudeModels hits (the regexes only
+ *  know opus/sonnet/haiku/fable), so the 3-layer gate was blind to the one
+ *  candidate class the radar itself recognizes. detectEmergingModels candidate
+ *  ids minus confirmed waves now count as contamination exactly like
+ *  known-family fiction. */
+export function scanChimeraContamination(text: string, confirmedWaves: Set<string>): string[] {
   const det = detectClaudeModels(text);
-  return det.fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
+  const known = det.fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
+  const unknown = detectEmergingModels(text)
+    .map((s) => s.id)
+    .filter((id) => !confirmedWaves.has(id) && !known.includes(id));
+  return [...known, ...new Set(unknown)];
 }
 
 /** The self-documenting retraction appended when retries did not clean the output. */

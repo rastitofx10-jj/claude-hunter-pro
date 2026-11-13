@@ -58,12 +58,22 @@ export function scoreGene(a: MinedArtifact): GeneQuality {
   // --- Gate 2: structure (0..0.35) ---
   let structure = 0;
   if (a.kind === "mcp-config") {
-    try {
-      JSON.parse(content);
-      structure = 1;
-    } catch {
-      hardReject = true;
-      reasons.push("mcp-config: content is not valid JSON");
+    if (a.truncated) {
+      // Round 9: a config cut at the 12KB mining cap can never parse (the cut
+      // is mid-JSON by definition) — grading it "not valid JSON" hard-rejected
+      // every real >12KB .mcp.json and two such mines strike-banned the repo.
+      // A file that reached the byte cap is real config mass: partial structure
+      // credit, and the reason is reported so the transparency survives.
+      reasons.push("mcp-config truncated at the mining cap — JSON validity not gradeable");
+      structure = 0.5;
+    } else {
+      try {
+        JSON.parse(content);
+        structure = 1;
+      } catch {
+        hardReject = true;
+        reasons.push("mcp-config: content is not valid JSON");
+      }
     }
   } else {
     const hasFrontmatter = /^---\r?\n[\s\S]*?\r?\n---/.test(content);
@@ -112,6 +122,11 @@ export interface QualityRejection {
 export interface GateResult {
   kept: MinedArtifact[];
   rejected: QualityRejection[];
+  /** Round 9 — artifacts whose download failed (rate limit / 5xx / timeout).
+   *  Reported separately from quality rejections: their content is UNKNOWN,
+   *  not bad. Callers use this to avoid strike-blaming the repo and to keep the
+   *  "stub" KPI honest (a network error was previously counted as a stub). */
+  downloadErrors: { path: string; error: string }[];
   /** Average score of the KEPT genes (null when nothing survived) */
   avgScore: number | null;
 }
@@ -120,8 +135,14 @@ export interface GateResult {
 export function gateArtifacts(artifacts: MinedArtifact[]): GateResult {
   const kept: MinedArtifact[] = [];
   const rejected: QualityRejection[] = [];
+  const downloadErrors: { path: string; error: string }[] = [];
   let scoreSum = 0;
   for (const a of artifacts) {
+    if (a.downloadError) {
+      // Unknown, not bad — never graded, never a "stub", never a strike.
+      downloadErrors.push({ path: a.path, error: a.downloadError });
+      continue;
+    }
     const q = scoreGene(a);
     if (q.verdict === "pass") {
       kept.push(a);
@@ -133,6 +154,7 @@ export function gateArtifacts(artifacts: MinedArtifact[]): GateResult {
   return {
     kept,
     rejected,
+    downloadErrors,
     avgScore: kept.length > 0 ? Number((scoreSum / kept.length).toFixed(2)) : null,
   };
 }

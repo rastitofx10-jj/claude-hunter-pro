@@ -182,6 +182,62 @@ function toDnaRow(r: Record<string, unknown>, content: string | null): DnaRow {
   };
 }
 
+/** Round 9 — drop field: DNA rows whose parent mission the truth-migration voided
+ *  (fiction-purge). `field:livehunt-<huntId>` resolves through LiveHunt.missionId;
+ *  `field:mission-<id>` / `field:<anything>-mission-<id>` resolves directly. Voided
+ *  parents produced lessons the purge explicitly disavowed — their DNA must not
+ *  feed future compilations with an unearned "field-proven" boost. Fail-open on
+ *  lookup errors (the compiler must still work with a cold/locked DB); the one-time
+ *  purge script (scripts/purge-voided-dna.mjs) removes the rows outright. */
+async function quarantineVoidedFieldDna(rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  const fieldRows = rows.filter((r) => String(r.sourceRepo ?? "").startsWith("field:"));
+  if (fieldRows.length === 0) return rows;
+  try {
+    // Resolve parents: `field:livehunt-<huntId>` → LiveHunt.missionId (one query);
+    // `field:…-mission-<id>` → direct mission id.
+    const livehuntIds: number[] = [];
+    for (const r of fieldRows) {
+      const h = String(r.sourceRepo ?? "").match(/^field:livehunt-?(\d+)$/i);
+      if (h) livehuntIds.push(Number(h[1]));
+    }
+    const huntMission = livehuntIds.length
+      ? new Map(
+          (await db.liveHunt.findMany({ where: { id: { in: livehuntIds } }, select: { id: true, missionId: true } })).map(
+            (x) => [x.id, x.missionId]
+          )
+        )
+      : new Map<number, number | null>();
+    const parentMissionIds = new Set<number>();
+    for (const mid of huntMission.values()) if (mid != null) parentMissionIds.add(mid);
+    for (const r of fieldRows) {
+      const m = String(r.sourceRepo ?? "").match(/(?:^|[-_])mission-?(\d+)$/i);
+      if (m) parentMissionIds.add(Number(m[1]));
+    }
+    if (parentMissionIds.size === 0) return rows;
+    const voided = await db.mission.findMany({
+      where: { id: { in: Array.from(parentMissionIds) }, status: "voided" },
+      select: { id: true },
+    });
+    if (voided.length === 0) return rows;
+    const voidedIds = new Set(voided.map((v) => v.id));
+    return rows.filter((r) => {
+      const src = String(r.sourceRepo ?? "");
+      if (!src.startsWith("field:")) return true;
+      const m = src.match(/(?:^|[-_])mission-?(\d+)$/i);
+      if (m && voidedIds.has(Number(m[1]))) return false;
+      const h = src.match(/^field:livehunt-?(\d+)$/i);
+      if (h) {
+        const mid = huntMission.get(Number(h[1]));
+        if (mid != null && voidedIds.has(mid)) return false;
+      }
+      return true;
+    });
+  } catch {
+    // fail-open — the guard must never break compilation on a lookup failure
+    return rows;
+  }
+}
+
 /**
  * The ONE DNA-selection path for the whole system. Until now there were two divergent paths —
  * /api/mission did a findMany-based two-phase selection while live-hunt's compile stage ran its
@@ -210,9 +266,17 @@ export async function selectDnaForGoal(goal: string, cap = 8): Promise<ScoredDna
   const metaRows = await db.$queryRaw<Record<string, unknown>[]>`SELECT id, sourceRepo, path, kind, name, description, length(content) AS contentLen
      FROM DnaArtifact ORDER BY id DESC LIMIT 500`;
   if (metaRows.length === 0) return [];
+  // Round 9 — truth-migration void-awareness: field: DNA born from a mission the
+  // fiction purge voided still carries the +2 "field-proven" boost and wins dedup
+  // tie-breaks, so plans were built on missions that never legitimately ran (24
+  // production rows were live at audit time). The birth path was closed in round 8
+  // (report/autopilot 409 on voided) — this guard retro-quarantines the survivors
+  // and keeps the selection honest forever. field:livehunt-N resolves through
+  // LiveHunt.missionId; field:mission-N is the direct parent.
+  const metaFiltered = await quarantineVoidedFieldDna(metaRows);
   const preRanked = rankDnaForGoal(
     goal,
-    metaRows.map((r) => toDnaRow(r, null)), // metadata-only pre-score — content is loaded just for the leaders
+    metaFiltered.map((r) => toDnaRow(r, null)), // metadata-only pre-score — content is loaded just for the leaders
     Math.max(cap * 3, 24)
   );
   const ids = preRanked.map((s) => s.row.id);

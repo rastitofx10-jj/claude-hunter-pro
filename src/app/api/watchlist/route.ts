@@ -72,6 +72,14 @@ export async function POST(req: NextRequest) {
     // A truly selective update: a field that was not sent — is not overwritten. And also: an explicit null value
     // does not delete existing data — previously the client sent models: null (search flow) and silently deleted
     // models saved from the analysis. Only a real value (non-empty/non-null) updates.
+    // EXCEPTION (round 9) — `notes`: an empty-string notes IS the client's explicit
+    // "clear this note" gesture (there is no other way to remove a note — DELETE kills
+    // the whole item). The old cap() mapping dropped empty→absent, so clearing was a
+    // silent no-op and the old note reappeared after refetch. Present-but-empty writes null.
+    const notesUpdate =
+      safe.notes === undefined
+        ? {}
+        : { notes: typeof safe.notes === "string" && safe.notes.trim() ? safe.notes.trim().slice(0, MAX_TEXT) : null };
     const item = await db.savedRepo.upsert({
       where: { fullName: safe.fullName },
       update: {
@@ -80,7 +88,7 @@ export async function POST(req: NextRequest) {
         ...(cap(safe.description) !== null ? { description: cap(safe.description) } : {}),
         ...(cap(safe.models, 300) !== null ? { models: cap(safe.models, 300) } : {}),
         ...(cap(safe.evidence) !== null ? { evidence: cap(safe.evidence) } : {}),
-        ...(cap(safe.notes) !== null ? { notes: cap(safe.notes) } : {}),
+        ...notesUpdate,
       },
       create: {
         fullName: safe.fullName,

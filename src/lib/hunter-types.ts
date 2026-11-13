@@ -63,7 +63,7 @@ export interface SearchResponse {
   items: ScoredRepo[];
   note?: string;
   querySent: string;
-  /** Number of repos hidden because only 4.x-and-below models were detected in them (the full blocking rule) */
+  /** Number of repos hidden because only ANCIENT (Claude ≤2-era) models were detected in them — no qualifying real-model evidence */
   blockedHidden?: number;
   /** false in code mode — GitHub code search does not support real pagination (100 results per query) */
   canPaginate?: boolean;

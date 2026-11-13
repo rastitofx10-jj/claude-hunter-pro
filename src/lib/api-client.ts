@@ -64,7 +64,10 @@ export function downloadFile(filename: string, content: string, mime: string) {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  // Round 9 — revoke LATE: revoking synchronously right after the synthetic click
+  // can abort the just-started download in Firefox/Safari (Chrome tolerates it).
+  // 30s covers any export this app generates; the leak window is bounded either way.
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 export function toCsv(rows: Record<string, unknown>[]): string {

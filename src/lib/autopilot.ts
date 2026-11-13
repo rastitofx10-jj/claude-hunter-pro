@@ -174,7 +174,22 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
     .map((s) => ({ title: s.title, handoff: extractHandoff(s.deliverable) }));
 
   if (mission.status === "compiled") {
-    await db.mission.update({ where: { id: missionId }, data: { status: "in_progress" } });
+    // Round 9 — CAS the early in_progress write: the unconditional update could
+    // UN-VOID a mission that a concurrent truth-migration voided during the
+    // findMany below — for up to ~220s a field report would then pass the
+    // TERMINAL check (status reads in_progress) and birth field:mission-<id> DNA
+    // from purged fiction (the exact resurrection round 8 closed). updateMany
+    // with status:"compiled" in the where-clause: only a row still compiled flips.
+    const cas = await db.mission.updateMany({ where: { id: missionId, status: "compiled" }, data: { status: "in_progress" } });
+    if (cas.count === 0) {
+      // the row changed under us (voided, or another runner already advanced it) —
+      // re-read and re-apply the terminal check instead of plowing ahead
+      const now = await db.mission.findUnique({ where: { id: missionId }, select: { status: true } });
+      if (!now) throw new AutopilotError("Mission not found", 404);
+      if (TERMINAL_STATUSES.includes(now.status)) {
+        throw new AutopilotError(`Mission is ${now.status} (fiction-purged) — autopilot is closed for it`, 409);
+      }
+    }
   }
 
   const phase = phases[nextIdx];

@@ -291,10 +291,26 @@ function sh(cmd) {
     const radar = sh("node scripts/radar-report.mjs");
     note(radar.ok, "radar report", radar.out.split("\n")[0] ?? "");
   }
-  note(true, "cycle summary", `genes ${genesBefore} → ${genesAfter} (${genesAfter - genesBefore >= 0 ? "+" : ""}${genesAfter - genesBefore})`);
+  note(
+    results.every((r) => r.startsWith("PASS")),
+    "cycle summary",
+    `genes ${genesBefore} → ${genesAfter} (${genesAfter - genesBefore >= 0 ? "+" : ""}${genesAfter - genesBefore})`
+  );
   console.log(results.join("\n"));
   // free the owned server (if we started it) — next run re-spawns as needed
   if (serverProc) { try { serverProc.kill(); } catch { /* already gone */ } }
   console.log("CYCLE_COMPLETE");
-  process.exit(results.some((r) => r.startsWith("WARN")) && genesAfter <= genesBefore ? 1 : 0);
+  // Round 9 — honest exit code. The old rule (`WARN && genes didn't grow`) masked
+  // real failures whenever the harvest happened to add genes: restore FAILed +
+  // hunt FAILed + snapshot REFUSED all exited 0, cron never saw a non-zero exit,
+  // and genes that were never snapshotted could be lost permanently at the next
+  // env recycle. Now: exit 1 on ANY severe WARN — the restore, hunt, sweep, or
+  // snapshot steps failing is a red day regardless of gene growth (findings-desk /
+  // license-backfill / radar WARNs stay non-fatal, same as before).
+  const SEVERE = /^\s*WARN\s*\|\s*(restore|hunt|sweep|snapshot|db)/i;
+  const severeWarn = results.some((r) => SEVERE.test(r));
+  if (severeWarn) {
+    console.error("CYCLE_EXIT=1 (severe WARN — restore/hunt/sweep/snapshot/db; see lines above)");
+  }
+  process.exit(severeWarn ? 1 : 0);
 })();

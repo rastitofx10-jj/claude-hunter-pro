@@ -20,7 +20,9 @@ import { db } from "./db";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-// type-only — erased at compile time, no runtime cycle with genesis
+// genesis exports the shared truth-gate primitives (scan + authority set) — value
+// imports are safe here: genesis does NOT import this module (no cycle).
+import { scanChimeraContamination, authorityConfirmedWaveIds } from "./genesis";
 import type { WorkOrder } from "./genesis";
 
 const DRAFT_DIR = path.join(process.cwd(), "reports", "state", "chimera-drafts");
@@ -160,6 +162,43 @@ export async function validateChimeraCandidate(c: ChimeraCandidate): Promise<Val
     ok: bt.length >= 40,
     detail: `${bt.length} chars: "${bt.slice(0, 60)}…"`,
   });
+
+  // G7 — MODEL TRUTH (round 9): drafts are plain JSON on disk; one predating the
+  // 3-layer gate (or hand-edited) could carry a Fable routing block and publish
+  // clean if merely structurally valid. generateChimera gates NEW synthesis and
+  // appends the truth notice — this is the ratchet that re-checks NOW, on publish.
+  // Same rule as the genesis core: fiction minus authority-confirmed waves over
+  // the full output surface (name + skillMd + principles + workOrders).
+  try {
+    const confirmed = await authorityConfirmedWaveIds();
+    // The genesis core's self-documenting DENIAL (the appended MODEL TRUTH NOTICE)
+    // legitimately CONTAINS the fiction ids it documents — strip that system
+    // section before scanning, or a permitted denied-chimera would fail its own
+    // ratchet. Only actual routing content is scanned.
+    const md = (c.skillMd ?? "").split(/\n---\n\s*## MODEL TRUTH NOTICE/)[0];
+    const surface = [
+      c.chimeraName ?? "",
+      md,
+      ...((c.principles ?? []).map((p) => (typeof p === "string" ? p : JSON.stringify(p)))),
+      ...((c.workOrders ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w)))),
+    ].join("\n");
+    const contamination = scanChimeraContamination(surface, confirmed);
+    gates.push({
+      gate: "G7-model-truth",
+      ok: contamination.length === 0,
+      detail: contamination.length === 0
+        ? "no fiction/unconfirmed model ids on the full output surface"
+        : `fiction ids present (NOT authority-confirmed): ${contamination.join(", ")} — fix the routing block before publishing`,
+    });
+  } catch {
+    // ledger unavailable — fail-open on the LOOKUP (the genesis core has the same
+    // posture: the radar is an instrument, not a wall), stated in the detail
+    gates.push({
+      gate: "G7-model-truth",
+      ok: true,
+      detail: "frontier ledger unavailable this pass — confirmed-wave exemption not applied",
+    });
+  }
 
   return { passed: gates.every((g) => g.ok), checkedAt: new Date().toISOString(), gates };
 }

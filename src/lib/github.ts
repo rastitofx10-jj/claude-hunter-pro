@@ -41,24 +41,64 @@ export function ghHeaders(
  *  we ran out. Remembering them lets callers wait until the REAL window reset
  *  instead of sleeping blind (the old fixed 8/16/32s ladder burned retries when
  *  the reset was minutes away) and pace themselves before the cliff, not after. */
-const lastQuota = { remaining: null as number | null, reset: null as number | null, resource: null as string | null };
+const quotaByResource = new Map<string, { remaining: number | null; reset: number | null; at: number }>();
+const lastQuotaAny: { resource: string | null; remaining: number | null; reset: number | null } = {
+  resource: null,
+  remaining: null,
+  reset: null,
+};
 
-export function getQuotaState() {
-  return { ...lastQuota };
+export function getQuotaState(resource?: string): { remaining: number | null; reset: number | null; resource: string | null } {
+  if (resource) {
+    const snap = quotaByResource.get(resource);
+    if (snap) return { remaining: snap.remaining, reset: snap.reset, resource };
+  }
+  return { ...lastQuotaAny };
 }
 
-/** Reads the quota headers into lastQuota. Must be called immediately after fetch
+/** Reads the quota headers into the per-resource map. Must be called immediately after fetch
  *  resolves — BEFORE res.json()/res.text() consumes the body — so the timing of the
- *  read is obvious and can never drift behind a body-parse refactor. */
+ *  read is obvious and can never drift behind a body-parse refactor.
+ *  Round 9 — per-RESOURCE snapshots (the old single shared slot let a search reply
+ *  (30/min) or a GraphQL batch (core, 5000/h) overwrite the state the code-search
+ *  pacing/backoff would read, so the pre-hold floors defeated themselves whenever
+ *  query kinds interleaved). Also captures `retry-after` for SECONDARY rate limits:
+ *  GitHub's secondary 403/429 carries no primary x-ratelimit-reset, so the backoff
+ *  previously slept the wrong duration (a stale cross-resource epoch). */
 function readQuotaHeaders(res: Response): void {
   const remaining = parseInt(res.headers.get("x-ratelimit-remaining") ?? "", 10);
   const reset = parseInt(res.headers.get("x-ratelimit-reset") ?? "", 10);
   const resource = res.headers.get("x-ratelimit-resource");
+  const retryAfter = parseInt(res.headers.get("retry-after") ?? "", 10);
   // parseInt on a missing/garbage header yields NaN — only a parseable value may
   // overwrite the known state, otherwise one bad reply would erase good intel.
-  if (Number.isFinite(remaining)) lastQuota.remaining = remaining;
-  if (Number.isFinite(reset)) lastQuota.reset = reset;
-  if (resource) lastQuota.resource = resource;
+  const rRemaining = Number.isFinite(remaining) ? remaining : null;
+  const rReset = Number.isFinite(reset) ? reset : null;
+  if (resource && (rRemaining != null || rReset != null)) {
+    const prev = quotaByResource.get(resource);
+    quotaByResource.set(resource, {
+      remaining: rRemaining != null ? rRemaining : prev?.remaining ?? null,
+      reset: rReset != null ? rReset : prev?.reset ?? null,
+      at: Date.now(),
+    });
+    lastQuotaAny.resource = resource;
+    if (rRemaining != null) lastQuotaAny.remaining = rRemaining;
+    if (rReset != null) lastQuotaAny.reset = rReset;
+  } else if (rRemaining != null || rReset != null) {
+    if (rRemaining != null) lastQuotaAny.remaining = rRemaining;
+    if (rReset != null) lastQuotaAny.reset = rReset;
+  }
+  // Secondary rate limits speak through retry-after (seconds) — remember it as a
+  // reset epoch so the backoff waits the REAL directed duration instead of
+  // clamping a stale primary reset.
+  if (Number.isFinite(retryAfter)) {
+    const until = Math.floor(Date.now() / 1000) + retryAfter;
+    const key = resource ?? "secondary";
+    const prev = quotaByResource.get(key);
+    quotaByResource.set(key, { remaining: rRemaining != null ? rRemaining : prev?.remaining ?? 0, reset: until, at: Date.now() });
+    if (!resource) lastQuotaAny.reset = until;
+    if (!resource) lastQuotaAny.resource = null;
+  }
 }
 
 export async function ghFetch<T = unknown>(
@@ -148,7 +188,10 @@ export async function ghFetchRaw(
 export function isCapabilityPath(path: string): boolean {
   const p = path.toLowerCase();
   return (
-    p.includes("skill.md") ||
+    // Round 9 — exact SKILL.md filename (was p.includes("skill.md"), which matched
+    // "myskill.md" and inflated capabilityHits for files the miner never mines →
+    // wasted harvests + empty-mine strikes; aligned with dna-miner's classify()).
+    /(^|\/)skill\.md$/.test(p) ||
     p.includes(".claude/commands/") ||
     p.includes(".claude/agents/") ||
     p === "claude.md" ||
@@ -294,14 +337,19 @@ export async function ghSearchWithBackoff<T>(path: string, token: string | null)
       const rl = e instanceof GhError && (e.status === 403 || e.status === 429) && (e.rateLimited === true || /rate limit|secondary/i.test(e.message));
       if (!rl || attempt === delays.length) throw e;
       // Header-aware wait: sleep exactly until the window resets (+1s of grace).
-      // The fixed ladder is kept as the fallback when no reset epoch was ever
-      // seen (e.g. a proxy stripped the headers). Clamped to [8s, 120s]: a reset
-      // already in the past still gets the minimum breather, and a corrupt
-      // future epoch can never hang the sweep for hours. Retry-count semantics
+      // Round 9 — retry-after/resource-aware: a secondary limit directive (403 with
+      // `retry-after: 30-60`) carries no primary x-ratelimit-reset; the old code read
+      // a stale cross-resource epoch — either in the past (clamped to 8s, burning all
+      // 3 retries against a 60s directive) or an unrelated core reset an hour away
+      // (clamped 120s × 3 = 6 min for a 30s backoff). Now: the resource-relevant
+      // snapshot (retry-after already folded in as a reset epoch), then the clamp
+      // [8s, 120s] as the guard. The fixed ladder remains the fallback when no
+      // header was ever seen (e.g. a proxy stripped them). Retry-count semantics
       // are unchanged — still at most 3 retries.
       let waitMs = delays[attempt];
-      if (lastQuota.reset != null) {
-        const tillResetMs = (lastQuota.reset - Math.floor(Date.now() / 1000) + 1) * 1000;
+      const snap = getQuotaState(lastQuotaAny.resource ?? undefined);
+      if (snap.reset != null) {
+        const tillResetMs = (snap.reset - Math.floor(Date.now() / 1000) + 1) * 1000;
         waitMs = Math.min(120_000, Math.max(8_000, tillResetMs));
       }
       await ghSleep(waitMs);

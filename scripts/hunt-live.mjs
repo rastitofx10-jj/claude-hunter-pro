@@ -52,15 +52,48 @@ async function phaseHunt() {
   // round 8: a non-200 list call (body null) silently degraded to "no running hunt" →
   // POST start → spurious 409 with a misleading error. Report the actual GET failure.
   if (list.status !== 200) { console.error(`FAIL | hunt list → ${list.status}: ${JSON.stringify(list.body).slice(0, 200)}`); process.exit(1); }
-  const running = (list.body?.items ?? []).find((h) => h.status === "running");
-  if (running) {
-    huntId = running.id;
-    console.log(`  resuming hunt #${huntId} (stage=${running.stageKey})`);
+  const runningFromList = (list.body?.items ?? []).find((h) => h.status === "running");
+  if (runningFromList) {
+    huntId = runningFromList.id;
+    console.log(`  resuming hunt #${huntId} (stage=${runningFromList.stageKey})`);
   } else {
-    const start = await j("/api/live-hunt", { method: "POST", body: JSON.stringify({ action: "start" }) });
-    if (start.status !== 200) { console.error(`FAIL | hunt start → ${start.status}: ${JSON.stringify(start.body).slice(0, 200)}`); process.exit(1); }
-    huntId = start.body.hunt.id;
-    console.log(`PASS | hunt started #${huntId}`);
+    // round 9 — one start call, three honest outcomes:
+    // 200 → a hunt actually started (adopt it);
+    // 409 → the list endpoint returns only the newest 12 hunts, so a RUNNING hunt
+    //       outside that window (reachable via `retry` of an old hunt after ≥12 newer
+    //       done hunts) was invisible → re-read and adopt what the server enforces;
+    // anything else → the real failure, reported and exited.
+    const probe = await j("/api/live-hunt", { method: "POST", body: JSON.stringify({ action: "start" }) });
+    if (probe.status === 200) {
+      huntId = probe.body?.hunt?.id ?? null;
+      if (huntId == null) { console.error(`FAIL | hunt start 200 without hunt id: ${JSON.stringify(probe.body).slice(0, 200)}`); process.exit(1); }
+      console.log(`PASS | hunt started #${huntId}`);
+    } else if (probe.status === 409) {
+      // The list endpoint returns only the newest 12 hunts, so a RUNNING hunt outside
+      // that window is invisible in BOTH list reads. The 409 body names it though
+      // ("Live hunt #N is already running") — parse the id and adopt directly.
+      const errMsg = String(probe.body?.error ?? "");
+      const idFrom409 = errMsg.match(/hunt\s*#(\d+)/i)?.[1];
+      let hidden = null;
+      if (idFrom409) {
+        const byId = await j(`/api/live-hunt?id=${idFrom409}`);
+        if (byId.status === 200 && byId.body?.hunt?.status === "running") hidden = byId.body.hunt;
+      } else {
+        // no id in the message — fall back to a fresh list read
+        const recheck = await j("/api/live-hunt");
+        hidden = (recheck.body?.items ?? []).find((h) => h.status === "running") ?? null;
+      }
+      if (hidden) {
+        huntId = hidden.id;
+        console.log(`  409 race resolved: adopting running hunt #${huntId}${idFrom409 ? " (outside the newest-12 window)" : ""}`);
+      } else {
+        console.error(`FAIL | hunt start → 409 but the running hunt could not be resolved: ${errMsg.slice(0, 200)}`);
+        process.exit(1);
+      }
+    } else {
+      console.error(`FAIL | hunt start → ${probe.status}: ${JSON.stringify(probe.body).slice(0, 200)}`);
+      process.exit(1);
+    }
   }
   const titles = start_titles(list.body);
   const deadline = Date.now() + 540_000;

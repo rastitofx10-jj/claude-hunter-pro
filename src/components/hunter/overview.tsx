@@ -307,7 +307,7 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
                   <span>
                     <strong className="text-foreground">Iron law:</strong> {THRESHOLD_LABEL} models only, locked in code.{" "}
                     <span title={THRESHOLD_RULE_TEXT} className="cursor-help underline decoration-dotted">
-                      The 4.x family is blocked in the server, the filters, and the scoring.
+                      Fictional strings above the 4.5 frontier get zero credit — everywhere.
                     </span>
                   </span>
                 </p>

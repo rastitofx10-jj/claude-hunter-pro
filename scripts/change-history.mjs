@@ -9,7 +9,7 @@
  * survives env recycles — so skepticism compounds across cycles.
  */
 import { PrismaClient } from "@prisma/client";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, renameSync } from "node:fs";
 
 const db = new PrismaClient();
 
@@ -94,10 +94,16 @@ const out = {
 // round 8: the old code diffed against a .bak file that NOTHING ever writes — newGens
 // was always the full count presented as "(+N)" new. The previous content is captured
 // in memory BEFORE the overwrite now, so the diff is real.
+// round 9 — atomic write (tmp + rename), the same discipline dna-snapshot.mjs
+// already applies: the env recycle kills processes mid-run, and a kill between the
+// open and the flush truncated this file — the next run's safeParse then read {}
+// and the "(+N)" diff reported the FULL count as new.
 const prevRaw = existsSync("reports/state/change-history.json")
   ? safeParse(readFileSync("reports/state/change-history.json", "utf8"))
   : null;
-writeFileSync("reports/state/change-history.json", JSON.stringify(out, null, 1), "utf8");
+const histTmp = "reports/state/change-history.json.tmp";
+writeFileSync(histTmp, JSON.stringify(out, null, 1), "utf8");
+renameSync(histTmp, "reports/state/change-history.json");
 const newGens = prevRaw ? entries.length - (prevRaw.generations ?? []).length : entries.length;
 console.log(
   `HISTORY_OK | gens=${entries.length} (+${newGens}) sweeps=${sweepHistory.length} chimeras=${chimeraHistory.length} genes=${genesTotal}`

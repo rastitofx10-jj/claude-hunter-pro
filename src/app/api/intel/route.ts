@@ -5,7 +5,7 @@ import type { AnalyzeResponse } from "@/lib/hunter-types";
 export const dynamic = "force-dynamic";
 // worst-case: 2 attempts × 110s through the serial LLM queue — previously not defined at all
 // and in a hosted deployment the function was killed mid-AI-call (genesis sets 120; the same rule here).
-export const maxDuration = 120;
+export const maxDuration = 300; // round 9: 120 did not cover the real worst case (2 attempts × 110s + queue wait) — the route was killed mid-run and the payload lost wholesale
 
 // POST /api/intel — AI intelligence report for an already-completed analysis result
 export async function POST(req: NextRequest) {
@@ -33,6 +33,26 @@ export async function POST(req: NextRequest) {
   }
   if (!Array.isArray(body.evidence)) {
     return NextResponse.json({ error: "The evidence field must be an array" }, { status: 400 });
+  }
+  // Round 9 — the same presence discipline for the fields repoDigest dereferences
+  // without guards (a.mentions.prices, a.commands, a.agents, a.mcpServers,
+  // a.claudeFiles, a.languages): an omitting body crashed deep inside
+  // generateRepoIntel with the same misleading "the AI failed" 500. An analysis
+  // result always carries them; anything else is a caller contract violation.
+  const structFields: [keyof AnalyzeResponse, string][] = [
+    ["commands", "commands"],
+    ["agents", "agents"],
+    ["mcpServers", "mcpServers"],
+    ["claudeFiles", "claudeFiles"],
+    ["languages", "languages"],
+  ];
+  for (const [k, label] of structFields) {
+    if (!Array.isArray(body[k])) {
+      return NextResponse.json({ error: `The ${label} field must be an array` }, { status: 400 });
+    }
+  }
+  if (!body.mentions || typeof body.mentions !== "object" || Array.isArray(body.mentions)) {
+    return NextResponse.json({ error: "The mentions field must be an object" }, { status: 400 });
   }
 
   try {

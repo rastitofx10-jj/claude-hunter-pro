@@ -322,11 +322,14 @@ export function detectClaudeModels(text: string): ModelDetection {
   };
 
   // claude-opus-4-5 / claude_opus_4_5 / claude opus 4.5 / claude-opus-4-5-20251101
-  const re1 = /claude[-_ ]?(opus|sonnet|haiku|fable)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
+  // Round 9 — plural-tolerant families: "Claude Fables 5" / "fables 5.1" bypassed the
+  // fiction gate before (the s between family and version broke every regex). The
+  // family stays a CAPTURING group (m[1]) — the handler indexes by capture position.
+  const re1 = /claude[-_ ]?(opus|sonnet|haiku|fable)s?[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
   // claude-3-5-sonnet / claude-3-7-sonnet-20250219 / claude-5-5
-  const re2 = /claude[-_ ](\d{1,2})(?!\d)[-_. ](\d{1,2})(?!\d)(?:[-_ ]?(opus|sonnet|haiku|fable))?/gi;
+  const re2 = /claude[-_ ](\d{1,2})(?!\d)[-_. ](\d{1,2})(?!\d)(?:[-_ ]?(opus|sonnet|haiku|fable)s?)?/gi;
   // opus 4.5 / opus-4.5 / sonnet-4-5 (also without the claude prefix) — including the decimal comma "opus 4,5"
-  const re3 = /\b(opus|sonnet|haiku|fable)[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
+  const re3 = /\b(opus|sonnet|haiku|fable)s?[-_ ]?(\d{1,2})(?!\d)(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
   // claude-3 / claude 4 — a generic model mention without a family.
   const re4 = /claude[-_ ](\d{1,2})(?!\d)/gi;
 
@@ -346,13 +349,14 @@ export function detectClaudeModels(text: string): ModelDetection {
   }
   while ((m = re4.exec(lower))) handle("generic", Number(m[1]), null);
 
-  // "fable" context mentions (claude fable / fable model / model: fable) are
-  // FICTION hits — the word never names a real model. Contamination is tracked,
-  // never credited.
+  // "fable" context mentions (claude fable / fables / fable model / model: fable)
+  // are FICTION hits — the word never names a real model. Contamination is tracked,
+  // never credited. Round 9 — plural forms ("Claude Fables", "fables model") join
+  // the same gate; before, "fables" slipped every context check (\bfable\b boundary).
   if (
-    /\b(?:claude|anthropic)[^\w]{0,3}fable\b/.test(lower) ||
-    /\bfable[^\w]{0,3}(?:model|models|claude|anthropic)\b/.test(lower) ||
-    /\bmodel[^\w]{0,4}fable\b/.test(lower)
+    /\b(?:claude|anthropic)[^\w]{0,3}fables?\b/.test(lower) ||
+    /\bfables?[^\w]{0,3}(?:model|models|claude|anthropic)\b/.test(lower) ||
+    /\bmodel[^\w]{0,4}fables?\b/.test(lower)
   ) {
     fiction.set("claude-fable", {
       id: "claude-fable",

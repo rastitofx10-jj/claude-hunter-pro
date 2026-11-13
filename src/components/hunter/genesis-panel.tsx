@@ -135,19 +135,38 @@ export function GenesisPanel() {
   }, [watch]);
 
   // ---------- mutations ----------
+  // Round 9 — the contract is honest now: `saved` is the count the library actually
+  // holds, `artifacts` is the kept array, and an all-rejected/all-failed mine carries
+  // a `note` (the old success path returned artifacts: NUMBER while this code read
+  // `.artifacts.length` — every toast said "undefined artifacts saved").
   const mine = useMutation({
     mutationFn: (fullName: string) =>
-      apiFetch<{ repo: string; artifacts: DnaArtifactRow[]; note?: string }>("/api/genesis/mine", token, {
+      apiFetch<{
+        repo: string;
+        artifacts: DnaArtifactRow[];
+        saved?: number;
+        rejectedCount?: number;
+        downloadErrors?: number;
+        rawFound?: number;
+        note?: string;
+        warnings?: string[];
+      }>("/api/genesis/mine", token, {
         method: "POST",
         body: JSON.stringify({ fullName }),
       }),
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: ["dna-library"] });
-      setSelectedRepos((s) => new Set([...s, data.repo]));
-      if (data.note) {
-        toast({ title: "No DNA found", description: data.note });
+      if (data.saved === 0 || data.note) {
+        toast({ title: "No DNA saved", description: data.note ?? "Nothing from this repo entered the library" });
       } else {
-        toast({ title: `DNA mined! 🧬`, description: `${data.repo}: ${data.artifacts.length} artifacts saved to the library` });
+        // only a mine that actually saved genes selects the repo for the forge
+        setSelectedRepos((s) => new Set([...s, data.repo]));
+        const saved = data.saved ?? data.artifacts.length;
+        const extras =
+          (data.rejectedCount ?? 0) > 0
+            ? ` · ${data.rejectedCount} rejected by the quality gate`
+            : "";
+        toast({ title: `DNA mined! 🧬`, description: `${data.repo}: ${saved} artifacts saved to the library${extras}` });
       }
     },
     onError: (e: Error) => toast({ title: "Mining failed", description: e.message, variant: "destructive" }),
@@ -262,11 +281,17 @@ export function GenesisPanel() {
     });
   };
 
+  // Round 9 — the forge fuses at most 5 repos (server contract: synthesize
+  // route slices to 5). Before, the UI promised N-repo fusion for unlimited N and
+  // the server silently dropped repos 6+ — no error, no warning, a silent
+  // truncation contradicting the button's claim. The cap is enforced where the
+  // user can see it, with the reason stated.
+  const MAX_CHIMERA_REPOS = 5;
   const toggleRepo = (repo: string) => {
     setSelectedRepos((s) => {
       const n = new Set(s);
       if (n.has(repo)) n.delete(repo);
-      else n.add(repo);
+      else if (n.size < MAX_CHIMERA_REPOS) n.add(repo);
       return n;
     });
   };
@@ -512,7 +537,18 @@ export function GenesisPanel() {
                   variant="ghost"
                   size="sm"
                   className="h-7 gap-1 text-xs text-muted-foreground"
-                  onClick={() => clearRepo.mutate(repo)}
+                  onClick={() => {
+                    // Round 9 — drop the phantom selection too: before, the deleted
+                    // repo stayed "selected" for the forge (count/label/body all
+                    // included it) while the server silently dropped it — if it was the
+                    // only selection, the user hit a confusing 400 after the UI claimed N.
+                    clearRepo.mutate(repo);
+                    setSelectedRepos((s) => {
+                      const n = new Set(s);
+                      n.delete(repo);
+                      return n;
+                    });
+                  }}
                 >
                   <Trash2 className="h-3 w-3" /> Remove repo
                 </Button>
@@ -566,7 +602,8 @@ export function GenesisPanel() {
           <FlaskConical className="h-4 w-4 text-violet-600" /> The chimera operation — merge the best of all of them
         </p>
         <p className="mb-3 text-xs text-muted-foreground">
-          Select source repos from the library ({selectedRepos.size} selected) → the AI fuses their DNA into one superior skill + work orders for our product.
+          Select source repos from the library ({selectedRepos.size}/{MAX_CHIMERA_REPOS} selected) → the AI fuses their DNA into one superior skill + work orders for our product.
+          {selectedRepos.size >= MAX_CHIMERA_REPOS && " — the fusion reads at most 5 repos (quality over noise)."}
         </p>
 
         {grouped.size > 0 && (
@@ -575,7 +612,9 @@ export function GenesisPanel() {
               <button
                 key={repo}
                 onClick={() => toggleRepo(repo)}
-                className={`rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+                disabled={!selectedRepos.has(repo) && selectedRepos.size >= MAX_CHIMERA_REPOS}
+                title={!selectedRepos.has(repo) && selectedRepos.size >= MAX_CHIMERA_REPOS ? "The forge fuses at most 5 repos — deselect one first" : undefined}
+                className={`rounded-full border px-3 py-1 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                   selectedRepos.has(repo)
                     ? "border-violet-500 bg-violet-600 text-white"
                     : "border-muted hover:border-violet-400"

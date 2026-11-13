@@ -8,7 +8,7 @@
 
 import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey, isCapabilityPath, getQuotaState } from "./github";
 import { QUALIFYING_MODELS, frontierModels, detectClaudeModels } from "./claude-models";
-import { harvestRepo, batchRepoMeta } from "./harvester";
+import { harvestRepo, batchRepoMeta, loadMineAttempts, applyMineOutcomes } from "./harvester";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, FRONTIER_MODEL_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
 import { recordQueryYields } from "./adaptive-learning";
@@ -219,7 +219,14 @@ export async function runQueryArsenal(
     // instead of charging ahead, eating the 403, and making ghSearchWithBackoff
     // recover it after the fact. remaining == null (no header ever seen) →
     // exactly the old blind-pacing behavior.
-    const quota = getQuotaState();
+    const query = queries[i];
+    // Round 9 — the pre-hold reads the RESOURCE-relevant snapshot: GitHub's quota
+    // slots are per resource (code_search 10/min, search 30/min, core 5000/h),
+    // and the old process-global last-seen slot mixed them — after a repo search
+    // (remaining≈25) or a GraphQL batch (core, remaining≈4990), the next CODE
+    // query saw a large remaining → skipped the hold → ate the 403 anyway.
+    // No snapshot for this resource yet → exactly the old blind pacing.
+    const quota = getQuotaState(query.kind === "code" ? "code_search" : "search");
     if (quota.remaining != null && quota.remaining <= 3 && quota.reset != null) {
       const extraMs = Math.min(30_000, Math.max(0, (quota.reset - Math.floor(Date.now() / 1000) + 1) * 1000));
       console.log(
@@ -227,7 +234,6 @@ export async function runQueryArsenal(
       );
       await sleep(extraMs);
     }
-    const query = queries[i];
     let report: QueryReport = { q: query.q, kind: query.kind, origin: query.origin, count: 0 };
     try {
       if (query.kind === "code") {
@@ -339,10 +345,18 @@ export function consolidateCandidates(
   // AUTHORITY gate confirmed (org:anthropics hit) — so the fiction-classified id in
   // the query IS the confirmed model id, and it earns hard evidence at the honest
   // 12-point fallback weight (unregistered, real, confirmed).
+  // Round 9 — AND-wave queries credit BOTH halves: "claude-opus-4-5" "claude-opus-4-6"
+  // requires the file to contain both models, but only the fiction half (4-6) earned
+  // evidence — the real frontier model (4-5) the file provably contains got nothing.
+  // Now: qualifying ∪ confirmed-fiction ids, both as hard evidence.
   for (const dq of dynamicModelQueries) {
     const hq = hydrateFresh(dq).toLowerCase();
     if (frontierModelEvidence.has(hq)) continue;
-    const ids = detectClaudeModels(dq).fiction.map((f) => f.id).filter((id) => id !== "claude-fable");
+    const det = detectClaudeModels(dq);
+    const ids = [
+      ...det.qualifying.map((m) => m.id),
+      ...det.fiction.map((f) => f.id).filter((id) => id !== "claude-fable"),
+    ];
     if (ids.length > 0) frontierModelEvidence.set(hq, ids);
   }
   // Frontier queries (hydrated to their runtime form) — a hit via one of them is
@@ -424,7 +438,12 @@ export function scoreCandidateInPlace(c: Candidate): void {
   });
   const evidenceWeight = (id: string, hard: boolean) => {
     const m = QUALIFYING_MODELS.find((x) => x.id === id);
-    const w = m ? m.weight / 10 : 12 / 10;
+    // Round 9 — synthesized generic ids ("claude-4") used the 12/10 confirmed-wave
+    // fallback weight, outranking CONCRETE registered models (claude-3-haiku at
+    // weight 1.6/10): a vague "claude 4" prose mention scored 3× a real pin. A
+    // generic mention now earns the registry's generic weight (8/10), and the
+    // 12/10 fallback stays reserved for ids the authority-confirmed wave set holds.
+    const w = m ? m.weight / 10 : /^(?:claude-?)\d+(?:-\d+)?$/.test(id) ? 8 / 10 : 12 / 10;
     return hard ? w : w * 0.4; // soft evidence is worth less than half
   };
   const modelEvidence =
@@ -479,6 +498,13 @@ export interface MinedRepoReport {
   artifacts: number;
   /** round 8: raw files found pre-gate — discovery truth, kept for transparency */
   rawFound?: number;
+  /** round 9: downloads that failed at the transport layer (rate limit / 5xx /
+   *  timeout) — the repo's mine was PARTIAL, not proven-empty; the strike
+   *  ledger must not blame it. */
+  downloadErrors?: number;
+  /** round 9: the repo's file tree was truncated at GitHub's 100k-entry cap —
+   *  the mine is PARTIAL (some capability files were never seen) */
+  treeTruncated?: boolean;
   newCount: number;
   updatedCount: number;
   skippedStubs: number;
@@ -491,17 +517,6 @@ export interface MinedRepoReport {
 }
 
 /** Stage C — mine the top-N fresh repos into the library */
-const MINE_ATTEMPTS_KEY = "mineAttempts";
-
-async function loadMineAttempts(): Promise<Record<string, number>> {
-  try {
-    const row = await db.setting.findUnique({ where: { key: MINE_ATTEMPTS_KEY } });
-    const parsed = row?.value ? JSON.parse(row.value) : {};
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
-}
 
 export interface MinedBatchResult {
   reports: MinedRepoReport[];
@@ -584,6 +599,8 @@ export async function mineTopCandidates(
           repo: v.repo,
           artifacts: v.artifacts,
           rawFound: v.rawFound,
+          downloadErrors: v.downloadErrors ?? 0,
+          treeTruncated: v.treeTruncated === true,
           newCount: v.newCount,
           updatedCount: v.updatedCount ?? 0,
           skippedStubs: v.skippedStubs ?? 0,
@@ -608,41 +625,17 @@ export async function mineTopCandidates(
   }
 
   // Update the empty-mine memory — full transparency: the number is recorded in the stage evidence.
-  // Race-safe: instead of writing the stale run-local copy (load-at-start → save-at-end,
-  // which a concurrent recorder could clobber), the transaction re-reads the current
-  // row and applies only THIS run's diffs (strikes to add, productive repos to unblock).
-  // round 8: `artifacts` is now the POST-GATE kept count — a repo whose every file was
-  // rejected by the quality gate yields 0 and earns its strike (previously it reported
-  // raw>0, never struck, never blocked by minedNames → re-mined on GitHub forever).
+  // round 9: the ledger helpers are the SINGLE SOURCE now (harvester.ts — the
+  // harvest path consults the same memory; it used to consult nothing and
+  // re-mined proven-empty repos forever). Download-failed repos NEVER strike:
+  // their mine was partial, not proven-empty — before round 9, two bad minutes
+  // of network (403 secondary / timeout batch) permanently banned a real elite
+  // repo while the evidence called it "proven-empty".
   const strikesToAdd = reports
-    .filter((rep) => !rep.error && rep.artifacts === 0)
+    .filter((rep) => !rep.error && rep.artifacts === 0 && (rep.downloadErrors ?? 0) === 0)
     .map((rep) => rep.repo);
   const toUnblock = reports.filter((rep) => rep.artifacts > 0).map((rep) => rep.repo);
-  try {
-    const { db: txdb } = await import("./db");
-    await txdb.$transaction(
-      async (tx) => {
-        const row = await tx.setting.findUnique({ where: { key: MINE_ATTEMPTS_KEY } });
-        let parsed: Record<string, number> = {};
-        try {
-          const v = row?.value ? JSON.parse(row.value) : null;
-          if (v && typeof v === "object" && !Array.isArray(v)) parsed = v;
-        } catch {
-          // corrupted row — start fresh rather than losing the memory forever
-        }
-        for (const repo of strikesToAdd) parsed[repo] = (parsed[repo] ?? 0) + 1;
-        for (const repo of toUnblock) delete parsed[repo];
-        await tx.setting.upsert({
-          where: { key: MINE_ATTEMPTS_KEY },
-          update: { value: JSON.stringify(parsed) },
-          create: { key: MINE_ATTEMPTS_KEY, value: JSON.stringify(parsed) },
-        });
-      },
-      { timeout: 10_000 }
-    );
-  } catch {
-    // The memory is an optimization — a save failure doesn't take down the stage
-  }
+  await applyMineOutcomes(strikesToAdd, toUnblock);
 
   // Adaptive learning (WO4) — attribute added genes to the queries that surfaced
   // the mined repos; future hunts rank proven queries above never-productive ones.

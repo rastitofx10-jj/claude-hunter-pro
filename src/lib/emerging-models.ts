@@ -326,9 +326,15 @@ export function waveQueriesFor(entry: { id: string; label: string; version: numb
   const idQ = `"${entry.id}"`;
   const words = entry.id.replace(/^claude-/, "").split("-");
   const maj = Math.floor(entry.version);
-  const min = String(entry.version).split(".")[1] ?? "0";
-  const spoken = `${words[0]} ${maj}.${min}`;
-  const spokenQ = `"${entry.id.replace(/-(\d+)-(\d+)$/, "-$1.$2")}" OR "${spoken}"`;
+  // Round 9 — an INTEGER version (e.g. 5) fabricated a minor ("5.0"): 3 of the 7
+  // wave queries then probed the misspelled "opus 5.0" pin while real day-one
+  // adopters write "opus 5" / "claude-opus-5". Integer versions speak without a minor.
+  const hasMinor = !Number.isInteger(entry.version);
+  const min = hasMinor ? String(entry.version).split(".")[1] : null;
+  const spoken = min != null ? `${words[0]} ${maj}.${min}` : `${words[0]} ${maj}`;
+  const spokenQ = min != null
+    ? `"${entry.id.replace(/-(\d+)-(\d+)$/, "-$1.$2")}" OR "${spoken}"`
+    : `"${entry.id}" OR "${spoken}"`;
   return [
     { q: idQ, kind: "code", why: `${entry.label} model-string pin — day-one adopters` },
     { q: `${entry.id} filename:SKILL.md`, kind: "code", why: `skills written for ${entry.label}` },

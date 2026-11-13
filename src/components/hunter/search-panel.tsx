@@ -148,7 +148,13 @@ export function SearchPanel({
           placeholder={value.mode === "repos" ? 'e.g. "claude code agent", or leave empty to use filters' : 'Free-text code search, e.g. "max_tokens" anthropic'}
           value={value.query ?? ""}
           onChange={(e) => set({ query: e.target.value })}
-          onKeyDown={(e) => e.key === "Enter" && onSearch()}
+          onKeyDown={(e) => {
+            // Round 9 — Enter respects the pending guard (the Search button is
+            // disabled while loading; Enter wasn't): two rapid Enters raced two
+            // concurrent POSTs with no abort — whichever resolved LAST won, which
+            // could be the OLDER query's results under the newer filters.
+            if (e.key === "Enter" && !loading) onSearch();
+          }}
           dir="ltr"
           className="font-mono text-sm"
           aria-label="Search query"

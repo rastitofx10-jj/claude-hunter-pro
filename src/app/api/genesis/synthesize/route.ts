@@ -6,7 +6,7 @@ import { saveDraft } from "@/lib/chimera-draft";
 import type { MinedArtifact } from "@/lib/dna-miner";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300; // round 9: 120 did not cover the real worst case (2 attempts × 110s + queue wait) — the route was killed mid-run and the payload lost wholesale
 
 /**
  * Chimera creation: AI fusion of DNA from several elite repos + work orders.
@@ -75,9 +75,24 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ---- publish-now path ----
+    // Round 9 — TOCTOU name-collision re-check immediately before create:
+    // generateChimera reads the ban list BEFORE the minutes-long queued LLM call,
+    // and Chimera.name has NO unique constraint — two overlapping POSTs both saw
+    // the same existingNames, and the LLM's name reuse is a proven failure mode
+    // (it copied "elite-parallel-orchestrator" 3× running in the field). publishDraft
+    // already re-checks + suffixes on clash; the publish-now path now does the same.
+    let finalName = chimera.chimeraName;
+    const clash = await db.chimera.findFirst({ where: { name: finalName }, select: { id: true } });
+    if (clash) {
+      // deterministic collision-escape (same convention as the genesis core fallback)
+      let suffix = 2;
+      while (await db.chimera.findFirst({ where: { name: `${finalName}-gen${suffix}` }, select: { id: true } })) suffix++;
+      finalName = `${finalName}-gen${suffix}`;
+    }
     const saved = await db.chimera.create({
       data: {
-        name: chimera.chimeraName,
+        name: finalName,
         // Previously not saved — and the history faked it from breakthrough
         oneLiner: chimera.oneLiner || null,
         sources: chimera.sources.join(","),
@@ -92,7 +107,7 @@ export async function POST(req: NextRequest) {
     // Fire-and-forget: the synthesis response never waits on (or fails from) snapshot I/O.
     void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
 
-    return NextResponse.json({ id: saved.id, ...chimera });
+    return NextResponse.json({ id: saved.id, ...chimera, ...(finalName !== chimera.chimeraName ? { chimeraName: finalName, renamed: true } : {}) });
   } catch (e) {
     console.error("genesis/synthesize failed", e);
     return NextResponse.json({ error: "Chimera creation failed" }, { status: 500 });

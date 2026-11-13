@@ -383,6 +383,7 @@ export function LiveHuntPanel() {
     onSuccess: (data) => {
       applyResponse(data);
       pumpingRef.current = false;
+      pumpFailsRef.current = 0; // progress (or a clean terminal write) — reset the fuse
     },
     onError: (e: Error) => {
       pumpingRef.current = false;
@@ -391,6 +392,22 @@ export function LiveHuntPanel() {
       // failed stage in an infinite loop — burning GitHub/LLM quota unsupervised.
       const failedHunt = (e as FetchErrorWithPayload).payload?.hunt;
       if (failedHunt) setHunt(failedHunt);
+      // Round 9 — stateless failures (no payload.hunt) count toward the pump fuse:
+      // hunt.status stays "running" locally, and without a cap the effect below would
+      // re-fire every ~700ms forever. Park after 3 so a human takes over.
+      if (!failedHunt) {
+        pumpFailsRef.current += 1;
+        if (autoPilot && pumpFailsRef.current >= 3) {
+          setAutoPilot(false);
+          pumpFailsRef.current = 0;
+          toast({
+            title: "Autopilot parked — 3 stage calls failed without a hunt update",
+            description: "The server kept returning errors without hunt state (a route/DB fault). Inspect the hunt manually and retry when the fault clears.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
       toast({ title: "Stage failed — you can retry", description: e.message, variant: "destructive" });
     },
   });
@@ -412,7 +429,15 @@ export function LiveHuntPanel() {
     },
   });
 
-  // The automatic pump: as long as the hunt is running — it fires the next stage after a short delay
+  // The automatic pump: as long as the hunt is running — it fires the next stage after a short delay.
+  // Round 9 — bounded retry: a STATELESS failure (no payload.hunt — e.g. a route 500,
+  // a DB hiccup) used to leave hunt.status at "running" in local state, so the effect
+  // re-fired every ~700ms forever, burning GitHub/LLM quota unsupervised while the UI
+  // kept saying "advancing on its own". Now: after 3 consecutive failures without
+  // progress the pump parks itself (toggling autopilot off) with a toast telling the
+  // human to take over; ANY success (or a payload.hunt transition out of "running")
+  // resets the counter.
+  const pumpFailsRef = useRef(0);
   useEffect(() => {
     if (!autoPilot) return;
     if (!hunt || hunt.status !== "running") return;

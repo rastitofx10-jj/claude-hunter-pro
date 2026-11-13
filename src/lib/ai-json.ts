@@ -75,7 +75,40 @@ export function stripOuterFence(raw: string): string {
 }
 
 export function repairTrailingCommas(s: string): string {
-  return s.replace(/,\s*([}\]])/g, "$1");
+  // Round 9 — string-aware: the blind `/,\s*([}\]])/g` also matched commas INSIDE
+  // string values, so a repair could silently mutate content ("x,}" → "x}") while
+  // claiming to fix syntax. Now the walker tracks string state (reusing the
+  // escape-run discipline from escapeInnerQuotes) and only removes a comma that
+  // sits OUTSIDE any string, directly before a closer.
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      out += c;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === ",") {
+      // lookahead: whitespace* then a closer (outside a string) → drop the comma
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j])) j++;
+      const nxt = s[j];
+      if (nxt === "}" || nxt === "]") continue; // comma elided
+      out += c;
+      continue;
+    }
+    out += c;
+  }
+  return out;
 }
 
 /**
@@ -187,7 +220,13 @@ export function extractJson(raw: string, Err: ErrorFactory = AiJsonError): Recor
         const parsed: unknown = JSON.parse(cleaned.slice(firstArr, arrEnd + 1));
         if (Array.isArray(parsed)) return { items: parsed };
       } catch {
-        // not a valid array — continue down the object path
+        // Round 9 — fail-closed on the array path: the old code fell through to the
+        // OBJECT path, and balancedObjectSlice returned only the FIRST object inside
+        // the array — callers expecting {"verdicts":[...]} silently received one bare
+        // item (empty triage, no error, so the llmJson repair retry never fired).
+        // A payload that STARTS as an array and cannot be parsed as one is broken:
+        // throw so the retry machinery gets its chance instead of degrading silently.
+        throw new Err("The AI returned a broken JSON array — try again");
       }
     }
   }

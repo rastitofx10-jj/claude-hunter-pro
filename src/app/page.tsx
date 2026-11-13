@@ -72,7 +72,7 @@ export default function ClaudeHunterPage() {
 
   const { data: missionData } = useQuery({
     queryKey: ["missions"],
-    queryFn: () => apiFetch<{ items: unknown[] }>("/api/mission", token),
+    queryFn: () => apiFetch<{ items: unknown[]; total?: number }>("/api/mission", token),
   });
 
   const saveRepo = useMutation({
@@ -156,7 +156,7 @@ export default function ClaudeHunterPage() {
   }[] = [
     { tab: "home", label: "Home", icon: LayoutDashboard },
     { tab: "live", label: "Live Hunt", icon: Swords },
-    { tab: "mission", label: "Missions", icon: Target, badge: missionData?.items.length ? String(missionData.items.length) : undefined },
+    { tab: "mission", label: "Missions", icon: Target, badge: (missionData?.total ?? missionData?.items?.length ?? 0) > 0 ? String(missionData?.total ?? missionData?.items?.length ?? 0) : undefined },
     { tab: "sweep", label: "Sweep", icon: Satellite },
     { tab: "genesis", label: "Genesis", icon: Dna },
     { tab: "search", label: "Search", icon: Search },
@@ -213,10 +213,10 @@ export default function ClaudeHunterPage() {
                 <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed">
                   Pick a ready-made recipe (or <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px]">Ctrl</kbd>+
                   <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px]">K</kbd>), or search code for
-                  premium model strings like <code dir="ltr" className="font-mono">claude-opus-5-5</code> — the direct evidence
+                  the real frontier strings like <code dir="ltr" className="font-mono">claude-opus-4-5</code> — the direct evidence
                   that someone is paying for tokens.
                   <span className="mt-1 block text-xs font-medium text-orange-700 dark:text-orange-300">
-                    🔒 Threshold locked: only {THRESHOLD_LABEL} models — the 4.x family is blocked server-side.
+                    🔒 {THRESHOLD_RULE_TEXT}
                   </span>
                 </p>
               </div>
@@ -238,10 +238,11 @@ export default function ClaudeHunterPage() {
             }}
           />
         );
+      // Round 9 — genesis/mission render from the ALWAYS-MOUNTED wrappers above
+      // (draft preservation); these arms exist only for exhaustiveness and never fire.
       case "genesis":
-        return <GenesisPanel />;
       case "mission":
-        return <MissionControlPanel />;
+        return null;
       case "live":
         return <LiveHuntPanel />;
     }
@@ -280,7 +281,7 @@ export default function ClaudeHunterPage() {
               title={THRESHOLD_RULE_TEXT}
               className="hidden rounded-full border border-orange-300 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700 md:inline-flex dark:border-orange-800 dark:bg-orange-950/50 dark:text-orange-300"
             >
-              🔒 {THRESHOLD_LABEL} only · 4.x blocked
+              🔒 {THRESHOLD_LABEL} · fiction = zero credit
             </span>
             <FrontierChip onOpenSweep={() => setActiveTab("sweep")} />
             <RateChip />
@@ -361,16 +362,27 @@ export default function ClaudeHunterPage() {
         </div>
 
         {/* ---------- content ---------- */}
+        {/* Round 9 — the two DRAFT-CARRYING panels (mission goal/context/notes, genesis
+            productContext/selection/chimera result) stay MOUNTED and toggle visibility:
+            switching tabs used to unmount them and wipe every draft — a 2000-char goal
+            vanished the moment the user checked the DNA library mid-writing. The other
+            tabs are stateless (or server-recovered) and keep the cheap swap; the wrapper
+            key was removed so the persistent panels are never remounted by it either. */}
         <main className="min-w-0 flex-1 py-6">
           <TokenBanner />
           <motion.div
-            key={activeTab}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
             className="mt-4"
           >
-            {renderTab()}
+            <div className={activeTab === "mission" ? "" : "hidden"}>
+              <MissionControlPanel />
+            </div>
+            <div className={activeTab === "genesis" ? "" : "hidden"}>
+              <GenesisPanel />
+            </div>
+            {activeTab !== "mission" && activeTab !== "genesis" ? renderTab() : null}
           </motion.div>
         </main>
       </div>
