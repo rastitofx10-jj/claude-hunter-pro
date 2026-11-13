@@ -68,10 +68,13 @@ try {
     genes++;
   }
 
-  // 3) Chimera — skip if same name exists (idempotent)
+  // 3) Chimera — dedupe by name AND sources. Field fact (2026-11-13): chimeras
+  // #4 and #5 are BOTH named elite-parallel-orchestrator (independent syntheses
+  // converged on the same kebab name) — a name-only check silently dropped #5 on
+  // every restore, and its frontier DNA + truth-gate patch vanished with it.
   let chimeras = 0;
   for (const c of snap.chimeras ?? []) {
-    const existing = await db.chimera.findFirst({ where: { name: c.name } });
+    const existing = await db.chimera.findFirst({ where: { name: c.name, sources: c.sources } });
     if (existing) continue;
     await db.chimera.create({
       data: {
