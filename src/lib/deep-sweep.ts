@@ -7,7 +7,7 @@
 // ============================================================
 
 import { ghSearchWithBackoff, ghGraphql, computeListScore, tierOf, type TierKey, isCapabilityPath, getQuotaState } from "./github";
-import { QUALIFYING_MODELS, detectClaudeModels } from "./claude-models";
+import { QUALIFYING_MODELS, frontierModels, detectClaudeModels } from "./claude-models";
 import { harvestRepo, batchRepoMeta } from "./harvester";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, FRONTIER_REPO_POOL, FRONTIER_MODEL_POOL, rotateSlice, hydrateFresh } from "./frontier-queries";
@@ -32,8 +32,13 @@ export interface SweepQuery {
 export function buildQueryArsenal(seed = 0): SweepQuery[] {
   const queries: SweepQuery[] = [];
 
-  // 1. Every search string of every qualifying model — direct code search (the hard evidence)
-  for (const m of QUALIFYING_MODELS) {
+  // 1. Frontier registry queries — DEVICE DIRECTIVE (2026-11-13): only models AT
+  //    each family's real frontier generate hunt queries (Opus 4.5 / Sonnet 4.5 /
+  //    Haiku 4.5 today). The 9 older registry models burned 20 of 72 queries per
+  //    sweep on historically-fixed corners; they still DETECT and SCORE in found
+  //    repos, but never steer the hunt budget. frontierModels() tracks the
+  //    registry automatically when a genuinely new real version lands.
+  for (const m of frontierModels()) {
     for (const s of m.searchStrings) {
       queries.push({ q: s, kind: "code", origin: `registry:${m.id}` });
     }
@@ -361,9 +366,11 @@ export function consolidateCandidates(
     const asModel = queryToModel.get(hit.viaQuery.toLowerCase());
     // Frontier-model fallback: the query itself names the model(s) — same content-match
     // guarantee as a registry query, so the same hard-evidence treatment.
-    const frontierModels = asModel ? [] : frontierModelEvidence.get(hit.viaQuery.toLowerCase()) ?? [];
-    if (asModel || frontierModels.length > 0) {
-      const ids = asModel ? [asModel] : frontierModels;
+    // (renamed 2026-11-13: the local used to be called `frontierModels`, shadowing
+    // the imported frontierModels() selector added with the device directive)
+    const waveProofModels = asModel ? [] : frontierModelEvidence.get(hit.viaQuery.toLowerCase()) ?? [];
+    if (asModel || waveProofModels.length > 0) {
+      const ids = asModel ? [asModel] : waveProofModels;
       for (const id of ids) if (!c.contentEvidence.includes(id)) c.contentEvidence.push(id);
       // Saving the real file path — ground truth for re-verification in the audit module
       if (c.evidencePaths.length < 3 && !c.evidencePaths.includes(hit.path)) c.evidencePaths.push(hit.path);

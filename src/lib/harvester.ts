@@ -16,7 +16,7 @@
 // ============================================================
 
 import { ghFetch, ghSearchWithBackoff, ghGraphql, mapLimit, GhError, isCapabilityPath } from "./github";
-import { QUALIFYING_MODELS } from "./claude-models";
+import { frontierModels } from "./claude-models";
 import { mineDna } from "./dna-miner";
 import { db } from "./db";
 import { FRONTIER_CODE_POOL, rotateSlice, hydrateFresh, daySeed } from "./frontier-queries";
@@ -34,7 +34,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function harvestQueries(): string[] {
   const seed = daySeed();
   const registry: string[] = [];
-  for (const m of QUALIFYING_MODELS) {
+  // DEVICE DIRECTIVE (2026-11-13): harvest rotates ONLY the frontier line —
+  // the strongest real models per family. Old registry models detect & score
+  // in found repos but never consume harvest budget (they used to: whole
+  // days rotated onto claude-3-era strings).
+  for (const m of frontierModels()) {
     const primary = m.searchStrings.find((s) => /^claude-[a-z0-9-]+$/.test(s)) ?? m.searchStrings[0];
     if (primary && !registry.includes(primary)) registry.push(primary);
   }

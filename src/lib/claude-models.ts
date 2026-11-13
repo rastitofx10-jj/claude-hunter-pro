@@ -186,6 +186,33 @@ export function realFamilyFrontier(): Partial<Record<ModelFamily, number>> {
   return m;
 }
 
+/**
+ * The frontier line for QUERY GENERATION — the hunt budget.
+ *
+ * DEVICE DIRECTIVE (2026-11-13, enforced in code): frontier/strongest models
+ * only, no old/useless models. Field evidence that motivated it: the sweep
+ * arsenal spent 20 of 72 queries per run hunting 9 stale model strings
+ * (claude-3-haiku and friends) — a THIRD of the hunt budget on corners whose
+ * result set is historically fixed. The harvest rotated onto claude-3-era
+ * strings on entire days. The Genesis harvest UI copy already claimed
+ * "real-frontier code searches (opus-4-5 · sonnet-4-5 · haiku-4-5)" — the
+ * arsenal now makes that copy true.
+ *
+ * Only models AT each family's real frontier (the strongest real version per
+ * family) generate hunt queries. Older registry models keep their roles in
+ * DETECTION and SCORING (a found repo gets its full model field), but they
+ * never steer the hunt budget again — the same treatment the registry already
+ * gives Claude 1/2-era models, one generation up. When the registry itself
+ * registers a new real version (e.g. a genuine future opus 4.6), the frontier
+ * line moves with it automatically.
+ */
+export function frontierModels(): ClaudeModelDef[] {
+  const frontier = realFamilyFrontier();
+  return QUALIFYING_MODELS.filter(
+    (m) => m.family !== "generic" && m.version >= (frontier[m.family] ?? Infinity)
+  );
+}
+
 /** Labels for known ancient (blocked) models — real, but pre-2024 legacy. */
 const KNOWN_BLOCKED_LABELS: Record<string, string> = {
   "claude-2": "Claude 2",

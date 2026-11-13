@@ -46,12 +46,18 @@ try {
     repos++;
   }
 
-  // 2) DnaArtifact — natural key (sourceRepo, path)
+  // 2) DnaArtifact — natural key (sourceRepo, path) + EXPLICIT id preservation.
+  // Field-fact why ids matter (2026-11-13): mission.dnaRefs references gene ids. The
+  // old restore created genes WITHOUT ids, so ids survived only while the table was
+  // contiguous 1..N — any future deletion (quality purge, fiction purge) would make
+  // every restore renumber the table and silently point dnaRefs at the WRONG genes.
+  // Explicit ids make the mapping structural, not coincidental.
   let genes = 0;
   for (const a of snap.dnaArtifacts ?? []) {
     await db.dnaArtifact.upsert({
       where: { sourceRepo_path: { sourceRepo: a.sourceRepo, path: a.path } },
       create: {
+        id: a.id,
         sourceRepo: a.sourceRepo,
         path: a.path,
         kind: a.kind,
@@ -68,16 +74,21 @@ try {
     genes++;
   }
 
-  // 3) Chimera — dedupe by name AND sources. Field fact (2026-11-13): chimeras
-  // #4 and #5 are BOTH named elite-parallel-orchestrator (independent syntheses
-  // converged on the same kebab name) — a name-only check silently dropped #5 on
-  // every restore, and its frontier DNA + truth-gate patch vanished with it.
+  // 3) Chimera — EXPLICIT id preservation + id-first dedupe, name+sources as the
+  // natural-key fallback. Field fact (2026-11-13): chimeras #4 and #5 are BOTH named
+  // elite-parallel-orchestrator (independent syntheses converged on the same kebab
+  // name) — a name-only check silently dropped #5 on every restore, and its frontier
+  // DNA + truth-gate patch vanished with it. Id-first dedupe makes the record
+  // identity structural regardless of naming collisions.
   let chimeras = 0;
   for (const c of snap.chimeras ?? []) {
-    const existing = await db.chimera.findFirst({ where: { name: c.name, sources: c.sources } });
-    if (existing) continue;
+    const byId = await db.chimera.findUnique({ where: { id: c.id } });
+    if (byId) continue;
+    const byKey = await db.chimera.findFirst({ where: { name: c.name, sources: c.sources } });
+    if (byKey && byKey.id !== c.id) continue; // same creature re-created under a new id — keep the existing row
     await db.chimera.create({
       data: {
+        id: c.id,
         name: c.name,
         oneLiner: c.oneLiner,
         sources: c.sources,
@@ -91,13 +102,19 @@ try {
     chimeras++;
   }
 
-  // 4) Mission — skip if same missionName exists
+  // 4) Mission — EXPLICIT id preservation + id-first dedupe. Field fact
+  // (2026-11-13): mission names are LLM codenames — a repeat name across
+  // generations is plausible, and the old name-only dedupe silently dropped the
+  // whole mission on every restore (the same loss class that ate chimera #5).
+  // hunt.missionId and mission.dnaRefs both reference these ids — they must be
+  // structural, not coincidental.
   let missions = 0;
   for (const m of snap.missions ?? []) {
-    const existing = await db.mission.findFirst({ where: { missionName: m.missionName } });
-    if (existing) continue;
+    const byId = await db.mission.findUnique({ where: { id: m.id } });
+    if (byId) continue;
     await db.mission.create({
       data: {
+        id: m.id,
         goal: m.goal,
         context: m.context,
         status: m.status,
