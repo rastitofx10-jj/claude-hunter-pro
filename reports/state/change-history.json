@@ -1,17 +1,17 @@
 {
  "version": 1,
- "generatedAt": "2026-11-11T15:54:27.650Z",
+ "generatedAt": "2026-11-13T10:21:09.836Z",
  "note": "WO5 of chimera #3 (verified-mutation-flywheel): every verdict recorded; base rates feed the next adversarial pass.",
  "baseRates": {
-  "huntsTotal": 27,
-  "huntsDone": 27,
-  "sweepDoneRate": 0.8275862068965517,
-  "avgGenesPerHuntGen": 40.44444444444444,
-  "avgCodeHitsPerSweep": 1945.875,
-  "avgCandidatesPerSweep": 2059.7083333333335,
-  "enrichmentRate": 0.007929925353508789,
-  "chimerasBorn": 4,
-  "genesTotal": 1202
+  "huntsTotal": 31,
+  "huntsDone": 31,
+  "sweepDoneRate": 0.8648648648648649,
+  "avgGenesPerHuntGen": 50.645161290322584,
+  "avgCodeHitsPerSweep": 2196.5,
+  "avgCandidatesPerSweep": 2256.03125,
+  "enrichmentRate": 0.0065934370368318255,
+  "chimerasBorn": 5,
+  "genesTotal": 1686
  },
  "generations": [
   {
@@ -228,6 +228,38 @@
    "genesAdded": 100,
    "genesTotalAfter": 1092,
    "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 28,
+   "date": "2026-11-11",
+   "genesAdded": 111,
+   "genesTotalAfter": 1203,
+   "llmCalls": 12,
+   "status": "done"
+  },
+  {
+   "gen": 29,
+   "date": "2026-11-11",
+   "genesAdded": 139,
+   "genesTotalAfter": 1342,
+   "llmCalls": 13,
+   "status": "done"
+  },
+  {
+   "gen": 30,
+   "date": "2026-11-12",
+   "genesAdded": 123,
+   "genesTotalAfter": 1465,
+   "llmCalls": 14,
+   "status": "done"
+  },
+  {
+   "gen": 31,
+   "date": "2026-11-13",
+   "genesAdded": 105,
+   "genesTotalAfter": 1570,
+   "llmCalls": 14,
    "status": "done"
   }
  ],
@@ -550,6 +582,94 @@
    "enriched": 4,
    "hardEvidence": 1160,
    "llmCalls": 9
+  },
+  {
+   "sweep": 30,
+   "date": "2026-11-11",
+   "status": "done",
+   "queries": 41,
+   "codeHits": 2614,
+   "candidates": 2575,
+   "enriched": 5,
+   "hardEvidence": 1379,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 31,
+   "date": "2026-11-11",
+   "status": "done",
+   "queries": 41,
+   "codeHits": 2512,
+   "candidates": 2496,
+   "enriched": 2,
+   "hardEvidence": 1267,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 32,
+   "date": "2026-11-11",
+   "status": "done",
+   "queries": 41,
+   "codeHits": 2471,
+   "candidates": 2407,
+   "enriched": 6,
+   "hardEvidence": 1203,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 33,
+   "date": "2026-11-12",
+   "status": "done",
+   "queries": 41,
+   "codeHits": 2560,
+   "candidates": 2514,
+   "enriched": 6,
+   "hardEvidence": 1309,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 34,
+   "date": "2026-11-12",
+   "status": "done",
+   "queries": 48,
+   "codeHits": 2838,
+   "candidates": 2699,
+   "enriched": 7,
+   "hardEvidence": 1496,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 35,
+   "date": "2026-11-12",
+   "status": "done",
+   "queries": 48,
+   "codeHits": 2767,
+   "candidates": 2599,
+   "enriched": 6,
+   "hardEvidence": 1380,
+   "llmCalls": 9
+  },
+  {
+   "sweep": 36,
+   "date": "2026-11-12",
+   "status": "done",
+   "queries": 58,
+   "codeHits": 3344,
+   "candidates": 3291,
+   "enriched": 30,
+   "hardEvidence": 2195,
+   "llmCalls": 8
+  },
+  {
+   "sweep": 37,
+   "date": "2026-11-13",
+   "status": "done",
+   "queries": 72,
+   "codeHits": 4481,
+   "candidates": 4179,
+   "enriched": 22,
+   "hardEvidence": 3083,
+   "llmCalls": 8
   }
  ],
  "chimeras": [
@@ -599,6 +719,18 @@
     "Loulen/prompt-driven-orchestrator",
     "MelonS/MelonS-Agents",
     "FinpeakInc/frevana-skills"
+   ]
+  },
+  {
+   "id": 5,
+   "name": "elite-parallel-orchestrator",
+   "born": "2026-11-13",
+   "parents": [
+    "cxostack/cxostack",
+    "lisbeth718/agent-setup",
+    "wilsonwaters/3d-printing",
+    "openwebf/webf",
+    "instructure/instructure-ui"
    ]
   }
  ]
