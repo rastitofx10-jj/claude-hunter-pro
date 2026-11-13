@@ -136,6 +136,14 @@ export async function generateChimera(
   const repoList = sources.map((s) => s.repo).join(", ");
   const confirmedWaves = await authorityConfirmedWaveIds();
 
+  // Name-collision guard (2026-11-13): chimeras #4/#5/#6 ALL came out named
+  // "elite-parallel-orchestrator" — the LLM copies the example name out of the
+  // schema line. The example is now banned explicitly, existing names are
+  // injected into the prompt, and a colliding name gets a deterministic suffix.
+  const existingNames: string[] = await db.chimera
+    .findMany({ select: { name: true }, orderBy: { id: "asc" }, take: 100 })
+    .then((rows) => rows.map((r) => r.name).filter(Boolean));
+
   const prompt = `The mined DNA (real capability files, real-model truth gate):
 
 ${digest}
@@ -155,7 +163,7 @@ no chimera is ever born contaminated again.
 
 Perform the supreme merge. Return JSON exactly in the following structure:
 {
-  "chimeraName": "An English kebab-case name for the merged creation, e.g. elite-parallel-orchestrator",
+  "chimeraName": "An English kebab-case name for the merged creation. The name must be NEW and specific to THIS DNA's theme — never 'elite-parallel-orchestrator' (already taken by chimeras #4/#5/#6), never a generic reuse. Existing chimera names in our library (all taken): ${existingNames.join(", ") || "(none yet)"}",
   "oneLiner": "One sentence in English: what the chimera does and why it is superior to each source individually",
   "skillMd": "A complete SKILL.md file in English: frontmatter (name, description) + merged operative instructions from all the sources — the best of all of them, phrased in a uniform, sharp way. Minimum 40 lines of practical content.",
   "principles": ["4-7 design principles extracted from the DNA that hold true across projects"],
@@ -208,8 +216,13 @@ Return 3-5 work orders, sorted by value to the product.`;
         continue; // one feedback retry with the offending ids quoted
       }
       const truthNotice = contamination.length > 0 ? modelTruthNotice(contamination) : undefined;
+      // Name-collision fallback (belt-and-suspenders): if the LLM ignored the
+      // ban, a deterministic suffix keeps records distinguishable — the same
+      // physical collision that silently dropped chimera #5 from restores.
+      let name = sanitizeSlug(j.chimeraName, "elite-chimera");
+      if (existingNames.includes(name)) name = `${name}-gen${existingNames.length + 1}`;
       return {
-        chimeraName: sanitizeSlug(j.chimeraName, "elite-chimera"),
+        chimeraName: name,
         oneLiner: str(j.oneLiner),
         skillMd: truthNotice ? skillMd + truthNotice : skillMd,
         principles: strArr(j.principles),
