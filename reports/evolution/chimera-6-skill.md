@@ -3,7 +3,7 @@ name: adversarial-verification-orchestrator
 description: Multi-agent adversarial planning and execution system with rigorous validation, QA automation, and self-verifying model registry for competitive intelligence.
 ---
 
-# Elite Parallel Orchestrator
+# Adversarial Verification Orchestrator
 
 A high-stakes multi-agent system that combines adversarial planning, rigorous validation, and QA automation to produce superior competitive intelligence with ≥95% certainty.
 
