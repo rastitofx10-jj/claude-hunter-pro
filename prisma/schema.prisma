@@ -34,6 +34,9 @@ model SearchHistory {
   filters     String?  // JSON of filters
   resultCount Int      @default(0)
   createdAt   DateTime @default(now())
+
+  // History list ordering — newest first
+  @@index([createdAt])
 }
 
 // System settings (key-value) — includes the GitHub token used by the server, among other things
@@ -63,6 +66,8 @@ model DnaArtifact {
   @@unique([sourceRepo, path])
   @@index([sourceRepo])
   @@index([kind])
+  // Stats/growth queries order artifacts by createdAt — previously a full scan + sort
+  @@index([createdAt])
 }
 
 // Chimera — a merged AI creation synthesized from several elite repos + work orders for our product
@@ -77,6 +82,9 @@ model Chimera {
   workOrders  String?  // JSON array of work orders
   breakthrough String? // The single breakthrough idea
   createdAt   DateTime @default(now())
+
+  // Chimera history list — ordered newest first
+  @@index([createdAt])
 }
 
 // Compiled mission — a natural-language goal turned into an executable battle plan
@@ -98,6 +106,11 @@ model Mission {
   autopilotAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  // Status is queried on every mission list/filter + the scheduler scans in_progress missions every 10s — previously a full scan
+  @@index([status])
+  // Mission list views order by createdAt desc
+  @@index([createdAt])
 }
 
 // Deep sweep — a full intelligence operation: query arsenal -> mining -> prompt swarm

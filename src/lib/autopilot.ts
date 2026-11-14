@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import { safeJsonParse, isTimeoutError } from "./ai-json";
 import { executePhase, extractHandoff, type AutopilotStep, type MissionPhase } from "./mission-compiler";
 import { advanceStatus, TERMINAL_STATUSES } from "./mission-status";
+import { emitMission } from "./event-bus";
 
 export interface AutopilotFailure {
   phaseIndex: number;
@@ -143,6 +144,13 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
 
   if (nextIdx === -1) {
     // Everything executed — make sure the status reflects it (stays in_progress until the field report)
+    emitMission({
+      missionId,
+      status: mission.status,
+      stepsDone: state.steps.length,
+      totalPhases: phases.length,
+      note: "autopilot complete — awaiting the field report",
+    });
     return {
       done: true,
       allDone: true,
@@ -248,6 +256,24 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   await db.mission.update({
     where: { id: missionId },
     data: { autopilot: JSON.stringify(newState), autopilotAt: new Date(), status },
+  });
+
+  // v0.4.0 — one live event per phase execution/failure (the client used to poll blindly)
+  emitMission({
+    missionId,
+    status,
+    phase: executed
+      ? executed.title
+      : failResult
+        ? `Phase ${failResult.phaseIndex + 1} failed`
+        : undefined,
+    stepsDone: newState.steps.length,
+    totalPhases: phases.length,
+    note: executed
+      ? undefined
+      : failResult
+        ? failResult.error.slice(0, 160)
+        : "all phases closed",
   });
 
   return {

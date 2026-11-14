@@ -19,7 +19,10 @@ import {
   Brain,
   Clock,
   FlaskConical,
+  Coins,
+  Radio,
 } from "lucide-react";
+import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +31,9 @@ import { useHunterStore, type TabKey } from "@/lib/hunter-store";
 import { THRESHOLD_LABEL, THRESHOLD_RULE_TEXT } from "@/lib/claude-models";
 import type { RateInfo } from "@/lib/hunter-types";
 import { useHydrated } from "@/hooks/use-hydrated";
+import { useLiveStore, kindTone } from "@/lib/live-store";
+import { AutonomyControl } from "@/components/hunter/autonomy-control";
+import type { StatsResponse } from "@/components/hunter/insights-panel";
 
 // ---------- local types (mirror of the API responses, kept lean) ----------
 
@@ -104,6 +110,16 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
     queryFn: () => apiFetch<RateInfo>("/api/rate-limit", token),
     staleTime: 60_000,
   });
+  // LLM ledger spend — the same ["stats"] query the Insights tab renders; the
+  // live wire's llm/dna-born invalidations keep it fresh without a fast poll.
+  const { data: stats } = useQuery({
+    queryKey: ["stats"],
+    queryFn: () => apiFetch<StatsResponse>("/api/stats", token),
+    staleTime: 60_000,
+  });
+  // The live nervous system — the SSE feed (use-hunter-events) fills it.
+  const liveConnected = useLiveStore((s) => s.connected);
+  const liveFeed = useLiveStore((s) => s.feed);
 
   const hunts = huntData?.items ?? [];
   const missions = missionData?.items ?? [];
@@ -264,6 +280,34 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
         </Card>
       </motion.div>
 
+      {/* Autonomy + LLM spend — the server keeps hunting while the tab is closed */}
+      <motion.div custom={4.5} variants={fadeUp} initial="hidden" animate="show">
+        <div className="grid gap-5 md:grid-cols-2">
+          <AutonomyControl />
+          <Card className="border-emerald-200/70 bg-gradient-to-b from-emerald-50/50 to-card dark:border-emerald-900 dark:from-emerald-950/20">
+            <CardContent className="space-y-3 p-4">
+              <p className="flex items-center gap-1.5 text-sm font-bold">
+                <Coins className="h-4 w-4 text-emerald-600" aria-hidden /> LLM spend
+              </p>
+              <div>
+                <p className="text-2xl font-bold tabular-nums">
+                  {stats ? `$${stats.llm.total.costUsd.toFixed(3)}` : "—"}
+                </p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {stats
+                    ? `${stats.llm.total.calls.toLocaleString()} calls · ${stats.llm.days.filter((d) => d.calls > 0).length} active day(s) · persistent ledger`
+                    : "Reading the ledger…"}
+                </p>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Every hunt, sweep and distillation call lands in the daily cost ledger — the Insights
+                tab charts it day by day.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </motion.div>
+
       <div className="grid gap-5 lg:grid-cols-3">
         {/* Recent activity */}
         <motion.div custom={5} variants={fadeUp} initial="hidden" animate="show" className="lg:col-span-2">
@@ -279,6 +323,35 @@ export function Overview({ onNavigate }: { onNavigate: (t: TabKey) => void }) {
                   </Badge>
                 )}
               </div>
+              {(liveConnected || liveFeed.length > 0) && (
+                <div className="mb-3 rounded-lg border border-dashed p-2">
+                  <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground">
+                    <Radio className="h-3 w-3 text-emerald-500" aria-hidden /> Live wire
+                    {liveConnected && <span className="ml-auto font-normal">streaming</span>}
+                  </p>
+                  {liveFeed.length === 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Connected — waiting for server events…
+                    </p>
+                  ) : (
+                    <ul className="max-h-24 space-y-0.5 overflow-y-auto">
+                      {liveFeed.slice(0, 4).map((f) => (
+                        <li key={f.id} className="flex items-baseline gap-2 text-[11px]">
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {format(new Date(f.t), "HH:mm:ss")}
+                          </span>
+                          <span className={`shrink-0 text-[9px] font-bold uppercase tracking-wide ${kindTone(f.kind)}`}>
+                            {f.kind}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground" dir="auto" title={f.text}>
+                            {f.text}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               {activity.length === 0 ? (
                 <div className="rounded-xl border border-dashed p-8 text-center">
                   <p className="text-3xl">🏹</p>

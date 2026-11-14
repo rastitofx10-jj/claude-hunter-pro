@@ -1,47 +1,25 @@
-# deps / build
-node_modules/
-.next/
-out/
-build/
 skills/
+node_modules/
 
-# local db — contains the user's GitHub token (Setting table) — NEVER commit
-db/
-*.db
-*.db-journal
-*.sqlite
-
-# env
+# local env — tokens/secrets live here, never commit
 .env
-.env.local
-.env*.local
 
-# logs / tooling artifacts
-dev.log
-*.log
-tool-results/
-.tmp-test/
-agent-ctx/
+# local SQLite database (custom.db — contains the server-side GitHub PAT in Setting)
+db/
 
-# editor/os
-.DS_Store
-.idea/
-.vscode/
-tsconfig.tsbuildinfo
-evidence-*.png
-
-# platform workspace dirs — user uploads (contains a live GitHub PAT!) and
-# generated deliverables must NEVER be committed; this repo is public.
-upload/
-download/
-tool-results/
-.zscripts/
+# dev server / background service logs
 dev.log
 server.log
-scripts/gh_probe.py
 
-# platform-side PDF build helpers (not repo content)
-scripts/audit-*
-scripts/audit_*.py
-.rescue/
-.cycle-state.json
+# user uploads — live GitHub PAT files (incl. a Hebrew-named token) must never be committed
+upload/
+
+# build output
+.next/
+
+# agent work records (cross-agent handoff scratch space)
+agent-ctx/
+
+# tsc incremental cache + tool session artifacts
+tsconfig.tsbuildinfo
+tool-results/

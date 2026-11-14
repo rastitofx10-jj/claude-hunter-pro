@@ -22,6 +22,7 @@ import { runSwarm, SWARM_TRIAGE_COVERAGE, type SwarmResult } from "./intel-swarm
 import { resolveToken } from "./server-token";
 import { parseAudit } from "./auditor";
 import { writeDnaSnapshot } from "./dna-snapshot";
+import { emitSweep, emitReaped, emitDnaBorn } from "./event-bus";
 import type { NextRequest } from "next/server";
 
 const activeRuns = new Set<number>();
@@ -31,14 +32,17 @@ let startingSweep = false; // start lock: closes the race window between the che
  * Before: a stuck running row blocked new sweeps forever (permanent 409). */
 const STALE_RUN_MS = 15 * 60_000; // 15 minutes without a progress update = dead
 
-async function reapStaleRuns(): Promise<void> {
+export async function reapStaleRuns(): Promise<void> {
   try {
     const cutoff = new Date(Date.now() - STALE_RUN_MS);
     const dead = await db.sweepRun.updateMany({
       where: { status: "running", updatedAt: { lt: cutoff } },
       data: { status: "failed", error: "The run was interrupted (the server was restarted) — marked automatically" },
     });
-    if (dead.count > 0) console.error(`[sweep] reaped ${dead.count} stale running row(s)`);
+    if (dead.count > 0) {
+      console.error(`[sweep] reaped ${dead.count} stale running row(s)`);
+      emitReaped({ target: "sweep", id: 0, note: `${dead.count} stale sweep run(s) reaped` });
+    }
   } catch (e) {
     console.error("[sweep] stale reaper failed", e);
   }
@@ -56,10 +60,31 @@ async function updateRun(
 ): Promise<void> {
   try {
     await db.sweepRun.update({ where: { id }, data });
+    // v0.4.0 — live progress on the event bus. A per-run shadow state dedupes:
+    // the client gets an event only when a visible field actually changed.
+    const prev = sweepShadow.get(id) ?? { phase: "queries", progress: 0, status: "running" };
+    const next = {
+      phase: data.phase ?? prev.phase,
+      progress: typeof data.progress === "number" ? data.progress : prev.progress,
+      status: data.status ?? prev.status,
+    };
+    if (next.phase !== prev.phase || next.progress !== prev.progress || next.status !== prev.status) {
+      sweepShadow.set(id, next);
+      emitSweep({
+        runId: id,
+        ...next,
+        note: next.phase !== prev.phase ? `phase → ${next.phase}` : undefined,
+      });
+    }
   } catch {
     // The run was deleted mid-operation — stop silently
+  } finally {
+    if (data.status === "done" || data.status === "failed") sweepShadow.delete(id);
   }
 }
+
+/** Last-emitted sweep state per run — the event dedupe shadow */
+const sweepShadow = new Map<number, { phase: string; progress: number; status: string }>();
 
 /** The run core — not thrown directly to the client; every error is saved on the run row */
 async function executeSweep(runId: number, token: string | null): Promise<void> {
@@ -126,6 +151,11 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
         reposMined++;
         dnaAddedTotal.n += rep.newCount;
         if (rep.artifacts > 0) reposWithFindings++;
+        // v0.4.0 — a live event per productive repo (one event per repo, not per gene:
+        // a 12-gene repo spawning 12 events would flood the feed)
+        if (rep.newCount > 0) {
+          emitDnaBorn({ name: `${rep.repo} +${rep.newCount}`, source: rep.repo, origin: "mined" });
+        }
       } else {
         mineErrors++;
       }
@@ -256,6 +286,15 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
 
 /** Start a new run in the background — returns the id immediately. Protected against double-POST races */
 export async function startSweep(req: NextRequest): Promise<{ id: number }> {
+  const token = await resolveToken(req);
+  return beginSweep(token);
+}
+
+/**
+ * The sweep launcher without an HTTP request — shared by the API route and the
+ * autonomous daily cycle (the scheduler has no client header to resolve).
+ */
+export async function beginSweep(token: string | null): Promise<{ id: number }> {
   if (startingSweep || (await hasActiveRun())) {
     const err = new Error("A sweep is already running — wait for it to finish or check the status");
     (err as Error & { status?: number }).status = 409;
@@ -269,11 +308,12 @@ export async function startSweep(req: NextRequest): Promise<{ id: number }> {
       (err as Error & { status?: number }).status = 409;
       throw err;
     }
-    const token = await resolveToken(req);
     const run = await db.sweepRun.create({
       data: { status: "running", phase: "queries", progress: 0 },
     });
     activeRuns.add(run.id); // registered before the run — hasActiveRun detects it immediately
+    sweepShadow.set(run.id, { phase: "queries", progress: 0, status: "running" });
+    emitSweep({ runId: run.id, phase: "queries", progress: 0, status: "running", note: "deep sweep started" });
     // Background run — intentionally without await
     void executeSweep(run.id, token);
     return { id: run.id };

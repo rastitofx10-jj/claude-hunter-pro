@@ -27,6 +27,9 @@
 // Server-side only. Configure through environment variables — see .env.example.
 // ============================================================
 
+import { createHash } from "node:crypto";
+import { db } from "./db";
+import { emitLlm } from "./event-bus";
 import { extractJson, markTimeoutError, type ErrorFactory } from "./ai-json";
 import { llmComplete as zaiComplete, llmCallSnapshot as zaiAttemptSnapshot } from "./zai";
 
@@ -265,7 +268,200 @@ export function llmStats() {
     estimatedCostUsd: Number(totalCost.toFixed(4)),
     models,
     lastError,
+    // v0.5: the prompt-dedup cache became observable — a rising hit rate is
+    // the proof the dedup pays for itself (and the signal to raise the cap)
+    cacheHits,
+    cacheMisses,
   };
+}
+
+// ---------- prompt-dedup response cache ----------
+
+// WHY: the engines re-ask identical questions more often than it looks — a
+// retry after a stage crash, an autopilot re-running a phase whose inputs did
+// not move, two subsystems summarizing the same repo minutes apart. Every
+// duplicate is a full-price round trip (tokens AND wall-clock AND a pool slot).
+// The cache keys the FINAL successful result by
+// sha1(model : effective-effort : normalized-prompt) — exactly the wire request
+// the transport would have sent — capped at 100 entries, oldest evicted.
+// ONLY clean results are cached: no refusal (the model declined — a retry with
+// a nudge can legitimately change the answer), no max_tokens truncation (the
+// answer is incomplete — llmJson retries those with a bigger budget, and a
+// cached copy would freeze the truncation), and first-attempt successes only:
+// a result that needed a capability-fallback retry (effort/schema dropped to
+// appease a legacy model) came from a request the key does not describe, so a
+// later identical key could never reproduce it — caching it would serve a
+// phantom answer to the NEXT caller of the original shape.
+
+const LLM_CACHE_MAX = 100;
+const llmCache = new Map<string, LlmResult>();
+let cacheHits = 0;
+let cacheMisses = 0;
+
+function llmCacheKey(
+  model: string,
+  effort: LlmEffort | null,
+  system: string,
+  turns: ReadonlyArray<{ role: "user" | "assistant"; content: string }>
+): string {
+  // The normalized request: the post-split system (includes the English-only
+  // rule) + the exact turns the transport would send. Two logical asks that
+  // differ only in message-array shape share a key — correct, they serialize
+  // to the same wire request anyway.
+  return createHash("sha1")
+    .update(`${model}::${effort ?? "no-effort"}::${system}\u0000${JSON.stringify(turns)}`)
+    .digest("hex");
+}
+
+function llmCacheGet(key: string): LlmResult | null {
+  const hit = llmCache.get(key);
+  if (!hit) return null;
+  try {
+    return structuredClone(hit); // each consumer gets its own copy — a mutated result must never poison the cache
+  } catch {
+    return null; // plain-data results always clone; belt-and-braces regardless
+  }
+}
+
+function llmCacheSet(key: string, result: LlmResult): void {
+  let safeCopy: LlmResult;
+  try {
+    safeCopy = structuredClone(result);
+  } catch {
+    return; // exotic result — don't cache what we can't safely hand out later
+  }
+  llmCache.delete(key); // re-store refreshes insertion order → eviction stays "stalest first"
+  llmCache.set(key, safeCopy);
+  while (llmCache.size > LLM_CACHE_MAX) {
+    const oldest = llmCache.keys().next().value;
+    if (oldest === undefined) break;
+    llmCache.delete(oldest);
+  }
+}
+
+// ---------- persistent daily usage ledger (Setting row "llmUsageDaily") ----------
+
+// WHY a ledger at all: llmStats lives in process memory and dies with every
+// recycle — a long-run budget had no memory across sessions. This persists
+// one JSON row: { "YYYY-MM-DD": { calls, promptTokens, completionTokens,
+// costUsd } }, pruned to the last 30 days so the row can never grow unbounded.
+// Debounce: at most one DB write per 5s per process — under a prompt swarm the
+// per-call upsert would itself become a bottleneck. Counts accumulate in a
+// pending map keyed by day (a midnight rollover can never merge two days)
+// and flush on a single timer, chained so read-modify-write rounds never
+// overlap. A hard crash loses the last ≤5s of counts — the accepted trade for
+// never coupling LLM call latency to disk I/O.
+// Honesty rule: a cache hit counts as a call with zero tokens/cost — the
+// traffic was real, the consumption was not.
+
+interface DayUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+}
+
+const LEDGER_KEY = "llmUsageDaily";
+const LEDGER_FLUSH_MS = 5_000;
+const LEDGER_KEEP_DAYS = 30;
+
+const pendingByDay = new Map<string, DayUsage>();
+let ledgerTimer: ReturnType<typeof setTimeout> | null = null;
+let lastLedgerWriteAt = 0; // epoch ms of the last actual DB write
+let ledgerFlushTail: Promise<void> = Promise.resolve(); // serializes flushes — read-modify-write must never overlap
+
+/** A stored day entry may be older-shaped or corrupt — normalize, never trust. */
+function dayUsageOf(v: unknown): DayUsage {
+  const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Partial<Record<keyof DayUsage, unknown>>;
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
+  return {
+    calls: num(o.calls),
+    promptTokens: num(o.promptTokens),
+    completionTokens: num(o.completionTokens),
+    costUsd: num(o.costUsd),
+  };
+}
+
+function ledgerCount(day: string, promptTokens: number, completionTokens: number, costUsd: number): void {
+  const p = pendingByDay.get(day) ?? { calls: 0, promptTokens: 0, completionTokens: 0, costUsd: 0 };
+  p.calls++;
+  p.promptTokens += promptTokens;
+  p.completionTokens += completionTokens;
+  p.costUsd += costUsd;
+  pendingByDay.set(day, p);
+  if (ledgerTimer !== null) return; // a flush is already scheduled — its write will carry these counts too
+  const wait = Math.max(0, LEDGER_FLUSH_MS - (Date.now() - lastLedgerWriteAt));
+  ledgerTimer = setTimeout(() => {
+    ledgerTimer = null;
+    // chained, voided, fully self-caught: a ledger hiccup must NEVER reject
+    // into anything that could observe it (the calling engine is long gone)
+    ledgerFlushTail = ledgerFlushTail
+      .then(() => ledgerFlush())
+      .catch(() => {}); // unreachable — ledgerFlush catches everything — but the chain stays unrejectable anyway
+  }, wait);
+}
+
+async function ledgerFlush(): Promise<void> {
+  if (pendingByDay.size === 0) return;
+  lastLedgerWriteAt = Date.now();
+  const deltas = new Map(pendingByDay);
+  pendingByDay.clear();
+  try {
+    const row = await db.setting.findUnique({ where: { key: LEDGER_KEY } });
+    const ledger: Record<string, DayUsage> = {};
+    if (row?.value) {
+      try {
+        const parsed: unknown = JSON.parse(row.value);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+            // a corrupt key/shape is normalized, then aged out by the prune below
+            ledger[k] = dayUsageOf(v);
+          }
+        }
+      } catch {
+        // corrupt row — start a fresh ledger rather than fail every future flush forever
+      }
+    }
+    for (const [day, d] of deltas) {
+      const cur = ledger[day] ?? { calls: 0, promptTokens: 0, completionTokens: 0, costUsd: 0 };
+      cur.calls += d.calls;
+      cur.promptTokens += d.promptTokens;
+      cur.completionTokens += d.completionTokens;
+      cur.costUsd += d.costUsd;
+      ledger[day] = cur;
+    }
+    // prune to the last 30 day keys — ISO dates sort lexically, oldest first
+    const days = Object.keys(ledger).sort();
+    for (const day of days.slice(0, Math.max(0, days.length - LEDGER_KEEP_DAYS))) delete ledger[day];
+    await db.setting.upsert({
+      where: { key: LEDGER_KEY },
+      create: { key: LEDGER_KEY, value: JSON.stringify(ledger) },
+      update: { value: JSON.stringify(ledger) },
+    });
+  } catch (e) {
+    // A failed flush DROPS its deltas instead of re-queueing them: a retry
+    // after a partially-applied write could double-count, and losing ≤5s of
+    // counts is the documented, accepted failure mode. Never rethrows.
+    console.error("[llm] usage ledger flush failed:", e);
+  }
+}
+
+/** Post-success bookkeeping: ledger count + bus event. Never throws and never
+ *  hands out a live promise — telemetry must not widen the caller's failure surface. */
+function noteCall(
+  model: string,
+  tier: LlmTier,
+  promptTokens: number,
+  completionTokens: number,
+  costUsd: number,
+  note?: string
+): void {
+  try {
+    ledgerCount(new Date().toISOString().slice(0, 10), promptTokens, completionTokens, costUsd);
+    emitLlm({ model, tier, promptTokens, completionTokens, costUsd, ...(note ? { note } : {}) });
+  } catch {
+    // bookkeeping is best-effort by design — an LLM result must never fail because its receipt couldn't be written
+  }
 }
 
 // ---------- request building ----------
@@ -520,18 +716,32 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
   // transport-independent). Usage stats are recorded under the gateway marker.
   if (!llmConfigured()) {
     const marker = `zai-gateway(tier:${tier})`;
+    // prompt-dedup cache — keyed by the gateway marker (NOT the un-served
+    // Claude id): a gateway answer must never be served later as a Claude
+    // answer, and vice versa. Both transports share the map with disjoint keys.
+    const zaiKey = llmCacheKey(marker, effort, system, turns);
+    const zaiHit = llmCacheGet(zaiKey);
+    if (zaiHit) {
+      cacheHits++;
+      noteCall(marker, tier, 0, 0, 0, "cache hit");
+      return zaiHit;
+    }
+    cacheMisses++;
     try {
       const r = await zaiComplete(
         system ? [{ role: "system", content: system }, ...turns] : turns,
         { timeoutMs, timeoutLabel: label, timeoutError: Err }
       );
       bump(marker, null, false);
-      return {
+      const result: LlmResult = {
         content: r.content,
         model: marker,
         stopReason: null, // the fallback transport does not expose stop reasons
         usage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costUsd: 0 },
       };
+      llmCacheSet(zaiKey, result);
+      noteCall(marker, tier, 0, 0, 0);
+      return result;
     } catch (e) {
       bump(marker, null, true);
       lastError = { at: new Date().toISOString(), message: e instanceof Error ? e.message : String(e) };
@@ -539,9 +749,23 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
     }
   }
 
+  // prompt-dedup cache (direct transport). A hit skips even the pool acquire
+  // — no network, no slot, no timeout: the dedup's whole point.
+  const directKey = llmCacheKey(model, effort, system, turns);
+  const directHit = llmCacheGet(directKey);
+  if (directHit) {
+    cacheHits++;
+    noteCall(model, tier, 0, 0, 0, "cache hit");
+    return directHit;
+  }
+  cacheMisses++;
+
   await acquire();
   try {
     let lastErr: unknown = null;
+    // set the moment a capability-fallback dropped effort/schema — see the
+    // cache guard at the success seam below
+    let requestMutated = false;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       attemptsTotal++;
       try {
@@ -554,7 +778,16 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
             out.refusalCategory
           );
         }
-        return { content: out.text, model, stopReason: out.stopReason, usage: out.usage };
+        const result: LlmResult = { content: out.text, model, stopReason: out.stopReason, usage: out.usage };
+        // memoize ONLY clean first-attempt successes (see the block comment at
+        // llmCache): a max_tokens (truncation) or capability-fallback result is
+        // still real usage — ledger + event below — but is never cached.
+        // Refusals threw above, so they can't reach this seam.
+        if (attempt === 0 && !requestMutated && out.stopReason !== "max_tokens") {
+          llmCacheSet(directKey, result);
+        }
+        noteCall(model, tier, out.usage.inputTokens, out.usage.outputTokens, out.usage.costUsd);
+        return result;
       } catch (e) {
         lastErr = e;
         if (e instanceof TimeoutSignal) {
@@ -571,10 +804,12 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
         const cap = looksLikeCapabilityReject(e);
         if (cap === "effort" && effort) {
           effort = null;
+          requestMutated = true;
           continue;
         }
         if (cap === "format" && schema) {
           schema = null;
+          requestMutated = true;
           continue;
         }
         if (retryable(e) && attempt < MAX_ATTEMPTS - 1) {
