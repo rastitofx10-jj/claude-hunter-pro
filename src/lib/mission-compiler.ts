@@ -11,6 +11,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "./db";
 import { AiJsonError, extractJson, isTimeoutError, sanitizeSlug, str, strArr, stripOuterFence } from "./ai-json";
 import { llmComplete } from "./zai";
+import { hasFrontmatter, repairSkillMdFrontmatter } from "./skill-md";
 
 export class MissionError extends Error {
   constructor(message: string) {
@@ -430,17 +431,17 @@ function normalizeFrontmatterFence(raw: string): string {
  * Normalization of DNA born in the field. Field evidence: genes #94, #95 were born with "yaml name:..."
  * and #138 with "```markdown name:..." — fences that leaked into the body and broke the SKILL.md.
  * (Before: born-DNA was saved exactly as the model returned it, without any shape validation)
+ * Round 10: `/^---/` validated the OPENER only — an unterminated block (the LLM opens
+ * `---` and never closes it, field case: draft 7f58878d in the chimera path) passed
+ * here as "valid frontmatter" and the broken shape was saved. The terminated-regex +
+ * repair now come from the single source (skill-md.ts).
  */
-export function normalizeBornSkillMd(raw: string): string {
+export function normalizeBornSkillMd(raw: string, fallback?: { name: string; description: string }): string {
   const t = stripOuterFence((raw ?? "").trim()).replace(/^yaml[ \t]*\n(?=(name|description):)/, "");
-  if (/^---/.test(t)) return t; // valid frontmatter
-  // If the head is YAML without a --- separator — wrap it up to the first markdown heading
-  const headEnd = t.search(/\n#\s|^#\s/);
-  const head = (headEnd > 0 ? t.slice(0, headEnd) : t).trim();
-  if (/^name:/m.test(head) && /^description:/m.test(head)) {
-    const body = headEnd > 0 ? t.slice(headEnd).trim() : "";
-    return `---\n${head}\n---\n\n${body}`.trim() + "\n";
-  }
+  if (hasFrontmatter(t)) return t; // TERMINATED frontmatter — the only valid shape
+  // Unterminated opener — close it / synthesize from the sibling fields
+  const front = repairSkillMdFrontmatter(t, fallback ?? { name: "field-lesson", description: "A capability born from a field report" });
+  if (front.repaired) return front.md;
   return t;
 }
 
@@ -475,9 +476,19 @@ Requirements:
       // Removes only a wrapping fence if present — inner code fences are preserved
       // (before: a blanket replace destroyed every code example inside the SKILL.md)
       const md = normalizeFrontmatterFence(stripOuterFence(raw));
-      if (md.length > 200 && /^---/.test(md)) return { md, source: "ai" };
+      // Round 10 — the validation demanded only the OPENER (`/^---/`); an unterminated
+      // block passed as "valid" and a broken SKILL.md went live silently. The terminated
+      // check + deterministic repair (missionName/oneLiner are known here) keep the
+      // mission SKILL.md injectable — no new AI content, same response's own fields.
+      const front = repairSkillMdFrontmatter(md, { name: plan.missionName, description: plan.oneLiner || goal });
+      if (front.md.length > 200) {
+        if (front.repaired) {
+          console.warn(`[mission:compileSkillMd] AI attempt ${attempt}/2 frontmatter ${front.how} (name="${plan.missionName}") — repaired deterministically`);
+        }
+        return { md: front.md, source: "ai" };
+      }
       // The AI answered but the output failed validation — we must see why, otherwise this is a second silent fall
-      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — length=${md.length} startsWithFrontmatter=${/^---/.test(md)} head=${md.slice(0, 160).replace(/\n/g, " ")}`);
+      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — length=${front.md.length} startsWithFrontmatter=${/^---/.test(front.md)} head=${front.md.slice(0, 160).replace(/\n/g, " ")}`);
     } catch (e) {
       // Quiet log → explicit server log: an AI failure is no longer invisible
       console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 failed:`, e);
@@ -649,9 +660,12 @@ If, and only if, there is nothing worth perpetuating: "newDna": null`;
       if (nd && typeof nd === "object") {
         const o = nd as Record<string, unknown>;
         const name = str(o.name);
-        const content = normalizeBornSkillMd(str(o.content));
+        // Round 10: sibling fields passed as the repair fallback — the synthesized
+        // frontmatter uses the SAME response's name/description, never new AI content
+        const desc = str(o.description, "capability born from a field report");
+        const content = normalizeBornSkillMd(str(o.content), { name: name || "field-lesson", description: desc });
         if (name && content) {
-          newDna = { name, description: str(o.description, "capability born from a field report"), content };
+          newDna = { name, description: desc, content };
         }
       }
       return { verdict: str(j.verdict), lessons, newDna };

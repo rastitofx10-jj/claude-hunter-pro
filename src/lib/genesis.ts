@@ -12,6 +12,7 @@ import { extractJson, isTimeoutError, sanitizeSlug, str, strArr } from "./ai-jso
 import { llmComplete } from "./zai";
 import { detectClaudeModels } from "./claude-models";
 import { detectEmergingModels } from "./emerging-models";
+import { repairSkillMdFrontmatter } from "./skill-md";
 import { db } from "./db";
 
 export class GenesisError extends Error {
@@ -246,10 +247,22 @@ Return 3-5 work orders, sorted by value to the product.`;
         while (existingNames.includes(`${name}-gen${n}`)) n++;
         name = `${name}-gen${n}`;
       }
+      // Round 10 — G5 self-heal: the prompt demands frontmatter but the LLM
+      // periodically opens `---` and never closes it (field case: draft 7f58878d).
+      // The draft then permanently failed G5-skill-md — the retry loop only fires
+      // on truth contamination / invalid JSON, never on a structural miss.
+      // Deterministic repair from fields the SAME response already guarantees
+      // (name + oneLiner — both already inside the truth-scan surface above):
+      // no new AI content is introduced, so contamination cannot leak in here.
+      const oneLiner = str(j.oneLiner);
+      const front = repairSkillMdFrontmatter(skillMd, { name, description: oneLiner || "A merged capability synthesized by Claude Hunter" });
+      if (front.repaired) {
+        console.warn(`[genesis] skillMd frontmatter ${front.how} (name="${name}") — repaired deterministically before validation`);
+      }
       return {
         chimeraName: name,
-        oneLiner: str(j.oneLiner),
-        skillMd: truthNotice ? skillMd + truthNotice : skillMd,
+        oneLiner,
+        skillMd: (truthNotice ? front.md + truthNotice : front.md),
         principles: strArr(j.principles),
         workOrders: workOrderArr(j.workOrders),
         breakthrough: str(j.breakthrough),

@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 // genesis exports the shared truth-gate primitives (scan + authority set) — value
 // imports are safe here: genesis does NOT import this module (no cycle).
 import { scanChimeraContamination, authorityConfirmedWaveIds } from "./genesis";
+import { hasFrontmatter, repairSkillMdFrontmatter } from "./skill-md";
 import type { WorkOrder } from "./genesis";
 
 const DRAFT_DIR = path.join(process.cwd(), "reports", "state", "chimera-drafts");
@@ -291,6 +292,23 @@ export async function publishDraft(draftId: string): Promise<
   try {
     const draft = await getDraft(draftId);
     if (!draft) return { ok: false, error: `draft ${draftId} not found` };
+
+    // Round 10 — self-heal for legacy drafts: drafts born before the frontmatter
+    // repair (e.g. 7f58878d — the LLM opened `---` and never closed it) failed
+    // G5-skill-md permanently with no retry path. The deterministic repair runs
+    // BEFORE re-validation: the published row gets the healed SKILL.md, and the
+    // gates below still check everything else honestly. Chimera name + oneLiner
+    // are the draft's own fields — no new AI content enters the pipeline.
+    if (typeof draft.skillMd === "string" && !hasFrontmatter(draft.skillMd)) {
+      const front = repairSkillMdFrontmatter(draft.skillMd, {
+        name: draft.chimeraName,
+        description: draft.oneLiner ?? "A merged capability synthesized by Claude Hunter",
+      });
+      if (front.repaired) {
+        console.warn(`[chimera-draft] legacy draft ${draftId} frontmatter ${front.how} — healed at publish (name="${draft.chimeraName}")`);
+        draft.skillMd = front.md;
+      }
+    }
 
     // batch re-validation — the ratchet: the same gates, checked again NOW
     const validation = await validateChimeraCandidate(draft);
