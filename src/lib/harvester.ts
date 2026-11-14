@@ -23,6 +23,7 @@ import { FRONTIER_CODE_POOL, rotateSlice, hydrateFresh, daySeed } from "./fronti
 import { gateArtifacts, type QualityRejection } from "./quality-gate";
 import { recordQueryYields } from "./adaptive-learning";
 import { scanAndRecord } from "./emerging-models";
+import { liveReflexionQueries } from "./reflexion";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -30,8 +31,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  2 registry (model strings, rotated by day) + 4 frontier (contract files / SDK /
  *  configs, rotated by day). Before: 6 fixed model strings — the same candidates
  *  every day, which is exactly why the harvest saturated (+0 genes by gen 8).
- *  Daily rotation makes each day's harvest probe different corners. */
-function harvestQueries(): string[] {
+ *  Daily rotation makes each day's harvest probe different corners.
+ *
+ *  Reflexion feed: up to 2 slots come from the reflexion engine's LIVE pool —
+ *  queries the hunter itself proposed after analyzing its own telemetry
+ *  (and whose evidence passed the truth gates). Frontier slots shrink to make
+ *  room (the budget stays 6). Adaptive learning measures them in the field like
+ *  any other query; sterile ones never survive liveReflexionQueries() — the
+ *  reflexion proposals are subject to the same natural selection as everything
+ *  else in the arsenal. */
+async function harvestQueries(): Promise<string[]> {
   const seed = daySeed();
   const registry: string[] = [];
   // DEVICE DIRECTIVE (2026-11-13): harvest rotates ONLY the frontier line —
@@ -43,8 +52,17 @@ function harvestQueries(): string[] {
     if (primary && !registry.includes(primary)) registry.push(primary);
   }
   const regSlice = rotateSlice(registry, seed, 2).map((q) => q);
-  const frontierSlice = rotateSlice(FRONTIER_CODE_POOL, seed * 3, 4).map((f) => hydrateFresh(f.q));
-  const qs = [...regSlice, ...frontierSlice];
+  // Reflexion queries: the hunter's own proposals, alive after field selection.
+  // Fire-and-forget safety — a persistence failure must not shrink today's hunt.
+  let reflexion: string[] = [];
+  try {
+    reflexion = (await liveReflexionQueries()).map((p) => p.q).slice(0, 2);
+  } catch {
+    reflexion = [];
+  }
+  const frontierCount = Math.max(2, 4 - reflexion.length);
+  const frontierSlice = rotateSlice(FRONTIER_CODE_POOL, seed * 3, frontierCount).map((f) => hydrateFresh(f.q));
+  const qs = [...regSlice, ...reflexion, ...frontierSlice];
   return qs.slice(0, 6); // code-search quota 10/min — 6 queries with 6.5s spacing = safe
 }
 
@@ -159,7 +177,7 @@ export async function discoverEliteRepos(
   const byName = new Map<string, Candidate>();
   const queriesRun: { q: string; count: number }[] = [];
   const queriesFailed: { q: string; error: string }[] = [];
-  const queries = harvestQueries();
+  const queries = await harvestQueries();
 
   for (let i = 0; i < queries.length; i++) {
     const q = queries[i];
@@ -374,7 +392,13 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
       for (const q of c?.viaQueries ?? []) attribution[q] = (attribution[q] ?? 0) + rep.newCount;
     }
   }
-  await recordQueryYields(attribution);
+  // Executed-but-sterile queries are handed to the ledger too: a reflexion
+  // proposal that ran cleanly and yielded 0 genes gets runs++ and its Laplace
+  // weight decays — WITHOUT this, a sterile query kept the never-run 0.5
+  // forever and liveReflexionQueries() could never evict it (the selection
+  // pressure on the hunter's own proposals was blind). Failed queries are
+  // excluded on purpose (a rate-limited good query must not count as empty).
+  await recordQueryYields(attribution, queriesRun.map((q) => q.q));
 
   return {
     candidatesFound: candidates.length,

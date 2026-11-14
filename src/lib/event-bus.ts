@@ -30,6 +30,7 @@ export type HunterEventKind =
   | "rate" // GitHub quota observation (core/search windows)
   | "autonomy" // the scheduler's own lifecycle (daily cycle, takeovers)
   | "snapshot" // dna-snapshot write result
+  | "reflexion" // the reflexion engine analyzed the hunter's own telemetry
   | "reaped"; // a stale run was marked failed by the reaper
 
 export interface HunterEvent {
@@ -150,6 +151,16 @@ export function emitAutonomy(p: {
 
 export function emitSnapshot(p: { written: boolean; note?: string }): void {
   emit("snapshot", p);
+}
+
+export function emitReflexion(p: {
+  findingsKept?: number;
+  findingsRejected?: number;
+  queriesAccepted?: number;
+  dnaBornId?: number | null;
+  note?: string;
+}): void {
+  emit("reflexion", p);
 }
 
 export function emitReaped(p: {

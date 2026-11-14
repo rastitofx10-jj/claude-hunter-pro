@@ -20,6 +20,7 @@ import { beginSweep } from "./sweep-runner";
 import { resolveServerToken } from "./server-token";
 import { writeDnaSnapshot } from "./dna-snapshot";
 import { emitAutonomy } from "./event-bus";
+import { triggerReflexion } from "./reflexion";
 
 /** The daily cycle may not fire more often than this (drift-tolerant "daily") */
 export const DAILY_MIN_GAP_MS = 20 * 60 * 60_000;
@@ -102,6 +103,13 @@ export async function runDailyCycle(force: boolean): Promise<boolean> {
     }
 
     await writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
+
+    // Reflexion: after the cycle created fresh telemetry (harvest yields, sweep
+    // stats, new genes) the hunter analyzes its OWN performance and may propose
+    // new queries — the inward loop closes. Fire-and-forget by design: the daily
+    // cycle's own result is already complete; reflection failure is logged by the
+    // engine itself and surfaces in /api/reflexion + the reflexion tab.
+    triggerReflexion();
 
     const result: AutonomyConfig["lastResult"] = {
       at: startedAt,

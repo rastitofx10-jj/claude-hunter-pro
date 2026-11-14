@@ -18,6 +18,7 @@ import {
   ChartLine,
   Command as CommandIcon,
   Loader2,
+  BrainCircuit,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,14 +43,17 @@ import { ThemeToggle } from "@/components/hunter/theme-toggle";
 import { CommandPalette } from "@/components/hunter/command-palette";
 import { Overview } from "@/components/hunter/overview";
 import { InsightsPanel } from "@/components/hunter/insights-panel";
+import { ReflexionPanel } from "@/components/hunter/reflexion-panel";
 import { LiveIndicator } from "@/components/hunter/live-indicator";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { useHunterEvents } from "@/hooks/use-hunter-events";
 import type { Recipe } from "@/lib/hunter-recipes";
 
-/** The nav model — the 8 store-backed tabs + the local "insights" overlay
- *  (TabKey is frozen in hunter-store.ts, so the 9th tab lives at page level). */
-type PageTab = TabKey | "insights";
+/** The nav model — the 8 store-backed tabs + the local "insights" and "reflexion"
+ *  overlays (TabKey is frozen in hunter-store.ts, so the 9th/10th tabs live at
+ *  page level). */
+type PageTab = TabKey | "insights" | "reflexion";
+type OverlayTab = "insights" | "reflexion";
 
 export default function ClaudeHunterPage() {
   const token = useHunterStore((s) => s.token);
@@ -65,26 +69,28 @@ export default function ClaudeHunterPage() {
   const [searchBody, setSearchBody] = useState<SearchBody>({ ...SEARCH_DEFAULTS, page: 1 });
   const [results, setResults] = useState<SearchResponse | null>(null);
   const [analyzeTarget, setAnalyzeTarget] = useState<AnalyzeTarget | null>(null);
-  // The insights tab is a page-level overlay over the persisted activeTab (TabKey
-  // is frozen in hunter-store.ts). `covered` remembers which store tab the overlay
-  // sits on — any store-level navigation makes the derived insightsOpen flip off
-  // without an effect, while the overlay itself only closes via goTab.
-  const [insights, setInsights] = useState<{ open: boolean; covered: TabKey }>({ open: false, covered: "home" });
-  const insightsOpen = insights.open && insights.covered === activeTab;
+  // The insights/reflexion tabs are page-level overlays over the persisted
+  // activeTab (TabKey is frozen in hunter-store.ts). `covered` remembers which
+  // store tab the overlay sits on — any store-level navigation makes the
+  // derived overlay-open flip off without an effect, while the overlay itself
+  // only closes via goTab.
+  const [overlay, setOverlay] = useState<{ tab: OverlayTab | null; covered: TabKey }>({ tab: null, covered: "home" });
+  const insightsOpen = overlay.tab === "insights" && overlay.covered === activeTab;
+  const reflexionOpen = overlay.tab === "reflexion" && overlay.covered === activeTab;
 
   const goTab = useCallback(
     (t: PageTab) => {
-      if (t === "insights") {
-        setInsights({ open: true, covered: activeTab });
+      if (t === "insights" || t === "reflexion") {
+        setOverlay({ tab: t, covered: activeTab });
         return;
       }
-      setInsights((s) => (s.open ? { open: false, covered: t } : s));
+      setOverlay((s) => (s.tab ? { tab: null, covered: t } : s));
       setActiveTab(t);
     },
     [activeTab, setActiveTab]
   );
 
-  const effectiveTab: PageTab = insightsOpen ? "insights" : activeTab;
+  const effectiveTab: PageTab = insightsOpen ? "insights" : reflexionOpen ? "reflexion" : activeTab;
 
   // analyze requests can arrive from anywhere (palette, recipes, cards, watchlist)
   useEffect(() => {
@@ -196,6 +202,7 @@ export default function ClaudeHunterPage() {
     { tab: "watchlist", label: "Watchlist", icon: Bookmark, badge: (watchData?.items?.length ?? 0) > 0 ? String(watchData?.items?.length ?? 0) : undefined },
     { tab: "history", label: "History", icon: HistoryIcon },
     { tab: "insights", label: "Insights", icon: ChartLine },
+    { tab: "reflexion", label: "Reflexion", icon: BrainCircuit },
   ];
 
   const renderTab = () => {
@@ -280,6 +287,8 @@ export default function ClaudeHunterPage() {
         return <LiveHuntPanel />;
       case "insights":
         return <InsightsPanel />;
+      case "reflexion":
+        return <ReflexionPanel />;
     }
   };
 
