@@ -15,6 +15,12 @@ export interface MinedArtifact {
   rawUrl: string | null;
   size: number;
   truncated: boolean;
+  /** round 12 (MEDIUM-5 truth fix): the contents-API download failed for this
+   *  file (403/429/5xx/network). Previously the catch swallowed the error into
+   *  content=null and the quality gate re-diagnosed a transient TRANSPORT failure
+   *  as "stub: 0B < 200B floor" — a quality verdict about a file we never saw.
+   *  The strike logic also blacklisted good repos for it. null = downloaded fine. */
+  downloadError?: string | null;
 }
 
 export interface DnaPackage {
@@ -128,14 +134,20 @@ export async function mineDna(
       let content: string | null = null;
       let rawUrl: string | null = null;
       let truncated = false;
+      let downloadError: string | null = null;
       try {
         content = await ghFetchRaw(
           `/repos/${full}/contents/${c.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`,
           token
         );
         rawUrl = `https://github.com/${full}/blob/${branch}/${c.path.split("/").map(encodeURIComponent).join("/")}`; // path encoding — spaces/#/? in file names break the raw link
-      } catch {
+      } catch (e) {
+        // round 12 (MEDIUM-5): the failure reason SURVIVES on the artifact — a 403/429/5xx
+        // is a transport error, NOT "the file has no content". The quality gate rejects
+        // with the true reason ("download failed", not "stub") and the strike logic can
+        // exempt the repo instead of blacklisting a good target over a transient wall.
         content = null;
+        downloadError = e instanceof Error ? e.message : "download error";
       }
       if (content && content.length > MAX_FILE_BYTES) {
         content = content.slice(0, MAX_FILE_BYTES) + "\n\n… [truncated for mining]";
@@ -150,6 +162,7 @@ export async function mineDna(
         rawUrl,
         size: c.size,
         truncated,
+        downloadError,
       };
     }
   );

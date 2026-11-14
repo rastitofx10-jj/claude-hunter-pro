@@ -146,7 +146,10 @@ export async function validateChimeraCandidate(c: ChimeraCandidate): Promise<Val
   //  bare word "undefined" — legitimate TS prose like `typeof x === "undefined"`
   //  permanently failed the gate. Now: placeholder-SHAPED matches only.)
   const md = c.skillMd ?? "";
-  const hasFront = /^---\r?\n[\s\S]*?\r?\n---/.test(md);
+  // round 12 (LOW-9): the canonical law from skill-md.ts — one regex, one import.
+  // Previously an inline duplicate of FRONTMATTER_RE lived here; identical today,
+  // guaranteed drift on the day the law changes.
+  const hasFront = hasFrontmatter(md);
   const noJunk = !/((TODO|FIXME|XXX)\s*[:=]|【|\bundefined\b\s*[:=,}\]]|\bNaN\b\s*[:=,}\]])/.test(md);
   gates.push({
     gate: "G5-skill-md",

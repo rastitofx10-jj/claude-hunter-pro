@@ -138,7 +138,21 @@ export async function verifyEvidenceLive(
     const f = targets[i] as FindingLike & { evidencePaths?: string[] };
     const claimed = (f.contentEvidence && f.contentEvidence.length > 0 ? f.contentEvidence[0] : null) ?? null;
     if (!claimed) {
-      const check: EvidenceCheck = { fullName: f.fullName, claimed: "(no content evidence)", filesFound: 0, verified: false };
+      // round 12 (MEDIUM-4 truth fix): an elite finding that never claimed content
+      // evidence was pushed as a CONCLUSIVE check (verified:false, no error field) —
+      // landing in `refuted`, joining the precision denominator, and entering the
+      // Stage-B prompt as ground truth 'claimed "(no content evidence)" but 0 files
+      // in the repo contain it' — a sentence about a claim that was NEVER MADE. A
+      // no-claim row was never checked: it is INCONCLUSIVE. The error field keeps
+      // it out of `refuted` (and the precision denominator) exactly like a transport
+      // failure — "not checkable" is not "refuted".
+      const check: EvidenceCheck = {
+        fullName: f.fullName,
+        claimed: "(no content evidence)",
+        filesFound: 0,
+        verified: false,
+        error: "no content evidence — not checkable",
+      };
       checks.push(check);
       await onProgress?.(i + 1, targets.length, check);
       continue;

@@ -12,6 +12,7 @@ import { db } from "./db";
 import { AiJsonError, extractJson, isTimeoutError, sanitizeSlug, str, strArr, stripOuterFence } from "./ai-json";
 import { llmComplete } from "./llm";
 import { hasFrontmatter, repairSkillMdFrontmatter } from "./skill-md";
+import { MIN_GENE_BYTES } from "./quality-gate";
 
 export class MissionError extends Error {
   constructor(message: string) {
@@ -415,19 +416,24 @@ Requirements:
       // Removes only a wrapping fence if present — inner code fences are preserved
       // (before: a blanket replace destroyed every code example inside the SKILL.md)
       const md = normalizeFrontmatterFence(stripOuterFence(raw));
-      // Round 10 — the validation demanded only the OPENER (`/^---/`); an unterminated
-      // block passed as "valid" and a broken SKILL.md went live silently. The terminated
-      // check + deterministic repair (missionName/oneLiner are known here) keep the
-      // mission SKILL.md injectable — no new AI content, same response's own fields.
+      // round 12 (LOW-7 truth fix): the "validation" measured the POST-repair text —
+      // repairSkillMdFrontmatter synthesizes an ~80-char frontmatter shell, so a
+      // ~130-char junk answer passed as source:"ai" while the error log claimed a
+      // shape check. The substance floor now measures the RAW, PRE-REPAIR output
+      // against the same 800-char floor the chimera G5 gate applies — one law for
+      // every SKILL.md that ships. Junk falls to the honest fallback path
+      // (labeled "fallback"), never masquerades as AI work. The repair still runs
+      // for SUBSTANTIAL outputs — it fixes injectable shape, never substance.
+      const substantial = md.trim().length >= 800;
       const front = repairSkillMdFrontmatter(md, { name: plan.missionName, description: plan.oneLiner || goal });
-      if (front.md.length > 200) {
+      if (substantial) {
         if (front.repaired) {
           console.warn(`[mission:compileSkillMd] AI attempt ${attempt}/2 frontmatter ${front.how} (name="${plan.missionName}") — repaired deterministically`);
         }
         return { md: front.md, source: "ai" };
       }
       // The AI answered but the output failed validation — we must see why, otherwise this is a second silent fall
-      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — length=${md.length} startsWithFrontmatter=${/^---/.test(md)} head=${md.slice(0, 160).replace(/\n/g, " ")}`);
+      console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 returned invalid shape — rawLength=${md.trim().length} (<800 substance floor) startsWithFrontmatter=${/^---/.test(md)} head=${md.slice(0, 160).replace(/\n/g, " ")}`);
     } catch (e) {
       // Quiet log → explicit server log: an AI failure is no longer invisible
       console.error(`[mission:compileSkillMd] AI attempt ${attempt}/2 failed:`, e);
@@ -602,9 +608,24 @@ If, and only if, there is nothing worth perpetuating: "newDna": null`;
         // Round 10: sibling fields passed as the repair fallback — the synthesized
         // frontmatter uses the SAME response's name/description, never new AI content
         const desc = str(o.description, "capability born from a field report");
-        const content = normalizeBornSkillMd(str(o.content), { name: name || "field-lesson", description: desc });
-        if (name && content) {
+        // round 12 (HIGH-2 truth fix): the `if (name && content)` gate below was
+        // decorative — normalizeBornSkillMd NEVER returns an empty string (for
+        // raw="" it synthesizes an ~80-char frontmatter shell), so the check
+        // passed unconditionally and a name-only LLM answer birthed a hollow
+        // gene straight into the library and the evolutionary loop. The
+        // substance floor now measures the RAW, PRE-REPAIR content: below
+        // MIN_GENE_BYTES (the same 200B floor every MINED gene faces in
+        // quality-gate.ts) there is no capability to perpetuate — newDna stays
+        // null and no gene is born. The repair still runs, but AFTER the
+        // substance check — it fixes injectable SHAPE, never substance.
+        const rawContent = str(o.content);
+        if (name && rawContent.trim().length >= MIN_GENE_BYTES) {
+          const content = normalizeBornSkillMd(rawContent, { name: name || "field-lesson", description: desc });
           newDna = { name, description: desc, content };
+        } else if (name) {
+          console.warn(
+            `[mission:distill] newDna "${name}" discarded — raw content ${rawContent.trim().length}B < ${MIN_GENE_BYTES}B floor (no substance to perpetuate)`
+          );
         }
       }
       return { verdict: str(j.verdict), lessons, newDna };

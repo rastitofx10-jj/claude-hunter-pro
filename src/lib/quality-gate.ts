@@ -16,6 +16,9 @@
 // ============================================================
 
 import type { MinedArtifact } from "./dna-miner";
+// round 12 (LOW-9): the frontmatter law is ONE law (skill-md.ts). This was an
+// inline copy of the regex — identical behavior today, guaranteed drift tomorrow.
+import { hasFrontmatter } from "./skill-md";
 
 export interface GeneQuality {
   /** 0..1 — weighted gate sum */
@@ -43,6 +46,19 @@ export function scoreGene(a: MinedArtifact): GeneQuality {
   const reasons: string[] = [];
   const content = a.content ?? "";
 
+  // --- round 12 (MEDIUM-5): transport failure is NOT a quality verdict ---
+  // A 403/429/5xx on the contents API left content=null and the artifact fell
+  // into the stub branch below — "stub: 0B < 200B floor" — a fabricated quality
+  // judgment about a file we never saw. Now the true reason is reported and the
+  // strike logic upstream can tell "empty repo" from "GitHub refused the call".
+  if (a.downloadError) {
+    return {
+      score: 0,
+      verdict: "reject",
+      reasons: [`download failed (${a.downloadError}) — transport error, not a stub; no quality verdict on unseen content`],
+    };
+  }
+
   // --- Gate 1: substance (0..0.35) ---
   let hardReject = false;
   if (content.length < MIN_GENE_BYTES) {
@@ -66,10 +82,12 @@ export function scoreGene(a: MinedArtifact): GeneQuality {
       reasons.push("mcp-config: content is not valid JSON");
     }
   } else {
-    const hasFrontmatter = /^---\r?\n[\s\S]*?\r?\n---/.test(content);
+    // round 12 (LOW-9): the canonical law from skill-md.ts — requires a TERMINATED
+    // block (opener + `---` closer + end/newline), not just any `\n---` substring.
+    const front = hasFrontmatter(content);
     const hasDescription = !!a.description && a.description.trim().length >= 10;
     const hasSections = /^##\s+\S/m.test(content);
-    if (hasFrontmatter) structure += 0.4;
+    if (front) structure += 0.4;
     else reasons.push("no frontmatter");
     if (hasDescription) structure += 0.3;
     else reasons.push("no meaningful description");

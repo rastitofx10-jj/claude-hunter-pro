@@ -10,14 +10,32 @@ function check(name: string, cond: boolean) {
 }
 
 // ---------- evidence gate (uses the internal law directly) ----------
+// round 12: the law verifies the FULL normalized evidence string (was: first 120
+// chars only — a genuine prefix + invented tail passed). The mirror below follows.
 const digest = JSON.stringify({ library: { total: 137, bornLast7d: 22 }, yieldStats: { top: [{ q: '"allowed-tools" filename:SKILL.md', genes: 14 }] } });
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-const evidenceInDigest = (ev: string) => !!ev && ev.length >= 6 && norm(digest).includes(norm(ev).slice(0, 120));
+const evidenceInDigest = (ev: string) => !!ev && ev.length >= 6 && norm(digest).includes(norm(ev));
 check("evidence: real quote passes", evidenceInDigest('"bornLast7d":22'));
 check("evidence: real quote (case-insensitive) passes", evidenceInDigest('BORNLAST7D":22'));
 check("evidence: paraphrase is REFUSED", !evidenceInDigest("about 20 genes were born this week"));
 check("evidence: too-short evidence is refused", !evidenceInDigest("22"));
 check("evidence: invention is REFUSED", !evidenceInDigest("the library contains 5000 genes"));
+check("evidence: full real quote still passes", evidenceInDigest('"bornLast7d":22},"yieldStats"'));
+
+// The discriminating attack: a REAL contiguous digest quote of ≥120 chars followed
+// by an INVENTED tail. The old law checked only the first 120 chars — the prefix
+// passed and the tail was never seen. The full-string law refuses the whole quote.
+const longDigest = JSON.stringify({
+  library: { total: 137, bornLast7d: 22 },
+  yieldStats: { top: [{ q: '"allowed-tools" filename:SKILL.md', genes: 14 }] },
+  note: "a deliberately long telemetry line so the digest contains a contiguous real quote well beyond the 120-char boundary of the old prefix law",
+});
+const realPrefix = norm(longDigest).slice(0, 130); // ≥120 real contiguous chars
+const oldPrefixLaw = (ev: string) => !!ev && ev.length >= 6 && norm(longDigest).includes(norm(ev).slice(0, 120));
+const attack = realPrefix + ' "fabricated tail that never appeared in the digest"';
+check("attack setup: the OLD 120-char law passes this lie (the hole is real)", oldPrefixLaw(attack));
+check("evidence: genuine ≥120-char prefix + invented tail is REFUSED", !(!!attack && attack.length >= 6 && norm(longDigest).includes(norm(attack))));
+check("evidence: the full real ≥120-char quote itself passes", !!(realPrefix && realPrefix.length >= 6 && norm(longDigest).includes(norm(realPrefix))));
 
 // ---------- query gate ----------
 // validateQueryCandidate expects the known set to hold DEDUP KEYS (the way

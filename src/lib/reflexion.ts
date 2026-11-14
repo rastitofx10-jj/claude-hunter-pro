@@ -162,11 +162,16 @@ export async function gatherReflexionTelemetry(): Promise<ReflexionTelemetry> {
 // ---------- truth gates ----------
 
 /** Whitespace-insensitive, case-insensitive substring containment — the
- *  evidence must be a real quote from the digest (not a paraphrase). */
+ *  evidence must be a real quote from the digest (not a paraphrase).
+ *  round 12 (LOW-8 truth fix): the check verified only the first 120 chars of
+ *  the normalized quote — a genuine 120-char prefix followed by an INVENTED
+ *  tail passed the "VERBATIM evidence" gate. The honesty contract (module
+ *  header) promises full verbatim quoting; the gate now verifies the ENTIRE
+ *  normalized evidence string, matching the promise it enforces. */
 function evidenceInDigest(evidence: string, digest: string): boolean {
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   if (!evidence || evidence.length < 6) return false;
-  return norm(digest).includes(norm(evidence).slice(0, 120));
+  return norm(digest).includes(norm(evidence));
 }
 
 const QUERY_ALLOWED_RE = /^[\w\s\-\.:,/"'()#>=<@*+]+$/;

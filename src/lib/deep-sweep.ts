@@ -483,6 +483,11 @@ export interface MinedRepoReport {
   skippedStubs: number;
   kinds: string[];
   error?: string;
+  /** round 12 (MEDIUM-5): files whose contents-API download FAILED (403/429/5xx).
+   *  A repo whose every raw-found file failed here is a transport victim, not an
+   *  empty repo — the strike logic exempts it (previously it was blacklisted for
+   *  2 dead downloads and never mined again). */
+  downloadFailed?: number;
   /** Chimera quality gate (WO3): genes rejected at ingestion, with reasons */
   qualityRejected?: QualityRejection[];
   /** Average quality score of the genes that passed (0..1) */
@@ -586,6 +591,7 @@ export async function mineTopCandidates(
           newCount: v.newCount,
           updatedCount: v.updatedCount ?? 0,
           skippedStubs: v.skippedStubs ?? 0,
+          downloadFailed: v.downloadFailed ?? 0,
           kinds: v.kinds,
         };
         reports.push(rep);
@@ -615,6 +621,11 @@ export async function mineTopCandidates(
   // raw>0, never struck, never blocked by minedNames → re-mined on GitHub forever).
   const strikesToAdd = reports
     .filter((rep) => !rep.error && rep.artifacts === 0)
+    // round 12 (MEDIUM-5): a repo whose every raw-found file failed to DOWNLOAD
+    // (contents-API 403/429/5xx) is a transport victim — it earned NO strike and
+    // stays mineable. Previously it was diagnosed "stub", struck twice, and got
+    // permanently blacklisted for a transient GitHub wall.
+    .filter((rep) => !(rep.rawFound && rep.rawFound > 0 && (rep.downloadFailed ?? 0) >= rep.rawFound))
     .map((rep) => rep.repo);
   const toUnblock = reports.filter((rep) => rep.artifacts > 0).map((rep) => rep.repo);
   try {

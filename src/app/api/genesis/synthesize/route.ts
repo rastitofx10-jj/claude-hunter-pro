@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateChimera } from "@/lib/genesis";
 import { writeDnaSnapshot } from "@/lib/dna-snapshot";
-import { saveDraft } from "@/lib/chimera-draft";
+import { saveDraft, validateChimeraCandidate } from "@/lib/chimera-draft";
 import { emitChimera } from "@/lib/event-bus";
 import type { MinedArtifact } from "@/lib/dna-miner";
 
@@ -101,6 +101,26 @@ async function synthesize(req: NextRequest): Promise<NextResponse> {
       });
     }
 
+    // round 12 (HIGH-1 truth fix): the legacy publish-now path bypassed the
+    // G1–G6 batch validator entirely — only the `draft:true` path (which no UI
+    // caller ever used) validated. The gates were dead code on the ONLY path
+    // users exercised, while the module header promised "every chimera passes
+    // the six gates before the library mutates". Now the batch validator runs
+    // HERE, fail-closed: a chimera that fails a gate never enters the library.
+    // The full validation report travels in the 422 body so the gate reasons
+    // reach the user instead of a generic 500.
+    const validation = await validateChimeraCandidate(chimera);
+    if (!validation.passed) {
+      return NextResponse.json(
+        {
+          error: "chimera rejected by the G1–G6 quality gates — nothing was saved",
+          validation,
+          ...chimera,
+        },
+        { status: 422 },
+      );
+    }
+
     // re-check name uniqueness right before the create — generateChimera suffixes
     // against names it SAW, but a parallel creation (another process, a draft that
     // published mid-synthesis) can have taken the exact name since. Same defense
@@ -129,9 +149,9 @@ async function synthesize(req: NextRequest): Promise<NextResponse> {
     // A chimera was synthesized and saved — snapshot the library in the background.
     // Fire-and-forget: the synthesis response never waits on (or fails from) snapshot I/O.
     void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
-    emitChimera({ name: chimera.chimeraName, action: "published", note: `chimera #${saved.id} born live` });
+    emitChimera({ name: chimera.chimeraName, action: "published", note: `chimera #${saved.id} born live (G1–G6 passed)` });
 
-    return NextResponse.json({ id: saved.id, ...chimera });
+    return NextResponse.json({ id: saved.id, validation, ...chimera });
   } catch (e) {
     console.error("genesis/synthesize failed", e);
     return NextResponse.json({ error: "Chimera creation failed" }, { status: 500 });

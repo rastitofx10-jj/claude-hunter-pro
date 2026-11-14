@@ -4,20 +4,10 @@ import { distillFieldReport, MissionError } from "@/lib/mission-compiler";
 import { isTimeoutError, isPrismaNotFound } from "@/lib/ai-json";
 import { advanceStatus, OUTCOME_STATUS, TERMINAL_STATUSES } from "@/lib/mission-status";
 import { emitDnaBorn, emitMission } from "@/lib/event-bus";
+import { sanitizeBornMeta } from "@/lib/born-dna";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
-
-/** Sanitize AI-born metadata before saving it to the library — a DNA's name/description
- * enters future compiler/executor prompts; control characters and name fences are an
- * instruction-injection door (previously: a completely free-form field). */
-function sanitizeBornMeta(v: unknown, max: number): string {
-  return String(v ?? "")
-    .replace(/[<>`\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
-}
 
 /**
  * Local distillation (no AI) — a critical safety net:

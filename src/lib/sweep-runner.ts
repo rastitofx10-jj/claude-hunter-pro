@@ -155,6 +155,18 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     ensureAlive();
     await updateRun(runId, { phase: "enrich", progress: 41 });
     let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits, emergingQs);
+    // round 12 (MEDIUM-3 truth fix): a sweep where EVERY query errored (dead token,
+    // 403 wall, network outage) previously ran the full pipeline anyway and wrote
+    // status:"done", progress:100 — a totally dead run counted as a successful sweep
+    // in /api/stats (sweeps.done) and the history list. Mirror of stageHunt's
+    // chain-stop: 0 candidates AND 100% query errors is a TRANSPORT failure, not a
+    // clean zero-findings sweep — thrown here so it lands in the failed-status
+    // catch with the real reason instead of a fake success.
+    if (reports.length > 0 && reports.every((r) => r.error) && candidates.length === 0) {
+      throw new Error(
+        `all ${reports.length} queries failed and 0 candidates passed — transport/token failure, not a clean sweep (first error: ${reports[0].error})`
+      );
+    }
     const enriched = await enrichCandidates(candidates, token, 30);
     ensureAlive();
     await updateRun(runId, { phase: "mine", progress: 52 });
@@ -254,6 +266,13 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
 
     // ---------- Summary ----------
     const eliteCount = swarm ? swarm.triage.filter((t) => t.verdict === "elite").length : 0;
+    // round 12 (MEDIUM-3): the swarm falling (LLM layer dead) while raw GitHub
+    // findings were still collected is honestly labeled DEGRADED in the stats —
+    // and a run that produced NOTHING (0 candidates, 0 DNA, no swarm) is written
+    // as failed, not done. "progress" measures pipeline traversal; it was never
+    // allowed to masquerade as a success metric.
+    const swarmFell = swarm === null;
+    const nothingProduced = candidates.length === 0 && dnaAddedTotal.n === 0 && swarmFell;
     const stats = {
       queriesRun: arsenal.length,
       queryErrors: reports.filter((r) => r.error).length,
@@ -276,6 +295,8 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
       llmCalls: swarm?.llmCalls ?? 0,
       llmFailures: swarm?.llmFailures.length ?? 0,
       eliteCount,
+      // truth markers — the run row itself now carries whether the AI layer fell
+      degraded: swarmFell && candidates.length > 0,
       elapsedMs: Date.now() - startedAt,
     };
 
@@ -295,9 +316,19 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     }));
 
     await updateRun(runId, {
-      status: "done",
-      phase: "done",
+      // round 12 (MEDIUM-3): "done" only when the run actually produced something
+      // (candidates, DNA, or a working swarm briefing). A run that ended with
+      // nothing — dead queries already threw earlier; dead swarm + zero findings
+      // lands here — is a failure with its reason on the row, never a fake 100%.
+      status: nothingProduced ? "failed" : "done",
+      phase: nothingProduced ? "failed" : "done",
       progress: 100,
+      ...(nothingProduced
+        ? {
+            error:
+              "nothing was produced — 0 candidates, 0 DNA added, and the swarm fell (see stats for query/mine errors)",
+          }
+        : {}),
       findings: JSON.stringify(findings),
       ...(swarm ? { briefing: JSON.stringify(swarm) } : {}),
       stats: JSON.stringify(stats),

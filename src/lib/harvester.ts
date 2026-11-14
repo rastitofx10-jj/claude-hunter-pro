@@ -87,6 +87,10 @@ export interface HarvestRepoReport {
   newCount: number;
   updatedCount?: number;
   skippedStubs?: number;
+  /** round 12 (MEDIUM-5): files whose contents-API download FAILED (403/429/5xx) —
+   *  a transport failure, counted separately from stub rejections so the
+   *  empty-mine strike logic can exempt transport victims. */
+  downloadFailed?: number;
   /** Chimera quality gate (WO3): genes rejected at ingestion, with reasons */
   qualityRejected?: QualityRejection[];
   /** Average quality score of the genes that passed (0..1) */
@@ -265,6 +269,9 @@ export async function harvestRepo(
   // generic-name placeholder. Every rejection is reported with its reasons.
   const { kept: artifacts, rejected, avgScore } = gateArtifacts(pkg.artifacts);
   const skippedStubs = rejected.filter((r) => r.reasons.some((x) => x.startsWith("stub:"))).length;
+  // round 12 (MEDIUM-5): downloads that failed — counted separately from stubs so
+  // the empty-mine strike logic can exempt transport victims (see deep-sweep).
+  const downloadFailed = rejected.filter((r) => r.reasons.some((x) => x.startsWith("download failed"))).length;
   const qualityRejected = rejected.slice(0, 6);
 
   // A single fetch of the repo's existing rows (instead of findUnique per artifact — N+1).
@@ -335,6 +342,7 @@ export async function harvestRepo(
     newCount,
     updatedCount,
     skippedStubs,
+    downloadFailed,
     qualityRejected,
     avgQuality: avgScore,
   };

@@ -60,6 +60,7 @@ import { writeDnaSnapshot } from "./dna-snapshot";
 import { runNextAutopilotPhase, parseAutopilotState, AutopilotError } from "./autopilot";
 import { advanceStatus, OUTCOME_STATUS } from "./mission-status";
 import { emitHunt, emitReaped } from "./event-bus";
+import { sanitizeBornMeta } from "./born-dna";
 
 export const LIVE_HUNT_STAGE_ORDER = [
   "hunt",
@@ -889,6 +890,14 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   let dnaBirthError: string | null = null;
   if (distilled.newDna) {
     const content = distilled.newDna.content;
+    // round 12 (MEDIUM-6 truth fix): the manual report path (mission/report/route.ts)
+    // sanitizes AI-born name/description — "a DNA's name/description enters future
+    // compiler/executor prompts; control characters and name fences are an
+    // injection door" — but this path upserted the SAME raw LLM metadata with NO
+    // sanitization. Same data class, same destination, one law (src/lib/born-dna.ts)
+    // now applied on every birth path.
+    const name = sanitizeBornMeta(distilled.newDna.name, 60) || "live-hunt-lesson";
+    const desc = sanitizeBornMeta(distilled.newDna.description, 200);
     try {
       const created = await db.dnaArtifact.upsert({
         where: {
@@ -897,13 +906,13 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
             path: "field/lesson/SKILL.md",
           },
         },
-        update: { description: distilled.newDna.description, content, size: content.length },
+        update: { description: desc, content, size: content.length },
         create: {
           sourceRepo: `field:livehunt-${ctx.id}`,
           path: "field/lesson/SKILL.md",
           kind: "skill",
-          name: distilled.newDna.name || "live-hunt-lesson",
-          description: distilled.newDna.description,
+          name,
+          description: desc,
           content,
           size: content.length,
           // A field lesson born from our own runs — our IP, no distribution limits
