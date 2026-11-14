@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
       bundle: buildMissionBundle(compiled, goal),
     });
   } catch (e) {
-    // (Previously: a raw e.message from Prisma/ZAI leaked to the client — now: server log + generic message)
+    // (Previously: a raw e.message from Prisma/LLM client leaked to the client — now: server log + generic message)
     console.error("[mission:compile]", e);
     const msg = e instanceof Error && e.name === "MissionError" ? e.message : "Mission compilation failed";
     return NextResponse.json({ error: msg }, { status: 500 });

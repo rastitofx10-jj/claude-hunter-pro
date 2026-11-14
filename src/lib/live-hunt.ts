@@ -55,7 +55,7 @@ import {
   extractHandoff,
   type MissionPhase,
 } from "./mission-compiler";
-import { llmCallSnapshot } from "./zai";
+import { llmCallSnapshot } from "./llm";
 import { writeDnaSnapshot } from "./dna-snapshot";
 import { runNextAutopilotPhase, parseAutopilotState, AutopilotError } from "./autopilot";
 import { advanceStatus, OUTCOME_STATUS } from "./mission-status";
@@ -267,16 +267,10 @@ async function parentEvolvedQueries(
   for (const r of ["anthropics/claude-code", "anthropics/skills", "anthropics/anthropic-sdk-python", "anthropics/anthropic-sdk-typescript", "anthropics/cookbooks"]) {
     realRepos.add(r.toLowerCase());
   }
-  // Dead queries = what the parent ran CLEANLY and got 0 results from.
-  // Round 9: `!r?.error` added — a rate-limited/timed-out parent query is recorded
-  // with count:0 AND an error field (deep-sweep writer); treating it as "dead"
-  // permanently blacklisted live query SHAPES in the child (validateEvolvedQueries
-  // rejects anything resembling them) — exactly the queries that would succeed
-  // after the quota window resets. Two sibling call sites (intel-swarm,
-  // stageMine's cleanHuntQueries) already had this guard; this one missed it.
-  const parentHunt = stages.find((s) => s.key === "hunt")?.evidence as { queries?: { q?: unknown; count?: unknown; error?: unknown }[] } | undefined;
+  // Dead queries = what the parent ran and got 0 results from
+  const parentHunt = stages.find((s) => s.key === "hunt")?.evidence as { queries?: { q?: unknown; count?: unknown }[] } | undefined;
   const deadQueries = (parentHunt?.queries ?? [])
-    .filter((r) => typeof r?.q === "string" && r?.count === 0 && !r?.error)
+    .filter((r) => typeof r?.q === "string" && r?.count === 0)
     .map((r) => r.q as string);
 
   const rawStrings = raw.map((x) => String(x ?? "").trim()).filter((q) => q.length >= 8);
@@ -603,12 +597,6 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
 async function stageMine(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
   const huntEv = readHuntEvidence(ctx);
   const token = await getStoredToken();
-  // Round 9 — fail fast like stageHunt: a token removed between stages sent the mine
-  // anonymous (60 req/h) → 403s on every parallel download → every file null → the
-  // (now-fixed) strike mechanism blamed real elite repos. Immediate, precise failure.
-  if (!token) {
-    throw new LiveHuntError("No GitHub token on the server — the mine stage requires a token (Settings → Token)", 400);
-  }
   const top = (huntEv?.topCandidates as Candidate[] | undefined) ?? [];
   if (top.length === 0) {
     return {
@@ -665,7 +653,7 @@ function deriveGoal(swarm: SwarmStageState | null, attack: AttackStageState | nu
   if (core) {
     return `${core} — based on the live intel from the hunt (leader: ${topName})`;
   }
-  return `Analyze and extract an advantage from the real premium-model investment (Opus 4.5 class) exposed in the live hunt (leader: ${topName})`;
+  return `Analyze and extract an advantage from the premium-model investment (Opus 5.5 / Fable class) exposed in the live hunt (leader: ${topName})`;
 }
 
 async function stageCompile(ctx: HuntCtx): Promise<{ summary: string; evidence: Record<string, unknown> }> {
@@ -873,21 +861,13 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
     distillMethod = "local";
   }
 
-  // DNA birth from the field — consistent with the manual reporting path (a fixed path prevents divergence).
-  // Round 9 — the birth moved INSIDE the report transaction, BEFORE the report build
-  // (the manual route's exact order): the report JSON carries the real bornDnaId, and
-  // a CAS retry/rollback takes the birth with it — an orphan field:livehunt-N row can
-  // no longer outlive a report that was never saved. It used to run BEFORE the 3-attempt
-  // CAS, so a CAS exhaustion left DNA born from a report that doesn't exist. The upsert
-  // stays idempotent so retries converge.
+  // DNA birth from the field — consistent with the manual reporting path (a fixed path prevents divergence)
   let bornDnaId: number | null = null;
   let dnaBirthError: string | null = null;
-  const birthFieldDna = async (tx?: { dnaArtifact: Pick<typeof db.dnaArtifact, "upsert"> }): Promise<void> => {
-    if (!distilled.newDna || bornDnaId != null) return;
+  if (distilled.newDna) {
     const content = distilled.newDna.content;
-    const client = tx?.dnaArtifact ?? db.dnaArtifact;
     try {
-      const created = await client.upsert({
+      const created = await db.dnaArtifact.upsert({
         where: {
           sourceRepo_path: {
             sourceRepo: `field:livehunt-${ctx.id}`,
@@ -914,7 +894,7 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       dnaBirthError = dnaErr instanceof Error ? dnaErr.message : "error";
       console.error("[live-hunt] DNA birth failed (report still saved):", dnaErr);
     }
-  };
+  }
 
   // Mission status update — forward-only (one rule from the mission-status module), report history is preserved
   // Report idempotency: a grow retry doesn't duplicate records — the previous record from the same source
@@ -924,54 +904,42 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   // last-writer-wins update — the exact lost-update race the manual report route already
   // fixed with transaction + re-read + CAS. Port of that fix: fresh re-read, history
   // rebuilt from the FRESH value, compare-and-swap on (status, report), 3 attempts.
-  // Round 9 — the DNA birth moved INSIDE each attempt's transaction, BEFORE the report
-  // build (the manual route's exact order): the report JSON carries the real bornDnaId,
-  // and a CAS retry/rollback takes the birth with it — an orphan field:livehunt-N row
-  // can no longer outlive a report that was never saved (the asymmetry the round-8
-  // comment claimed to have ported but hadn't). A birth failure still does not fail
-  // the report (dnaBirthError is recorded instead).
+  const newReport = {
+    outcome,
+    notes: notes || null,
+    verdict: distilled.verdict,
+    lessons: distilled.lessons,
+    bornDnaId,
+    distillMethod,
+    source: `livehunt-${ctx.id}`,
+    reportedAt: new Date().toISOString(),
+  };
   let growErr: unknown = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      await db.$transaction(async (tx) => {
-        // 1) DNA birth inside the transaction (idempotent upsert — retries converge)
-        await birthFieldDna(tx);
-        // 2) Fresh re-read — whoever wrote in the meantime joins our history, not overwritten
-        const fresh = await tx.mission.findUnique({ where: { id: missionId }, select: { status: true, report: true } });
-        if (!fresh) throw new LiveHuntError(`Mission #${missionId} has disappeared`, 404);
-        let freshHistory: Array<Record<string, unknown>> = [];
-        try {
-          const prev: unknown = fresh.report ? JSON.parse(fresh.report) : null;
-          if (Array.isArray(prev)) freshHistory = prev.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
-          else if (prev && typeof prev === "object") freshHistory = [prev as Record<string, unknown>];
-        } catch {
-          freshHistory = [];
-        }
-        freshHistory = freshHistory.filter((r) => r.source !== `livehunt-${ctx.id}`);
-        const freshFinalStatus = advanceStatus(fresh.status, OUTCOME_STATUS[outcome] ?? fresh.status);
-        const newReport = {
-          outcome,
-          notes: notes || null,
-          verdict: distilled.verdict,
-          lessons: distilled.lessons,
-          bornDnaId,
-          dnaBirthError,
-          distillMethod,
-          source: `livehunt-${ctx.id}`,
-          reportedAt: new Date().toISOString(),
-        };
-        const finalReportJson = JSON.stringify([...freshHistory, newReport].slice(-20));
-        // 3) CAS with Prisma-null semantics (report IS NULL matches a never-reported mission)
-        const cas = await tx.mission.updateMany({
-          where: { id: missionId, status: fresh.status, report: fresh.report },
-          data: { status: freshFinalStatus, report: finalReportJson },
-        });
-        if (cas.count === 0) {
-          const retry = new Error("GROW_REPORT_CHANGED_RETRY");
-          retry.name = "GrowReportChangedRetry";
-          throw retry;
-        }
+      const fresh = await db.mission.findUnique({ where: { id: missionId }, select: { status: true, report: true } });
+      if (!fresh) throw new LiveHuntError(`Mission #${missionId} has disappeared`, 404);
+      let freshHistory: Array<Record<string, unknown>> = [];
+      try {
+        const prev: unknown = fresh.report ? JSON.parse(fresh.report) : null;
+        if (Array.isArray(prev)) freshHistory = prev.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null);
+        else if (prev && typeof prev === "object") freshHistory = [prev as Record<string, unknown>];
+      } catch {
+        freshHistory = [];
+      }
+      freshHistory = freshHistory.filter((r) => r.source !== `livehunt-${ctx.id}`);
+      const freshFinalStatus = advanceStatus(fresh.status, OUTCOME_STATUS[outcome] ?? fresh.status);
+      const finalReportJson = JSON.stringify([...freshHistory, newReport].slice(-20));
+      // CAS with Prisma-null semantics (report IS NULL matches a never-reported mission)
+      const cas = await db.mission.updateMany({
+        where: { id: missionId, status: fresh.status, report: fresh.report },
+        data: { status: freshFinalStatus, report: finalReportJson },
       });
+      if (cas.count === 0) {
+        const retry = new Error("GROW_REPORT_CHANGED_RETRY");
+        retry.name = "GrowReportChangedRetry";
+        throw retry;
+      }
       growErr = null;
       break;
     } catch (e) {
@@ -982,12 +950,8 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
   }
   if (growErr) throw growErr;
 
-  // The birth/err state was assigned inside closures (birthFieldDna) — TS's flow
-  // analysis can't see those writes, so re-widen here instead of `never` traps.
-  const bornId = bornDnaId as number | null;
-  const birthErrMsg = dnaBirthError as string | null;
   const summary = `${distillMethod === "ai" ? "AI-distilled" : "local distillation"} · ${distilled.lessons.length} lessons${
-    bornId != null ? ` · DNA #${bornId} born into the library 🧬` : birthErrMsg ? ` · DNA birth failed (${birthErrMsg.slice(0, 80)})` : " · no new DNA"
+    bornDnaId ? ` · DNA #${bornDnaId} born into the library 🧬` : dnaBirthError ? ` · DNA birth failed (${dnaBirthError.slice(0, 80)})` : " · no new DNA"
   }`;
 
   return {
@@ -998,7 +962,7 @@ async function stageGrow(ctx: HuntCtx): Promise<{ summary: string; evidence: Rec
       distillMethod,
       // Stage display only (the UI shows this stage's usage): AI distillation = 1 call, local = 0.
       // The hunt total is no longer derived from here — runNextLocked accumulates exact
-      // per-attempt deltas from the zai.ts counter, so retries are counted too.
+      // per-attempt deltas from the llm.ts counter, so retries are counted too.
       llmCalls: distillMethod === "ai" ? 1 : 0,
       verdict: distilled.verdict,
       lessons: distilled.lessons,
@@ -1031,7 +995,7 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
   // novelTop exists in the evidence (written in stageHunt) but the local type didn't declare it —
   // the typing lied about the data shape; now declared explicitly.
   const huntEv2 = huntEv as { novelCandidates?: unknown; novelTop?: unknown[]; evolvedQueries?: unknown[]; knownBefore?: unknown } | null;
-  const summary = `Generation ${ctx.generation} · ${ctx.done.length + 1} stages · ${missionCount} missions total · ${ctx.llmCallsSoFar} LLM calls`;
+  const summary = `Generation ${ctx.generation} · ${ctx.done.length} stages · ${missionCount} missions total · ${ctx.llmCallsSoFar} LLM calls`;
 
   return {
     summary,
@@ -1065,10 +1029,10 @@ async function stageVerdict(ctx: HuntCtx): Promise<{ summary: string; evidence: 
         dnaAfter,
         missionCount,
         // Single source of truth: the accumulated counter on the hunt row (before: a local formula that contradicted the counter)
-        // Measurement method: exact per-attempt deltas from the global LLM queue (zai.ts llmCallSnapshot) —
+        // Measurement method: exact per-attempt deltas from the global LLM queue (llm.ts llmCallSnapshot) —
         // every real SDK attempt is counted, 429 retries included, which is the honest number for quota pressure
         llmCalls: ctx.llmCallsSoFar,
-        llmCallsBasis: "exact: per-attempt deltas from the global LLM queue (zai.ts); 429 retries counted",
+        llmCallsBasis: "exact: per-attempt deltas from the global LLM queue (llm.ts); 429 retries counted",
       },
     },
   };
@@ -1222,7 +1186,7 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
   const stageKey = row.stageKey;
   const title = LIVE_HUNT_STAGE_TITLES[stageKey] ?? stageKey;
 
-  // Exact LLM measurement starts here: the zai.ts counter increments on every real SDK call attempt,
+  // Exact LLM measurement starts here: the llm.ts counter increments on every real SDK call attempt,
   // so the delta at stage end is precisely what this stage burned (see the llmDelta computation below).
   const llmCallsBefore = llmCallSnapshot();
 
@@ -1295,15 +1259,8 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     // execute stage) lands inside this stage's window; with the serial LLM queue that is rare in practice.
     const llmDelta = llmCallSnapshot() - llmCallsBefore;
 
-    // Round 9 — CAS on the stage-final status write: the 15-minute zombie reaper
-    // (startLiveHunt) can legitimately flip this hunt to "failed" while THIS handler
-    // is still executing its stage (backoff sleeps can push a stage past 15 min). The
-    // old unconditional write resurrected the reaped row back to "running" → two
-    // running rows → every future start 409s forever. Same discipline as retryLiveHunt:
-    // only a row still in "running" accepts the stage result; count 0 = we were reaped
-    // and the write is abandoned (the reaper's failure verdict stands).
-    const cas = await db.liveHunt.updateMany({
-      where: { id, status: "running" },
+    const updated = await db.liveHunt.update({
+      where: { id },
       data: {
         stages: JSON.stringify(newDone),
         stageKey: isFinished ? "verdict" : nextStageKey,
@@ -1315,14 +1272,6 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
         elapsedMs: row.elapsedMs + rec.ms,
       },
     });
-    if (cas.count === 0) {
-      throw new LiveHuntError(
-        `Hunt #${id} was reaped while its "${stageKey}" stage was still running (15+ min without progress) — the stage result is abandoned. Retry the hunt to continue.`,
-        409
-      );
-    }
-    const updated = await db.liveHunt.findUnique({ where: { id } });
-    if (!updated) throw new LiveHuntError("Hunt not found", 404);
 
     const state = serializeLiveHunt(updated);
     if (isFinished) {
@@ -1336,31 +1285,16 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     return state;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
-    // Round 9 — failed attempts keep their exact accounting: llmDelta and elapsed
-    // time were discarded on failure, so a retried hunt's totals under-counted (the
-    // verdict claims "exact: per-attempt deltas" — now it actually is). CAS'd on
-    // status:"running" so a reaped hunt is never resurrected by the failure write
-    // either (same fix as the success path).
-    const llmDeltaFailed = llmCallSnapshot() - llmCallsBefore;
-    const failed = await db.liveHunt.updateMany({
-      where: { id, status: "running" },
-      data: {
-        status: "failed",
-        error: msg.slice(0, 500),
-        llmCalls: row.llmCalls + llmDeltaFailed,
-        elapsedMs: row.elapsedMs + (Date.now() - startedAt),
-      },
+    const failed = await db.liveHunt.update({
+      where: { id },
+      data: { status: "failed", error: msg.slice(0, 500) },
     });
     console.error(`[live-hunt] stage ${stageKey} failed for hunt #${id}:`, e);
     // An AutopilotError with 4xx = a built-in problem — returned as-is; otherwise a server error
     const status = e instanceof LiveHuntError ? e.status : e instanceof AutopilotError ? e.status : 500;
     const err = new LiveHuntError(msg, status || 500);
-    // Still return the full state in a field of the error via the API — re-read the
-    // row (either the freshly-failed one or the reaper's verdict) so the client sees
-    // the true current state, never a stale copy.
-    const stateRow = await db.liveHunt.findUnique({ where: { id } });
-    if (stateRow) throw Object.assign(err, { state: serializeLiveHunt(stateRow) });
-    throw err;
+    // Still return the full state in a field of the error via the API
+    throw Object.assign(err, { state: serializeLiveHunt(failed) });
   }
 }
 

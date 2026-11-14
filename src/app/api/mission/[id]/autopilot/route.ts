@@ -65,36 +65,11 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     }
 
     if (steps.length === 0 && preDone === 0) {
-      // Round 9 — transient/permanent discrimination: one transient failure (a
-      // phase that timed out, explicitly retryable by the engine's own semantics)
-      // used to end here as a permanent 500 "All stages failed" while the DB held
-      // an in_progress mission with a pending retryable phase — automation callers
-      // treated it as final and abandoned a recoverable mission. Now: 500 only
-      // when every failure is permanent; a transiently-failing run returns ok:true
-      // with the failure + remaining so the caller re-steps.
-      const allPermanent = failures.every((f) => {
-        // the route's failure shape lacks the transient flag — resolve against the
-        // FINAL state, which carries the full semantics
-        const match = finalState.failures.find((x) => x.phaseIndex === f.phaseIndex && x.error === f.error);
-        const transient = match ? match.transient === true && (match.attempts ?? 0) < 2 : false;
-        return !transient;
-      });
-      if (allPermanent) {
-        const detail = failures.map((f) => `Stage ${f.phaseIndex + 1}: ${f.error}`).join(" · ");
-        return NextResponse.json(
-          { error: `All stages failed${detail ? `: ${detail}` : ""}` },
-          { status: 500 }
-        );
-      }
-      // transient — the mission is recoverable; report honestly instead of 500
-      return NextResponse.json({
-        ok: true,
-        steps,
-        failures,
-        totalPhases,
-        remaining: 1,
-        note: "The first stage failed transiently (retryable). Re-run the autopilot — the engine retries transient phases.",
-      });
+      const detail = failures.map((f) => `Stage ${f.phaseIndex + 1}: ${f.error}`).join(" · ");
+      return NextResponse.json(
+        { error: `All stages failed${detail ? `: ${detail}` : ""}` },
+        { status: 500 }
+      );
     }
 
     // round 8: the old formula `totalPhases - (preDone + steps.length + failures.length)`

@@ -4,7 +4,7 @@ import type { WatchItem } from "@/lib/hunter-types";
 
 export const dynamic = "force-dynamic";
 // worst-case: 2 attempts × 110s through the serial LLM queue — previously not defined at all
-export const maxDuration = 300; // round 9: 120 did not cover the real worst case (2 attempts × 110s + queue wait) — the route was killed mid-run and the payload lost wholesale
+export const maxDuration = 120;
 
 // POST /api/synthesis — cross-repo battle synthesis from the watchlist
 export async function POST(req: NextRequest) {

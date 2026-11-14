@@ -7,10 +7,9 @@
 // ============================================================
 
 import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
-import { llmComplete } from "./zai";
+import { llmComplete } from "./llm";
 import { db } from "./db";
 import { detectClaudeModels } from "./claude-models";
-import { detectEmergingModels } from "./emerging-models";
 import type { CandidateFlat } from "./deep-sweep";
 
 export class SwarmError extends Error {
@@ -20,23 +19,23 @@ export class SwarmError extends Error {
   }
 }
 
-const TIMEOUT_MS = 110_000;
+const TIMEOUT_MS = 300_000; // adaptive thinking + large structured answers need headroom
 
 const SWARM_ROLE = `You are a senior intelligence officer in a technology-hunting unit. You are sharp, skeptical, and evidence-based.
 Iron rules:
 1. You are a JSON engine — return valid JSON and nothing beyond it. No code fences, no explanations.
 2. English only (technical terms stay in English within the text).
 3. Never invent. No evidence? Write that none was found. Be skeptical of weak evidence.
-4. Model truth: only REAL Anthropic models count — Opus 4.5 is the strongest model that exists today; Sonnet 4.5 / Haiku 4.5 follow; older real models are worth proportionally less. "Fable", "opus 5.5", "opus 6" and anything above the real 4.5 frontier are FICTIONAL hallucinated strings — flag them as contamination, zero credit.
-5. Inside string values, double quotes (") are forbidden — use single quotes (').`;
+4. Model truth: the current premium lineup is the Mythos tier (Claude Fable 5.2, Claude Mythos 5.2) above Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5. The 4.x family, Opus 5 and Sonnet 5 are real but below this tool's 5.5+ threshold — worth proportionally less. A model name above that lineup (for example opus 6) is unverified: say so explicitly and give it zero credit until Anthropic's own repos confirm it.
+5. Escape any double quote inside a string value (\\").`;
 
-const RETRY_HINT = `\n\n⚠️ Correction: the previous answer was not valid JSON. Return the same content as tight JSON — no double quotes inside values, no dangling commas, JSON body only.`;
+const RETRY_HINT = `\n\n⚠️ Correction: the previous answer was not valid JSON. Return the same content as one valid JSON object — escape inner double quotes, no dangling commas, JSON body only.`;
 
-async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
+async function llmJson(userPrompt: string, tier: "balanced" | "deep" = "deep"): Promise<Record<string, unknown>> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // The global queue in zai.ts serializes all AI calls in the process (concurrency 1)
+      // The global queue in llm.ts serializes all AI calls in the process (bounded concurrency)
       // — two engines running together (chimney during a sweep) no longer take each other
       // down with 429s. role:"system" — the system instructions get real priority.
       const { content: raw } = await llmComplete(
@@ -44,7 +43,7 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
           { role: "system", content: SWARM_ROLE },
           { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
         ],
-        { timeoutMs: TIMEOUT_MS, timeoutLabel: "AI call", timeoutError: SwarmError }
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "AI call", timeoutError: SwarmError, tier, effort: "medium", maxTokens: 16_000 }
       );
       if (!raw.trim()) {
         lastErr = new SwarmError("The AI returned an empty answer");
@@ -136,19 +135,19 @@ function parseTriage(j: Record<string, unknown>, batch: CandidateFlat[]): Triage
 /** Triage prompt — returns a verdict for every candidate in the batch */
 export async function triageBatch(batch: CandidateFlat[]): Promise<TriageVerdict[]> {
   const list = batch.map((c, i) => candidateLine(c, i)).join("\n---\n");
-  const prompt = `A list of candidates from a GitHub sweep (real-model truth gate):
+  const prompt = `A list of candidates from a GitHub sweep (premium-model gate):
 
 ${list}
 
 Perform a comparative intelligence triage. The rules:
 — "Hard-verified" evidence = the string was found inside a real file's content — a necessary condition for elite, but not sufficient.
-— elite = only the truly strongest against the goal: proven monetary investment in REAL premium models (Opus 4.5 class) and real .claude capabilities. If all candidates look similar, rank them against each other and give elite only to the strongest third — the rest watch, with reasoning about what they lack.
+— elite = only the truly strongest against the goal: proven monetary investment in premium 5.5+ / Mythos-tier models (Opus 5.5, Fable 5.2 class) and real .claude capabilities. If all candidates look similar, rank them against each other and give elite only to the strongest third — the rest watch, with reasoning about what they lack.
 — "Soft" evidence = a mention in the description only — elite is forbidden, watch at most. You must not claim the model was used in code.
 — No evidence = noise.
 — Marking the entire list elite is forbidden. Real spread: if you judged again and again and everyone is always elite — your triage is worthless.
 Return exactly this JSON:
 {"verdicts": [{"fullName": "owner/name", "verdict": "elite|watch|noise", "confidence": 0-100, "reason": "a short reasoning in English stating exactly where the evidence comes from (code content / description) and why it is strong/weak relative to the others"}]}`;
-  const j = await llmJson(prompt);
+  const j = await llmJson(prompt, "balanced");
   return parseTriage(j, batch);
 }
 
@@ -193,7 +192,7 @@ ${list}
 
 Build a sharp investment profile for each one. Based on the evidence only:
 {"profiles": [{"fullName": "owner/name", "investment": 0-100, "moneyLevel": "certain|likely|weak|unknown", "signature": "what they built there that requires a premium model", "stealThis": ["what to steal for our product"], "blindSpot": "what they don't see and we do"}]}`;
-  const j = await llmJson(prompt);
+  const j = await llmJson(prompt, "balanced");
   return parseProfiles(j, batch);
 }
 
@@ -216,7 +215,7 @@ export async function patternSynthesis(
 
 ${list}
 
-Find cross-repo patterns: what are people building with the real premium models (Opus 4.5 / Sonnet 4.5)? Which product types are paying? Where is the market heading?
+Find cross-repo patterns: what are people building with the premium models (Fable 5.2 / Opus 5.5 / Sonnet 5.5)? Which product types are paying? Where is the market heading?
 {"patterns": [{"pattern": "pattern name", "repos": ["owner/name"], "insight": "what it means for our product"}], "stackConsensus": ["recurring technologies"], "marketShift": "2-3 sentences: where the premium-Claude-usage market is heading"}`;
   const j = await llmJson(prompt);
   const patternsRaw = Array.isArray(j.patterns) ? j.patterns : [];
@@ -323,21 +322,13 @@ Propose the next round: which GitHub queries will expose what we missed?
   // and EXECUTED in generation 2+, burning the scarce code-search quota hunting a
   // fiction. Now: every query passes detectClaudeModels; fiction minus authority-
   // confirmed waves is dropped here, with the reason recorded so the briefing shows it.
-  // Round 9 — UNKNOWN families join the gate: a hallucinated new-family id
-  // (claude-nova-5-0 — zero detectClaudeModels hits, the radar's "candidate" class)
-  // passed the filter and was persisted/displayed. Candidate-kind emerging signals
-  // minus confirmed waves now drop exactly like known-family fiction.
   const confirmedWaves = await authorityConfirmedWaveIds().catch(() => new Set<string>());
   const rawQueries = strArr(j.nextQueries, 12);
   const dropped: string[] = [];
   const nextQueries = rawQueries.filter((q) => {
     const fiction = detectClaudeModels(q).fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
-    const unknownFamily = detectEmergingModels(q)
-      .map((s) => s.id)
-      .filter((id) => !confirmedWaves.has(id));
-    const bad = [...fiction, ...new Set(unknownFamily)];
-    if (bad.length > 0) {
-      dropped.push(`"${q}" (${bad.join(", ")})`);
+    if (fiction.length > 0) {
+      dropped.push(`"${q}" (${fiction.join(", ")})`);
       return false;
     }
     return true;
@@ -348,7 +339,7 @@ Propose the next round: which GitHub queries will expose what we missed?
     rationale:
       str(j.rationale) +
       (dropped.length
-        ? ` [truth gate: ${dropped.length} proposed query(ies) dropped — fictional/unconfirmed model ids: ${dropped.join("; ")}]`
+        ? ` [truth gate: ${dropped.length} proposed query(ies) dropped — unverified model ids: ${dropped.join("; ")}]`
         : ""),
   };
 }
@@ -440,13 +431,7 @@ export async function runSwarm(
   // Triage in batches of 12
   const batches = chunk(candidates.slice(0, SWARM_TRIAGE_COVERAGE), 12);
   const triage: TriageVerdict[] = [];
-  // Round 9 — honest totals: the OLD `batches.length * 2 + 4` assumed profile
-  // batches == triage batches, but elite is capped at 12 (≤2 profile batches of 6):
-  // with 1 triage batch the progress showed 7/6, with 2 it ended at 9/10 — never 100%.
-  // During triage the honest upper bound is batches + 2 profile batches + 4 singles;
-  // once elite is known the exact total replaces it for the rest of the run.
-  const estTotalPrompts = batches.length + 2 + 4;
-  let totalPrompts = estTotalPrompts;
+  const totalPrompts = batches.length * 2 + 4;
 
   for (const batch of batches) {
     try {
@@ -455,12 +440,11 @@ export async function runSwarm(
     } catch (e) {
       failures.push(`triage: ${e instanceof Error ? e.message : "error"}`);
     }
-    await onProgress?.(calls, estTotalPrompts);
+    await onProgress?.(calls, totalPrompts);
   }
 
   const eliteNames = new Set(triage.filter((t) => t.verdict === "elite").map((t) => t.fullName));
   const elite = candidates.filter((c) => eliteNames.has(c.fullName)).slice(0, 12);
-  totalPrompts = batches.length + Math.ceil(elite.length / 6) + 4;
   const watchNames = new Set(triage.filter((t) => t.verdict === "watch").map((t) => t.fullName));
   const watch = candidates.filter((c) => watchNames.has(c.fullName)).slice(0, 12);
 

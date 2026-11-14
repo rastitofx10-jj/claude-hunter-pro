@@ -18,10 +18,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Claude Hunter — Hunt premium-Claude projects on GitHub",
   description:
-    "Find, track, and analyze GitHub projects built with paid Claude: real-model truth detection (Opus 4.5 = the strongest that exists, fictional strings flagged), a token investment score, and deep repo analysis.",
+    "Find, track, and analyze GitHub projects built with paid Claude: premium-model detection (Mythos tier and 5.5+ only, older models blocked), a token investment score, and deep repo analysis.",
   keywords: ["Claude", "GitHub", "Anthropic", "Opus", "Claude Code", "AI projects", "investment score"],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
 };
 

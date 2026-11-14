@@ -3,7 +3,7 @@ import { scoreGene, gateArtifacts } from "../src/lib/quality-gate.ts";
 import { normalizeQueryKey, yieldWeight, rankByYield } from "../src/lib/adaptive-learning.ts";
 
 let pass = 0, fail = 0;
-const t = (name, cond) => { cond ? pass++ : fail++; console.log(`${cond ? "PASS" : "FAIL"} | ${name}`); };
+const t = (name, cond) => { if (cond) pass++; else fail++; console.log(`${cond ? "PASS" : "FAIL"} | ${name}`); };
 
 // --- quality gate ---
 const mk = (over = {}) => ({

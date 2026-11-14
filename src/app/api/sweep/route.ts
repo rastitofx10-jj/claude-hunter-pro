@@ -1,17 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { parseSweepRow, reapStaleSweeps, startSweep } from "@/lib/sweep-runner";
+import { parseSweepRow, startSweep } from "@/lib/sweep-runner";
 
 export const dynamic = "force-dynamic";
 
 /** List of recent sweeps */
 export async function GET() {
   try {
-    // Round 9 — reap BEFORE listing: a sweep killed by a server restart left a
-    // "running" zombie row; the UI disabled the launch button, so no POST could
-    // ever fire, and the reaper (which only ran inside startSweep) was locked out
-    // of the exact scenario it was built for. The read path now self-heals.
-    await reapStaleSweeps();
     const rows = await db.sweepRun.findMany({ orderBy: { id: "desc" }, take: 20 });
     const items = rows.map((r) => {
       const parsed = parseSweepRow(r);

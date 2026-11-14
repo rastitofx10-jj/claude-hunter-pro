@@ -31,7 +31,7 @@ import { qualifyingModelOptions, THRESHOLD_RULE_TEXT } from "@/lib/claude-models
 import type { SearchBody } from "@/lib/hunter-types";
 
 const TOPIC_CHIPS = ["claude-code", "claude-ai", "claude", "anthropic", "mcp", "mcp-server", "ai-agents", "llm", "rag"];
-// Auto-generated from the REAL registry — real models only, fiction blocked from filters.
+// Auto-generated from the registry — premium models only; below-threshold and unverified values are blocked from filters.
 // Note: Radix Select doesn't accept value="" — we use the "none"/"all" sentinels and map back.
 export const MODEL_OPTIONS = [
   { value: "none", label: "No model filter" },
@@ -148,13 +148,7 @@ export function SearchPanel({
           placeholder={value.mode === "repos" ? 'e.g. "claude code agent", or leave empty to use filters' : 'Free-text code search, e.g. "max_tokens" anthropic'}
           value={value.query ?? ""}
           onChange={(e) => set({ query: e.target.value })}
-          onKeyDown={(e) => {
-            // Round 9 — Enter respects the pending guard (the Search button is
-            // disabled while loading; Enter wasn't): two rapid Enters raced two
-            // concurrent POSTs with no abort — whichever resolved LAST won, which
-            // could be the OLDER query's results under the newer filters.
-            if (e.key === "Enter" && !loading) onSearch();
-          }}
+          onKeyDown={(e) => e.key === "Enter" && onSearch()}
           dir="ltr"
           className="font-mono text-sm"
           aria-label="Search query"
@@ -194,7 +188,7 @@ export function SearchPanel({
             <div className="space-y-1">
               <Label className="flex items-center gap-1 text-xs">
                 Premium model
-                <span title={THRESHOLD_RULE_TEXT} className="cursor-help text-[10px] text-orange-600">🔒 real models</span>
+                <span title={THRESHOLD_RULE_TEXT} className="cursor-help text-[10px] text-orange-600">🔒 5.5+ only</span>
               </Label>
               <Select
                 value={value.model || "none"}

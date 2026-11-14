@@ -1,126 +1,118 @@
-import { detectClaudeModels, detectModelFieldValue, isBlockedModelString, classifyVersion } from "../src/lib/claude-models";
+// Adversarial test of the model gate against the REAL lineup (Claude Platform docs, 2026-11):
+//   Mythos tier  Fable 5.2 / Mythos 5.2 (+ 5.1, 5)    Opus 5.5    Sonnet 5.5    Haiku 5.5
+//   below the 5.5+ threshold: the whole 4.x family, Opus 5, Sonnet 5, 3.x, Claude 1/2
+//   unverified: anything above the known lineup (opus 6), unknown families
+// Run:  node scripts/test-model-gate-adversarial.mjs   (Node >= 22.18 or Bun)
+import {
+  detectClaudeModels,
+  detectModelFieldValue,
+  isBlockedModelString,
+  classifyVersion,
+  frontierModels,
+} from "../src/lib/claude-models.ts";
 
-// The TRUTH-ONTOLOGY adversarial round (2026-11-12): every case asserts reality.
-// The old suite asserted a fictional registry (fable premium, 4.x blocked) —
-// green tests for a lie. Now: Opus 4.5 is the strongest real model, the 4.x
-// family IS the premium tier, and fictional strings are contamination.
-const cases = [
-  // [input, expectQualifying, expectFiction, expectBlocked, note]
-  ["claude-opus-4-5", true, false, false, "opus 4.5 — the strongest real model"],
-  ["opus 4.5", true, false, false, "spoken form"],
-  ["claude opus 4,5", true, false, false, "comma decimal"],
-  ["claude-opus-4-5-20251101", true, false, false, "dated snapshot pin"],
-  ["claude_opus_4_5", true, false, false, "underscore"],
-  ["opus4.5", true, false, false, "compact form"],
-  ["claude-sonnet-4-5", true, false, false, "sonnet 4.5 real"],
-  ["sonnet 4.5", true, false, false, "sonnet 4.5 spoken"],
-  ["claude-haiku-4-5", true, false, false, "haiku 4.5 real"],
-  ["claude-opus-4-1", true, false, false, "opus 4.1 real"],
-  ["claude-sonnet-4", true, false, false, "sonnet 4 real"],
-  ["claude-3-5-sonnet-20241022", true, false, false, "3.5 era real"],
-  ["claude-3-7-sonnet", true, false, false, "3.7 real"],
-  ["claude-3-opus", true, false, false, "opus 3 real (low weight)"],
-  ["claude 4", true, false, false, "generic claude 4 — real era"],
-  ["claude-fable", false, true, false, "FICTION: fable does not exist"],
-  ["claude fable", false, true, false, "FICTION: context form"],
-  ["fable model", false, true, false, "FICTION: model context"],
-  ["fable 5.2", false, true, false, "FICTION: versioned pin"],
-  ["claude-fable-5-5", false, true, false, "FICTION: the wave the radar once 'confirmed'"],
-  ["claude-opus-5-5", false, true, false, "FICTION: opus 5.5 does not exist"],
-  ["opus 5.5", false, true, false, "FICTION spoken"],
-  ["claude-opus-6", false, true, false, "FICTION: opus 6"],
-  ["claude-sonnet-6", false, true, false, "FICTION: sonnet 6"],
-  ["claude-haiku-5", false, true, false, "FICTION: haiku 5"],
-  ["claude 5", false, true, false, "FICTION: generic claude 5"],
-  ["claude 6", false, true, false, "FICTION: generic claude 6"],
-  ["claude 2", false, false, true, "BLOCKED: ancient era"],
-  ["claude-2-1", false, false, true, "BLOCKED: claude 2.1"],
-  ["opus 45", false, false, false, "maj>9 rejected — prose"],
-  ["opus 4.25", false, false, false, "min>9 rejected — prose"],
-  ["sonnet 55", false, false, false, "poem number, maj>9"],
-  ["Shakespeare Sonnet 18", false, false, false, "poetry false positive"],
-  ["Sonnet 55 by Shakespeare", false, false, false, "poetry 55"],
-  ["Opus 6 wine tasting", false, false, false, "bare major prose invisible — the no-minor guard protects prose (X.Y form still fires fiction)"],
-  ["my model costs opus 4.5 per mtok", true, false, false, "pricing context still real evidence"],
-  ["mcp-config test for claude", false, false, false, "no model"],
+let pass = 0;
+let fail = 0;
+const check = (name, ok) => {
+  if (ok) pass++;
+  else fail++;
+  console.log(`${ok ? "PASS" : "FAIL"} | ${name}`);
+};
+
+// [text, qualifyingIds[], blockedCount>0, unverifiedCount>0]
+const detect = [
+  ["claude-opus-5-5", ["claude-opus-5-5"], false, false],
+  ["Opus 5.5 is great", ["claude-opus-5-5"], false, false],
+  ["model: claude-sonnet-5-5", ["claude-sonnet-5-5"], false, false],
+  ["claude-haiku-5-5", ["claude-haiku-5-5"], false, false],
+  ["claude-fable-5-2", ["claude-fable-5-2"], false, false],
+  ["claude fable 5.1", ["claude-fable-5-1"], false, false],
+  ["claude-mythos-5-2", ["claude-mythos-5-2"], false, false],
+  ["claude-opus-5-5-20260922", ["claude-opus-5-5"], false, false],
+  ["claude-opus-4-5", [], true, false],
+  ["claude-opus-4-8", [], true, false],
+  ["claude-sonnet-4-6", [], true, false],
+  ["claude-haiku-4-5", [], true, false],
+  ["claude-opus-5", [], true, false],
+  ["claude-sonnet-5", [], true, false],
+  ["claude-3-5-sonnet-20241022", [], true, false],
+  ["claude-opus-6", [], false, true],
+  ["opus 6.5", [], false, true],
+  ["claude-fable-9-9", [], false, true],
+  ["opus 5.5 with sonnet 4.5 fallback", ["claude-opus-5-5"], true, false],
+  ["the opus 4 chapters of the book", [], false, false],
 ];
-
-let pass = 0, fail = 0;
-for (const [input, eq, ef, eb, note] of cases) {
-  const det = detectClaudeModels(input);
-  const okQ = (det.qualifying.length > 0) === eq;
-  const okF = (det.fiction.length > 0) === ef;
-  const okB = (det.blocked.length > 0) === eb;
-  const ok = okQ && okF && okB;
-  if (ok) pass++; else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"} | "${input}" | qual=${det.qualifying.map((q) => q.id).join(",") || "-"} fict=${det.fiction.map((q) => q.id).join(",") || "-"} blocked=${det.blocked.map((q) => q.id).join(",") || "-"} | ${note}`);
+for (const [text, q, blocked, unverified] of detect) {
+  const d = detectClaudeModels(text);
+  const ids = d.qualifying.map((m) => m.id).sort();
+  const ok =
+    JSON.stringify(ids) === JSON.stringify([...q].sort()) &&
+    d.blocked.length > 0 === blocked &&
+    d.fiction.length > 0 === unverified;
+  check(`detect(${JSON.stringify(text)}) → q=${ids.join(",") || "-"} blocked=${d.blocked.length} unverified=${d.fiction.length}`, ok);
 }
 
-// weight ladder — the real capability tier
-const w = (text, id) => detectClaudeModels(text).qualifying.find((q) => q.id === id)?.weight;
-const weightCases = [
-  ["opus 4.5 pin", "claude-opus-4-5", 45, "opus 4.5 = 45 (the strongest)"],
-  ["sonnet 4.5 pin", "claude-sonnet-4-5", 34, "sonnet 4.5 = 34"],
-  ["haiku 4.5 pin", "claude-haiku-4-5", 26, "haiku 4.5 = 26"],
-  ["opus 4.1 pin", "claude-opus-4-1", 30, "opus 4.1 = 30"],
-  ["claude-sonnet-4 pin", "claude-sonnet-4", 24, "sonnet 4 = 24"],
-  ["claude-3-5-sonnet-20241022 pin", "claude-3-5-sonnet", 14, "3.5 sonnet (3.x-era id format, family last) = 14"],
-];
-for (const [text, id, expect, note] of weightCases) {
-  const got = w(text, id);
-  const ok = got === expect;
-  if (ok) pass++; else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"} | weight ${id} = ${got} (expect ${expect}) | ${note}`);
-}
-
-// classifyVersion fiction semantics
+// classifyVersion
 const cv = [
-  [4.5, "opus", false, "4.5 opus = real"],
-  [4.6, "opus", true, "4.6 opus = above real frontier = fiction for the gate"],
-  [5, "opus", true, "opus 5 = fiction"],
-  [5.5, "fable", true, "any fable = fiction"],
-  [3.5, "sonnet", false, "3.5 sonnet = real"],
-  [2, "generic", false, "claude 2 = blocked-era (not fiction)"],
-  [5, "generic", true, "claude 5 = fiction"],
+  [5.5, "opus", true, false],
+  [5.5, "sonnet", true, false],
+  [5.5, "haiku", true, false],
+  [5.2, "fable", true, false],
+  [5.2, "mythos", true, false],
+  [4.5, "opus", false, false],
+  [5, "opus", false, false],
+  [6, "opus", false, true],
+  [5.6, "sonnet", false, true],
+  [4, "fable", false, true],
+  [5.5, "generic", true, false],
+  [4, "generic", false, false],
+  [7, "generic", false, true],
 ];
-for (const [v, fam, expF, note] of cv) {
-  const ok = classifyVersion(v, fam).fiction === expF;
-  if (ok) pass++; else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"} | classifyVersion(${v}, ${fam}).fiction = ${!expF ? "false" : "true"} | ${note}`);
+for (const [v, fam, q, f] of cv) {
+  const r = classifyVersion(v, fam);
+  check(`classifyVersion(${v}, ${fam}) → q=${r.qualifying} unverified=${r.fiction}`, r.qualifying === q && r.fiction === f);
 }
 
-// model-field API: bare family names resolve to the REAL family frontier
+// weights: Mythos tier > Opus > Sonnet > Haiku, cap 45
+const w = (t) => detectClaudeModels(t).qualifying[0]?.weight ?? 0;
+check("weight ladder fable-5-2 >= opus-5-5 > sonnet-5-5 > haiku-5-5",
+  w("claude-fable-5-2") >= w("claude-opus-5-5") && w("claude-opus-5-5") > w("claude-sonnet-5-5") && w("claude-sonnet-5-5") > w("claude-haiku-5-5"));
+check("no weight above the 45 cap", ["claude-fable-5-2", "claude-mythos-5-2", "claude-opus-5-5"].every((t) => w(t) <= 45));
+
+// controlled model fields (settings.json "model", ANTHROPIC_MODEL)
 const fv = [
-  ["claude-opus-4-5", "claude-opus-4-5", "full id"],
-  ["opus-4-5", "claude-opus-4-5", "no-prefix id"],
-  ["opus", "claude-opus-4-5", "bare family → family frontier"],
-  ["sonnet", "claude-sonnet-4-5", "bare sonnet → sonnet 4.5"],
-  ["haiku", "claude-haiku-4-5", "bare haiku → haiku 4.5"],
-  ["fable", null, "FICTION value → no model pinned"],
-  ["claude-fable-5-2", null, "FICTION pin → no model pinned"],
-  ["opus-5-5", null, "FICTION version → no model pinned"],
+  ["claude-opus-5-5", "claude-opus-5-5"],
+  ["opus", "claude-opus-5-5"],
+  ["sonnet", "claude-sonnet-5-5"],
+  ["haiku", "claude-haiku-5-5"],
+  ["fable", "claude-fable-5-2"],
+  ["claude-fable-5-2", "claude-fable-5-2"],
+  ["claude-opus-4-5", null],
+  ["opus-6", null],
+  ["", null],
 ];
-for (const [val, exp, note] of fv) {
+for (const [val, exp] of fv) {
   const got = detectModelFieldValue(val)?.id ?? null;
-  const ok = got === exp;
-  if (ok) pass++; else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"} | detectModelFieldValue('${val}') = ${got ?? "null"} | ${note}`);
+  check(`detectModelFieldValue(${JSON.stringify(val)}) = ${got}`, got === exp);
 }
 
-// block-string API: fiction is blocked from filters too (no quota for hallucinations)
+// filters: below-threshold and unverified filter values are blocked server-side
 const bs = [
-  ["sonnet 4.5", false, "real model — allowed"],
-  ["opus 4.5", false, "real model — allowed"],
-  ["opus 5.5", true, "fiction — blocked"],
-  ["fable", true, "fiction — blocked"],
-  ["claude 2", true, "ancient — blocked"],
+  ["claude-opus-5-5", false],
+  ["claude-fable-5-2", false],
+  ["fable", false],
+  ["claude-opus-4-5", true],
+  ["claude-sonnet-4-5", true],
+  ["claude 2", true],
+  ["claude-opus-6", true],
+  ["", false],
 ];
-for (const [val, exp, note] of bs) {
-  const got = isBlockedModelString(val);
-  const ok = got === exp;
-  if (ok) pass++; else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"} | isBlockedModelString('${val}') = ${got} | ${note}`);
-}
+for (const [val, exp] of bs) check(`isBlockedModelString(${JSON.stringify(val)}) = ${isBlockedModelString(val)}`, isBlockedModelString(val) === exp);
+
+// hunt budget: only frontier models steer queries
+const fr = frontierModels().map((m) => m.id).sort();
+check(`frontierModels() = ${fr.join(", ")}`,
+  JSON.stringify(fr) === JSON.stringify(["claude-fable-5-2", "claude-haiku-5-5", "claude-mythos-5-2", "claude-opus-5-5", "claude-sonnet-5-5"]));
 
 console.log(`\n${pass} pass / ${fail} fail`);
 process.exit(fail > 0 ? 1 : 0);

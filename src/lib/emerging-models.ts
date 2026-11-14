@@ -1,7 +1,7 @@
 // ============================================================
 // Emerging-model radar — the frontier becomes self-detecting, TRUTH-GATED.
 //
-// ROAST-FINDING (2026-11-12, truth migration): the old confirmation rule —
+// HISTORY (2026-11-12): the old confirmation rule —
 // "≥2 distinct repos mention it = confirmed wave" — confirmed TEXT, not
 // MODELS. Two hallucinating spam repos ("awesome-fable5-5-videos" style)
 // were enough to declare a fictional model a LIVE WAVE, steer the arsenal
@@ -9,9 +9,9 @@
 // ledger held a "confirmed" entry for a model that does not exist.
 //
 // The new discipline (data before doctrine, AUTHORITY before action):
-//   1. SIGNAL — a pin above the REAL registry frontier (opus/sonnet/haiku
-//      above 4.5, or a plausible new family ≥ 4.5) is recorded from any
-//      text the pipeline touches. Fiction words (fable) are never signals.
+//   1. SIGNAL — a pin above the registry frontier (opus/sonnet/haiku above 5.5,
+//      fable/mythos above 5.2, or a plausible new family ≥ 5.5) is recorded from
+//      any text the pipeline touches.
 //   2. VOUCH — ≥2 distinct repos vouching marks the entry vouchReached.
 //      This alone steers NOTHING.
 //   3. AUTHORITY — an org:anthropics code-search hit for the exact id is
@@ -32,8 +32,8 @@ const NON_FAMILY_WORDS = new Set([
   "action", "actions", "workflow", "workflows", "mcp", "server", "proxy",
 ]);
 
-/** Words that name FICTIONAL families — never a signal, only contamination. */
-export const FICTION_WORDS = new Set(["fable"]);
+/** Family words that must never produce signals (none today — explicit extension point). */
+export const FICTION_WORDS = new Set<string>();
 
 /** A version pin above the real frontier — the raw detection unit. */
 export interface EmergingSignal {
@@ -81,7 +81,7 @@ export const CONFIRM_REPO_MIN = 2;
 /** Max confirmed entries feeding the arsenal per run (budget discipline). */
 const MAX_WAVE_ENTRIES = 2;
 
-/** Highest REAL registered version per family — the frontier line to be above. */
+/** Highest registered version per family — the frontier line to be above. */
 function familyFrontier(): Map<string, number> {
   const m = new Map<string, number>();
   for (const reg of QUALIFYING_MODELS) {
@@ -106,10 +106,10 @@ function fmtLabel(family: string, v: number): string {
  * Detects emerging-frontier pins in free text — ABOVE the REAL registry line.
  * Two detection classes, both version-gated:
  *  1. emerging — a KNOWN family (opus/sonnet/haiku) pinned ABOVE its highest
- *     real registered version: "claude-opus-4-6", "opus 5", "claude-sonnet-5".
+ *     real registered version: "claude-opus-6", "opus 5.6", "claude-sonnet-6".
  *  2. candidate — a family word the registry has never seen, pinned ≥ 4.5
  *     with an explicit minor: "claude-myth-5-0". Product words are excluded.
- * Fiction words (fable) never produce signals. Below-frontier pins are not
+ * Below-frontier pins are not
  * signals — they are either registered models or noise.
  */
 export function detectEmergingModels(text: string): EmergingSignal[] {
@@ -121,8 +121,8 @@ export function detectEmergingModels(text: string): EmergingSignal[] {
   // Known families: claude-opus-4-6 / claude opus 5 / opus-4-6 (hyphen/space/underscore)
   const reKnown = /claude[-_ ]?(opus|sonnet|haiku)[-_ ]?(\d{1,2})(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
   // Standalone family phrasing (the frontier-wave evidence style): "written for opus 4.6"
-  const reBare = /\b(opus|sonnet|haiku)[-_ ]?(\d{1,2})(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
-  // Unknown family candidates: claude-<word>-<maj>-<min>, version ≥ 4.5, word alphabetic
+  const reBare = /\b(opus|sonnet|haiku|fable|mythos)[-_ ]?(\d{1,2})(?:[-_. ,](\d{1,2}))?(?!\d)/gi;
+  // Unknown family candidates: claude-<word>-<maj>-<min>, version ≥ 5.5, word alphabetic
   const reNew = /claude-([a-z]{3,12})-(\d{1,2})-(\d{1,2})(?!\d)/gi;
 
   const add = (s: EmergingSignal) => {
@@ -154,12 +154,12 @@ export function detectEmergingModels(text: string): EmergingSignal[] {
   while ((m = reNew.exec(lower))) {
     const word = m[1];
     if (NON_FAMILY_WORDS.has(word) || FICTION_WORDS.has(word)) continue;
-    if (["opus", "sonnet", "haiku"].includes(word)) continue; // known families handled above
+    if (["opus", "sonnet", "haiku", "fable", "mythos"].includes(word)) continue; // known families handled above
     const maj = Number(m[2]);
     const min = Number(m[3]);
-    if (maj < 4 || maj > 9 || min > 9) continue;
+    if (maj < 5 || maj > 9 || min > 9) continue;
     const version = Number(`${maj}.${min}`);
-    if (version < 4.5) continue; // a real new family ships at/above the current frontier
+    if (version < MIN_QUALIFYING_VERSION) continue; // a real new family ships at/above the current frontier
     const id = `claude-${word}-${maj}-${min}`;
     add({ id, family: word, version, label: fmtLabel(word, version), kind: "candidate", match: m[0] });
   }
@@ -326,21 +326,15 @@ export function waveQueriesFor(entry: { id: string; label: string; version: numb
   const idQ = `"${entry.id}"`;
   const words = entry.id.replace(/^claude-/, "").split("-");
   const maj = Math.floor(entry.version);
-  // Round 9 — an INTEGER version (e.g. 5) fabricated a minor ("5.0"): 3 of the 7
-  // wave queries then probed the misspelled "opus 5.0" pin while real day-one
-  // adopters write "opus 5" / "claude-opus-5". Integer versions speak without a minor.
-  const hasMinor = !Number.isInteger(entry.version);
-  const min = hasMinor ? String(entry.version).split(".")[1] : null;
-  const spoken = min != null ? `${words[0]} ${maj}.${min}` : `${words[0]} ${maj}`;
-  const spokenQ = min != null
-    ? `"${entry.id.replace(/-(\d+)-(\d+)$/, "-$1.$2")}" OR "${spoken}"`
-    : `"${entry.id}" OR "${spoken}"`;
+  const min = String(entry.version).split(".")[1] ?? "0";
+  const spoken = `${words[0]} ${maj}.${min}`;
+  const spokenQ = `"${entry.id.replace(/-(\d+)-(\d+)$/, "-$1.$2")}" OR "${spoken}"`;
   return [
     { q: idQ, kind: "code", why: `${entry.label} model-string pin — day-one adopters` },
     { q: `${entry.id} filename:SKILL.md`, kind: "code", why: `skills written for ${entry.label}` },
     { q: `${spoken} filename:CLAUDE.md`, kind: "code", why: `project contracts pinning ${entry.label}` },
     { q: `${spokenQ} system prompt`, kind: "code", why: `system-prompt engineering for ${entry.label}` },
-    { q: `"claude-opus-4-5" ${idQ}`, kind: "code", why: `routers comparing the real frontier (opus 4.5) vs ${entry.label}` },
+    { q: `"claude-opus-5-5" ${idQ}`, kind: "code", why: `routers comparing the current frontier (opus 5.5) vs ${entry.label}` },
     { q: `${spoken} created:{fresh}`, kind: "repo", why: `repos born around the ${entry.label} release` },
     { q: `${spoken} eval`, kind: "code", why: `eval harnesses measuring ${entry.label}` },
   ];

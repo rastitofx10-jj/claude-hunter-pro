@@ -12,7 +12,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useHunterStore } from "@/lib/hunter-store";
 import { useHydrated } from "@/hooks/use-hydrated";
 
-/** The frontier radar chip — shows the REAL registry frontier (Opus 4.5) when
+/** The frontier radar chip — shows the registry frontier (Fable 5.2 / Opus 5.5) when
  *  calm. When the ledger holds an emerging version above the registry, it shows
  *  that instead: an authority-confirmed wave pulses; vouched-but-unverified
  *  signals stay muted. Clicking it opens the sweep tab, where the next run
@@ -35,7 +35,7 @@ export function FrontierChip({ onOpenSweep }: { onOpenSweep?: () => void }) {
 
   const entries = data?.entries ?? [];
   if (!mounted) return null;
-  // The calm state is the REAL frontier — no emerging versions above it detected.
+  // The calm state is the registry frontier — no emerging versions above it detected.
   if (entries.length === 0) {
     return (
       <TooltipProvider delayDuration={150}>
@@ -45,14 +45,14 @@ export function FrontierChip({ onOpenSweep }: { onOpenSweep?: () => void }) {
               type="button"
               onClick={onOpenSweep}
               className="hidden items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted md:inline-flex"
-              title="Frontier radar — the real registry frontier; nothing above it detected yet"
+              title="Frontier radar — the registry frontier; nothing above it detected yet"
             >
               <Radar className="h-3.5 w-3.5" aria-hidden />
-              Frontier: Opus 4.5
+              Frontier: Fable 5.2 · Opus 5.5
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-xs font-mono text-[11px]">
-            Registry current — Opus 4.5 is the strongest real model. No versions above it detected in the wild.
+            Registry current — Fable 5.2 and Opus 5.5 are the newest known models. No versions above them detected in the wild.
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>

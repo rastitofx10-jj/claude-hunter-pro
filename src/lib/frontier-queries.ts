@@ -47,20 +47,19 @@ export const FRONTIER_REPO_POOL: FrontierQuery[] = [
 ];
 
 /** Model frontier — new model releases create a content wave before the
- *  star-weighted radar notices. TRUTH-FIX (2026-11-12): this pool used to
- *  hunt fictional model strings (fable 5.2 & co) and burned the code-search
- *  quota on hallucinations. It now hunts the REAL frontier: repos pinning
- *  the strongest models that actually exist (Opus 4.5, Sonnet 4.5). When
- *  the authority-gated radar confirms a real future release, its wave
- *  queries are auto-generated (emerging-models.ts) — no manual edits. */
+ *  star-weighted radar notices. This pool hunts the CURRENT premium lineup
+ *  (Fable 5.2, Mythos 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). When the
+ *  authority-gated radar confirms a future release, its wave queries are
+ *  auto-generated (emerging-models.ts) — no manual edits. */
 export const FRONTIER_MODEL_POOL: FrontierQuery[] = [
-  { q: '"claude-opus-4-5"', kind: "code", why: "opus 4.5 model-string pin — the strongest real model, day-one adopters" },
-  { q: '"claude-opus-4-5" filename:SKILL.md', kind: "code", why: "skills written for the real flagship" },
-  { q: '"opus 4.5" filename:CLAUDE.md', kind: "code", why: "project contracts pinning opus 4.5" },
-  { q: '"claude-sonnet-4-5" "claude-opus-4-5"', kind: "code", why: "model routers comparing the real frontier pair" },
-  { q: '"claude-opus-4-5-20251101"', kind: "code", why: "dated snapshot pins — API-level integrations" },
-  { q: '"claude-opus-4-5" eval', kind: "code", why: "eval harnesses measuring the real flagship" },
-  { q: '"claude-haiku-4-5" filename:CLAUDE.md', kind: "code", why: "cheap-tier contracts wired to the real haiku frontier" },
+  { q: '"claude-opus-5-5"', kind: "code", why: "opus 5.5 model-string pin — day-one adopters" },
+  { q: '"claude-fable-5-2"', kind: "code", why: "fable 5.2 pins — Mythos-tier adopters" },
+  { q: '"claude-opus-5-5" filename:SKILL.md', kind: "code", why: "skills written for the current Opus" },
+  { q: '"opus 5.5" filename:CLAUDE.md', kind: "code", why: "project contracts pinning opus 5.5" },
+  { q: '"claude-sonnet-5-5" "claude-opus-5-5"', kind: "code", why: "model routers pairing the current Opus and Sonnet" },
+  { q: '"claude-opus-5-5" eval', kind: "code", why: "eval harnesses measuring the current flagship" },
+  { q: '"claude-haiku-5-5" filename:CLAUDE.md', kind: "code", why: "cheap-tier contracts wired to Haiku 5.5 (routing, subagents)" },
+  { q: '"claude-mythos-5-2"', kind: "code", why: "mythos 5.2 pins — top-tier adopters" },
 ];
 
 /** Deterministic rotation: `count` items from `pool`, starting at `seed % pool.length`.

@@ -1,0 +1,89 @@
+{
+ "draftId": "27733ce0",
+ "createdAt": "2026-11-14T11:27:13.068Z",
+ "chimeraName": "loa-orchestrator-chimera",
+ "oneLiner": "Master orchestrator for the full Loa lifecycle with security gates, autonomous review, and continuous learning capabilities - unifying the best of elite development workflows.",
+ "sources": [
+  "0xHoneyJar/loa-finn",
+  "AratKruglik/claude-laravel"
+ ],
+ "principles": [
+  "Quality gates are non-negotiable - no implementation passes without validation",
+  "Zone-based file system constraints prevent unauthorized modifications",
+  "Continuous learning transforms debugging discoveries into reusable skills",
+  "Architectural decisions must be documented with trade-offs and rationale",
+  "Security is audited with paranoid thoroughness, not as an afterthought",
+  "Test-first approach is mandatory for all bug fixes and features",
+  "Autonomous phases ARE the plan - never bypass quality gates for speed"
+ ],
+ "workOrders": [
+  {
+   "title": "Implement Loa Lifecycle Orchestrator",
+   "spec": "Build a CLI command that orchestrates the complete development lifecycle with phase gates and validation",
+   "claudePrompt": "Implement a CLI command '/orchestrator' that manages the full Loa lifecycle (discover->design->implement->audit->submit->learn) with mandatory phase validation. Create phase handlers with proper exit criteria and gate enforcement. Integrate with existing skill system.",
+   "effort": "week"
+  },
+  {
+   "title": "Create Zone-Based File System Constraints",
+   "spec": "Implement a security layer that enforces read/write permissions based on project zones",
+   "claudePrompt": "Implement a zone-based file system constraint system that prevents unauthorized writes. Define three zones: system (.claude/), state (grimoires/, .beads/), and app (src/, lib/, app/). Create middleware that intercepts file operations and enforces permissions based on zone rules.",
+   "effort": "day"
+  },
+  {
+   "title": "Build Security Audit Integration",
+   "spec": "Create a security audit skill that integrates static analysis tools with AI-powered review",
+   "claudePrompt": "Implement a security audit skill that integrates with SonarQube, CodeQL, and Semgrep. Create a unified report format that combines static analysis findings with AI-powered review. Implement zone-based constraints and prioritized remediation suggestions.",
+   "effort": "week"
+  },
+  {
+   "title": "Develop Continuous Learning System",
+   "spec": "Build a system that extracts reusable skills from debugging discoveries",
+   "claudePrompt": "Implement a continuous learning system that monitors debugging activities and extracts reusable patterns. Create a skill extraction workflow that identifies non-obvious solutions, documents them with provenance, and stores them in a skill registry for future reuse.",
+   "effort": "day"
+  },
+  {
+   "title": "Create BUTTERFREEZONE Generator",
+   "spec": "Build a tool that generates token-efficient, provenance-tagged project summaries",
+   "claudePrompt": "Implement a BUTTERFREEZONE generator that creates concise project summaries with provenance tagging. Create scripts that analyze project structure, documentation, and code to generate token-efficient summaries with checksum verification. Include validation to ensure output integrity.",
+   "effort": "day"
+  }
+ ],
+ "breakthrough": "The breakthrough is the integration of continuous learning directly into the development workflow - transforming debugging discoveries into reusable skills without manual intervention. This creates a self-improving system where each session makes future work more efficient, creating a compounding knowledge effect that no existing system achieves. The zone-based constraint system combined with automatic skill extraction creates a secure, self-evolving development environment that learns from every debugging session.",
+ "skillMd": "---\nname: loa-orchestrator-chimera\ndescription: Master orchestrator for the full Loa lifecycle with security gates, autonomous review, and continuous learning capabilities - unifying the best of elite development workflows.\n---\n\n# Loa Orchestrator Chimera\n\n## Overview\nThe ultimate skill orchestrator that combines the full Loa lifecycle with security auditing, autonomous review capabilities, and continuous learning from debugging discoveries. This chimera provides comprehensive coverage from requirements through deployment while maintaining strict quality gates.\n\n## Execution Model\nPREFLIGHT → DISCOVER → DESIGN → IMPLEMENT → AUDIT → (pass? SUBMIT : REMEDIATE, loop ≤3 then ESCALATE) → POST-PR-VAL → READY_FOR_HITL → DEPLOY → LEARN\n\n## Core Capabilities\n\n### 1. Lifecycle Orchestration\n- Autonomous orchestration of complete development lifecycle\n- Quality gates at each phase with mandatory validation\n- Micro-sprint creation for bug triage and feature implementation\n- Continuous learning from debugging discoveries\n\n### 2. Security & Quality Auditing\n- Paranoid cypherpunk audit approach\n- Multi-model deep review capabilities\n- Zone-based file system constraints\n- Integration with static analysis tools (SonarQube, CodeQL, Semgrep)\n\n### 3. Architectural Review & Design\n- Master software architect specializing in modern patterns\n- DDD strategic design capabilities\n- System design and pattern selection expertise\n- Architecture Decision Records (ADRs) documentation\n\n### 4. Code Review & Optimization\n- Elite code review with AI-powered analysis\n- Database optimization and performance tuning\n- Debugging wizard with systematic methodology\n- Continuous improvement through extracted patterns\n\n## Invocation Patterns\n\n### Full Lifecycle Orchestration\n```text\n/autonomous\n```\nInitiates complete lifecycle from raw requirements with mandatory quality gates.\n\n### Security Audit\n```text\n/audit\n```\nConducts security and quality audit with zone-based constraints.\n\n### Bug Triage\n```text\n/bug <description>\n```\nCreates micro-sprint for bug resolution with test-first approach.\n\n### Architectural Review\n```text\n/architect-review <design-spec>\n```\nReviews system architecture for integrity and scalability.\n\n### Code Review\n```text\n/code-review <path>\n```\nPerforms elite code review with security and performance analysis.\n\n## Zone Constraints\n- **System Zone (`.claude/`)**: Read-only access to skill definitions and protocols\n- **State Zone (`grimoires/loa/`, `.beads/`)**: Read-write for artifacts and logs\n- **App Zone (`src/`, `lib/`, `app/`)**: Read-only for analysis, write only for approved artifacts\n\n## Quality Gates\n1. **Preflight Check**: System integrity validation\n2. **Input Guardrails**: Security screening before processing\n3. **Phase Validation**: Mandatory completion before advancement\n4. **Audit Requirements**: Security and quality review before submission\n5. **Continuous Learning**: Pattern extraction from debugging discoveries\n\n## Integration Points\n- Constructs Network API for skill discovery and installation\n- GitHub integration for PR reviews and automation\n- Static analysis tools for code quality metrics\n- Database performance monitoring and optimization\n- CI/CD pipeline integration for deployment automation\n\n## Output Artifacts\n- BUTTERFREEZONE.md (agent-grounded project summary)\n- Architecture Decision Records (ADRs)\n- Security audit reports with prioritized findings\n- Micro-sprint plans with task breakdowns\n- Extracted skill patterns from debugging discoveries\n- Performance optimization recommendations",
+ "validation": {
+  "passed": true,
+  "checkedAt": "2026-11-14T11:27:13.067Z",
+  "gates": [
+   {
+    "gate": "G1-identity",
+    "ok": true,
+    "detail": "name=\"loa-orchestrator-chimera\""
+   },
+   {
+    "gate": "G2-provenance",
+    "ok": true,
+    "detail": "2/2 sources have mined DNA (0xHoneyJar/loa-finn, AratKruglik/claude-laravel)"
+   },
+   {
+    "gate": "G3-principles",
+    "ok": true,
+    "detail": "7/7 principles with substance"
+   },
+   {
+    "gate": "G4-work-orders",
+    "ok": true,
+    "detail": "5/5 work orders with actionable substance"
+   },
+   {
+    "gate": "G5-skill-md",
+    "ok": true,
+    "detail": "3552 chars, frontmatter=true, placeholders=false"
+   },
+   {
+    "gate": "G6-breakthrough",
+    "ok": true,
+    "detail": "520 chars: \"The breakthrough is the integration of continuous learning d…\""
+   }
+  ]
+ }
+}

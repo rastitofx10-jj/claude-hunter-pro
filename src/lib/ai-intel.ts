@@ -1,11 +1,11 @@
 // ============================================================
 // AI intelligence engine — Claude Hunter
 // Closes the loop: from "finding projects" to "product decisions".
-// Runs on the server side only (z-ai-web-dev-sdk is forbidden on the client).
+// Runs on the server side only (the Claude API key must never reach the client).
 // ============================================================
 
 import { extractJson, isTimeoutError, str, strArr } from "./ai-json";
-import { llmComplete } from "./zai";
+import { llmComplete } from "./llm";
 import type {
   AnalyzeResponse,
   BattleSynthesis,
@@ -24,18 +24,18 @@ export class IntelError extends Error {
   }
 }
 
-const TIMEOUT_MS = 110_000;
+const TIMEOUT_MS = 300_000; // adaptive thinking + large structured answers need headroom
 
 const SYSTEM_ROLE = `You are a senior competitive-intelligence analyst on a product team building an innovative AI interface.
 Your mission: turn raw GitHub evidence into a practical battle plan, in English.
 
 Iron rules:
-1. You are a JSON engine — return valid JSON and nothing beyond it. No code fences, no explanations, no markdown.
-2. Every field in English only (technical names like CLAUDE.md / claude-opus-4-5 stay in English inside the text).
+1. You are a JSON engine — return a single valid JSON object and nothing beyond it. No code fences, no explanations, no markdown. Escape any double quote inside a string value.
+2. Every field in English only (technical names like CLAUDE.md / claude-opus-5-5 stay in English inside the text).
 3. Never invent facts that are not in the evidence. No evidence for something? Write that no evidence was found, or skip it.
-4. Model truth: only REAL Anthropic models count — Opus 4.5 is the strongest model that exists today, Sonnet 4.5 and Haiku 4.5 follow, and older real models (4.1/4/3.x) are worth proportionally less. "Fable", "opus 5.5", "opus 6" and any model above the real 4.5 frontier are FICTIONAL strings hallucinated by others — if the evidence contains them, flag it as hallucination contamination, give ZERO credit, and say so explicitly.
+4. Model truth: the current premium lineup is the Mythos tier (Claude Fable 5.2, Claude Mythos 5.2) above Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5. The 4.x family, Opus 5 and Sonnet 5 are real but below this tool's 5.5+ threshold — worth proportionally less. A model name above that lineup (for example opus 6) is unverified: say so explicitly and give it zero credit until Anthropic's own repos confirm it.
 5. Always from the perspective of "what does this give our product" — not an academic review but operational orders.
-6. Inside JSON string values, double quotes (") are forbidden — replace them with a single quote (').`;
+6. Escape any double quote inside a JSON string value (\\").`;
 
 // ---------- utilities ----------
 
@@ -107,13 +107,13 @@ async function llmJson(userPrompt: string): Promise<Record<string, unknown>> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // The global queue in zai.ts (concurrency 1 + 429 retry) — see the documentation there
+      // The global queue in llm.ts (bounded concurrency + retry with backoff) — see the documentation there
       const { content: raw } = await llmComplete(
         [
           { role: "system", content: SYSTEM_ROLE },
           { role: "user", content: attempt === 0 ? userPrompt : userPrompt + RETRY_HINT },
         ],
-        { timeoutMs: TIMEOUT_MS, timeoutLabel: "AI call", timeoutError: IntelError }
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "AI call", timeoutError: IntelError , tier: "deep", effort: "medium", maxTokens: 16_000 }
       );
       if (!raw.trim()) {
         lastErr = new IntelError("The AI returned an empty response — try again");
@@ -144,7 +144,7 @@ function repoDigest(a: AnalyzeResponse): string {
     `Investment score: ${a.score.total}/100 (models ${a.score.modelScore}/45, payment ${a.score.paidScore}/30, traction ${a.score.tractionScore}/25, usage ${a.score.usageScore}/15)`,
     `Meets the real-premium-model threshold: ${a.score.meetsModelThreshold ? "yes" : "no"}`,
     qual.length ? `Real models detected: ${qual.map((m) => `${m.label}${m.hits ? ` [${m.hits} files]` : ""} (sources: ${m.sources.join("/")})`).join("; ")}` : "Real models detected: none",
-    blocked.length ? `Non-counted models found (ancient Claude ≤2-era / fictional pins, weight 0): ${blocked.map((m) => m.label).join(", ")}` : "",
+    blocked.length ? `Blocked models found (4.x and below, weight 0): ${blocked.map((m) => m.label).join(", ")}` : "",
     a.evidence.length ? `Payment evidence: ${a.evidence.map((e) => e.label).join("; ")}` : "Payment evidence: none",
     a.commands.length ? `Claude Code commands: /${a.commands.join(", /")}` : "",
     a.agents.length ? `Subagents: ${a.agents.join(", ")}` : "",

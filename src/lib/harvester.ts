@@ -65,13 +65,6 @@ export interface HarvestRepoReport {
   artifacts: number;
   /** round 8: raw files found pre-gate — discovery truth, kept for transparency */
   rawFound?: number;
-  /** round 9: downloads that failed at the transport layer (rate limit / 5xx /
-   *  timeout) — UNKNOWN files, not stubs; the strike ledger must not blame the
-   *  repo for these (see gateArtifacts.downloadErrors). */
-  downloadErrors?: number;
-  /** round 9: the repo's file tree was truncated at GitHub's 100k-entry cap —
-   *  the mine is PARTIAL (some capability files were never seen) */
-  treeTruncated?: boolean;
   kinds: string[];
   newCount: number;
   updatedCount?: number;
@@ -90,8 +83,6 @@ export interface HarvestResult {
   totalLibrary: number;
   fieldDna: number;
   skippedAlreadyMined: number;
-  /** Round 9 — repos skipped via the shared empty-mine strike memory */
-  emptySkipped?: number;
   /** Genes rejected by the chimera quality gate across all mined repos */
   qualityRejectedTotal: number;
   /** Full transparency: what actually happened at the discovery stage */
@@ -254,9 +245,7 @@ export async function harvestRepo(
   // Chimera quality gate (WO3) — replaces the raw byte-floor filter: a stub gene
   // never enters the library, and now neither does structure-less fluff or a
   // generic-name placeholder. Every rejection is reported with its reasons.
-  // Round 9: downloadErrors ride separately — a rate-limited/timeout download
-  // is UNKNOWN, not a stub, and never counts against the repo (strike safety).
-  const { kept: artifacts, rejected, avgScore, downloadErrors: dlErrs } = gateArtifacts(pkg.artifacts);
+  const { kept: artifacts, rejected, avgScore } = gateArtifacts(pkg.artifacts);
   const skippedStubs = rejected.filter((r) => r.reasons.some((x) => x.startsWith("stub:"))).length;
   const qualityRejected = rejected.slice(0, 6);
 
@@ -312,11 +301,6 @@ export async function harvestRepo(
     }
   } catch { /* radar must never stall the harvest */ }
 
-  // Round 9 — the partial-tree truth travels with the harvest report: the miner
-  // computes `treeTruncated` (a >100k-entry monorepo tree), the genesis route
-  // surfaces it, but the sweep/harvest path dropped it — an elite repo mined from a
-  // truncated tree reported "mined, 3 artifacts" with zero indication the mine was
-  // partial (and then joined minedNames, never re-mined for the lost files).
   return {
     repo: fullName,
     stars: pre?.stars ?? 0,
@@ -329,8 +313,6 @@ export async function harvestRepo(
     // Now: artifacts = POST-GATE kept count; rawFound keeps the discovery truth.
     artifacts: artifacts.length,
     rawFound: pkg.artifacts.length,
-    downloadErrors: dlErrs.length,
-    treeTruncated: pkg.treeTruncated,
     kinds: Array.from(kinds),
     newCount,
     updatedCount,
@@ -338,56 +320,6 @@ export async function harvestRepo(
     qualityRejected,
     avgQuality: avgScore,
   };
-}
-
-// ---------- empty-mine strike ledger (single source — round 9) ----------
-// deep-sweep used to own this inline; harvest() consulted nothing, so a repo whose
-// every gene was quality-rejected on the harvest path was re-mined from GitHub on
-// every harvest forever. Both paths now share these helpers: read the strikes,
-// apply only THIS run's diffs inside a re-reading transaction.
-
-const MINE_ATTEMPTS_KEY = "mineAttempts";
-
-export async function loadMineAttempts(): Promise<Record<string, number>> {
-  try {
-    const row = await db.setting.findUnique({ where: { key: MINE_ATTEMPTS_KEY } });
-    const parsed = row?.value ? JSON.parse(row.value) : {};
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Apply this run's strike diffs — race-safe (re-reads the current row inside
- *  the transaction; a concurrent recorder can no longer clobber the other's
- *  update via last-writer-wins). Strikes are the caller's decision: repos with
- *  download errors are excluded BEFORE calling this (unknown ≠ empty). */
-export async function applyMineOutcomes(strikes: string[], unblocks: string[]): Promise<void> {
-  if (strikes.length === 0 && unblocks.length === 0) return;
-  try {
-    await db.$transaction(
-      async (tx) => {
-        const row = await tx.setting.findUnique({ where: { key: MINE_ATTEMPTS_KEY } });
-        let parsed: Record<string, number> = {};
-        try {
-          const v = row?.value ? JSON.parse(row.value) : null;
-          if (v && typeof v === "object" && !Array.isArray(v)) parsed = v;
-        } catch {
-          // corrupted row — start fresh rather than losing the memory forever
-        }
-        for (const repo of strikes) parsed[repo] = (parsed[repo] ?? 0) + 1;
-        for (const repo of unblocks) delete parsed[repo];
-        await tx.setting.upsert({
-          where: { key: MINE_ATTEMPTS_KEY },
-          update: { value: JSON.stringify(parsed) },
-          create: { key: MINE_ATTEMPTS_KEY, value: JSON.stringify(parsed) },
-        });
-      },
-      { timeout: 10_000 }
-    );
-  } catch {
-    // The memory is an optimization — a save failure doesn't take down the stage
-  }
 }
 
 /**
@@ -398,21 +330,7 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
   const { candidates, queriesRun, queriesFailed } = await discoverEliteRepos(token, {
     enrichCount: Math.min(12, maxRepos + 6),
   });
-  // Round 9 — the harvest path now shares the empty-mine memory with the sweep
-  // path (it consulted NOTHING before): a repo proven empty twice is skipped,
-  // and this run's 0-kept outcomes are recorded below. Download-failed repos
-  // never strike (unknown ≠ empty).
-  const mineAttempts = await loadMineAttempts();
-  let emptySkipped = 0;
-  const fresh = candidates
-    .filter((c) => {
-      if ((mineAttempts[c.fullName] ?? 0) >= 2) {
-        emptySkipped++;
-        return false;
-      }
-      return !c.alreadyMined;
-    })
-    .slice(0, maxRepos);
+  const fresh = candidates.filter((c) => !c.alreadyMined).slice(0, maxRepos);
   const skippedAlreadyMined = candidates.filter((c) => c.alreadyMined).length;
 
   const starsMap = new Map(candidates.map((c) => [c.fullName, c]));
@@ -447,21 +365,8 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
     db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
   ]);
 
-  // Round 9 — record this run's empty-mine outcomes (same semantics as the
-  // sweep path): 0 kept genes and no download failures = strike; any kept gene
-  // unblocks. A repo with download errors is NOT struck — the mine was partial,
-  // not proven-empty.
-  await applyMineOutcomes(
-    reports.filter((r) => r.artifacts === 0 && (r.downloadErrors ?? 0) === 0).map((r) => r.repo),
-    reports.filter((r) => r.artifacts > 0).map((r) => r.repo)
-  );
-
   // Adaptive learning (WO4) — attribute added genes to the queries that surfaced
-  // the mined repos, so future harvests rank proven queries higher. Round 9: the
-  // executed-but-clean queries are now seeded too — a sterile harvest query
-  // finally decays toward 0.2 instead of keeping the never-run 0.5 forever (the
-  // demotion half of the learning loop was dead on this path; the hunt/sweep
-  // paths already did this).
+  // the mined repos, so future harvests rank proven queries higher.
   const attribution: Record<string, number> = {};
   for (const rep of reports) {
     if (rep.newCount > 0) {
@@ -469,9 +374,7 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
       for (const q of c?.viaQueries ?? []) attribution[q] = (attribution[q] ?? 0) + rep.newCount;
     }
   }
-  const failedQuerySet = new Set(queriesFailed.map((f) => f.q));
-  const executedClean = queriesRun.filter((r) => !failedQuerySet.has(r.q)).map((r) => r.q);
-  await recordQueryYields(attribution, executedClean);
+  await recordQueryYields(attribution);
 
   return {
     candidatesFound: candidates.length,
@@ -481,8 +384,6 @@ export async function harvest(token: string | null, maxRepos = 6): Promise<Harve
     totalLibrary,
     fieldDna,
     skippedAlreadyMined,
-    /** round 9: repos skipped via the shared empty-mine memory (visible, not silent) */
-    emptySkipped,
     qualityRejectedTotal: reports.reduce((s, r) => s + (r.qualityRejected?.length ?? 0), 0),
     queriesRun,
     queriesFailed,

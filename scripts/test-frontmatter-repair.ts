@@ -1,42 +1,55 @@
+// Round-10 regression test — the law of SKILL.md frontmatter (src/lib/skill-md.ts).
+// Offline and self-contained: the real field-failure shape (draft 7f58878d — the LLM
+// opened `---` and never closed it, permanently failing G5-skill-md) is embedded as a
+// literal so the test no longer depends on a draft file that publish deletes.
 import { repairSkillMdFrontmatter, hasFrontmatter } from "../src/lib/skill-md";
-import { readFileSync } from "node:fs";
 
-// The real failing shape from draft 7f58878d: opener without closer
-const real = readFileSync("./reports/state/chimera-drafts/7f58878d.json", "utf8");
-const d = JSON.parse(real);
-const broken = d.skillMd as string;
+let pass = 0;
+let fail = 0;
+const t = (name: string, ok: boolean) => {
+  if (ok) pass++;
+  else fail++;
+  console.log(`${ok ? "PASS" : "FAIL"} | ${name}`);
+};
 
-console.log("== Case 1: real unterminated draft ==");
-console.log("before hasFrontmatter:", hasFrontmatter(broken));
-const r1 = repairSkillMdFrontmatter(broken, { name: d.chimeraName, description: d.oneLiner });
-console.log("repaired:", r1.repaired, "| how:", r1.how);
-console.log("after hasFrontmatter:", hasFrontmatter(r1.md));
-console.log("HEAD:", JSON.stringify(r1.md.slice(0, 150)));
+// == Case 1: the real unterminated field shape (7f58878d, verbatim head) ==
+const broken =
+  "---\nname: PR Automation Orchestrator\ndescription: Comprehensive PR lifecycle management with intelligent issue triage and duplicate detection\n\n## Overview\nThis skill orchestrates the complete pull request workflow.\n\n## Core Capabilities\n- Automatically create pull requests\n- Triage incoming issues by urgency and topic\n- Detect duplicate issues before filing\n";
+const r1 = repairSkillMdFrontmatter(broken, { name: "pr-automation-orchestrator", description: "Automates the PR lifecycle" });
+t("real field case: detected as broken before", !hasFrontmatter(broken));
+t("real field case: repaired by closing the block", r1.repaired && r1.how === "closed");
+t("real field case: terminated after repair", hasFrontmatter(r1.md));
+t("real field case: YAML head preserved inside the block", r1.md.startsWith("---\nname: PR Automation Orchestrator\n"));
+t("real field case: body preserved after the block", r1.md.includes("## Overview"));
 
-console.log("\n== Case 2: no frontmatter at all ==");
-const noFront = "# My Skill\n\nSome body content\n";
-const r2 = repairSkillMdFrontmatter(noFront, { name: "my-skill", description: "does things: well" });
-console.log("how:", r2.how, "| hasFront:", hasFrontmatter(r2.md));
-console.log(JSON.stringify(r2.md.slice(0, 120)));
+// == Case 2: no frontmatter at all — synthesized from sibling fields ==
+const r2 = repairSkillMdFrontmatter("# My Skill\n\nSome body content\n", { name: "my-skill", description: "does things: well" });
+t("no frontmatter: synthesized", r2.how === "synthesized" && hasFrontmatter(r2.md));
+t("no frontmatter: body preserved", r2.md.includes("# My Skill"));
+t("no frontmatter: YAML-unsafe description quoted", r2.md.includes('description: "does things: well"'));
 
-console.log("\n== Case 3: already valid ==");
+// == Case 3: already valid — untouched ==
 const valid = "---\nname: x\ndescription: y\n---\n\nbody";
 const r3 = repairSkillMdFrontmatter(valid, { name: "n", description: "d" });
-console.log("how:", r3.how, "| repaired:", r3.repaired, "| unchanged:", r3.md === valid);
+t("valid input: unchanged", r3.how === "ok" && !r3.repaired && r3.md === valid);
 
-console.log("\n== Case 4: CRLF + unterminated ==");
-const crlf = "---\r\nname: x\r\ndescription: y\r\n\r\n## Body\r\ntext";
-const r4 = repairSkillMdFrontmatter(crlf, { name: "n", description: "d" });
-console.log("how:", r4.how, "| hasFront:", hasFrontmatter(r4.md));
-console.log(JSON.stringify(r4.md.slice(0, 100)));
+// == Case 4: CRLF + unterminated ==
+const r4 = repairSkillMdFrontmatter("---\r\nname: x\r\ndescription: y\r\n\r\n## Body\r\ntext", { name: "n", description: "d" });
+t("CRLF unterminated: closed and terminated", r4.how === "closed" && hasFrontmatter(r4.md));
+t("CRLF unterminated: body kept", r4.md.includes("## Body"));
 
-console.log("\n== Case 5: opener followed by prose (not YAML) ==");
-const prose = "---\nThis is prose right after the opener\n\n## Body\ntext";
-const r5 = repairSkillMdFrontmatter(prose, { name: "n", description: "d" });
-console.log("how:", r5.how, "| hasFront:", hasFrontmatter(r5.md));
-console.log("body preserved:", r5.md.includes("This is prose right after the opener"));
+// == Case 5: opener followed by prose (not YAML) — synthesize, keep body ==
+const r5 = repairSkillMdFrontmatter("---\nThis is prose right after the opener\n\n## Body\ntext", { name: "n", description: "d" });
+t("prose after opener: synthesized, not closed", r5.how === "synthesized" && hasFrontmatter(r5.md));
+t("prose after opener: body preserved", r5.md.includes("This is prose right after the opener"));
 
-console.log("\n== Case 6: YAML with colons/quotes in description ==");
+// == Case 6: YAML-hostile description (quotes + colons) ==
 const r6 = repairSkillMdFrontmatter("body only", { name: "n", description: 'has "quotes" and: colons' });
-console.log("how:", r6.how);
-console.log(JSON.stringify(r6.md.split("\n").slice(0, 4)));
+t("hostile description: quoted safely", r6.md.split("\n")[2] === 'description: "has \'quotes\' and: colons"');
+
+// == Case 7: name-collision repair target still ends with newline, never doubled ==
+const r7 = repairSkillMdFrontmatter("---\nname: x\n\ndesc-less body\n", { name: "x", description: "d" });
+t("single trailing newline", r7.md === r7.md.replace(/\n+$/, "\n"));
+
+console.log(`\n${pass} pass / ${fail} fail`);
+process.exit(fail ? 1 : 0);

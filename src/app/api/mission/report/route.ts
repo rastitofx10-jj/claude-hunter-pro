@@ -5,7 +5,7 @@ import { isTimeoutError, isPrismaNotFound } from "@/lib/ai-json";
 import { advanceStatus, OUTCOME_STATUS, TERMINAL_STATUSES } from "@/lib/mission-status";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // round 9: 120 did not cover the real worst case (2 attempts × 110s + queue wait) — the route was killed mid-run and the payload lost wholesale
+export const maxDuration = 120;
 
 /** Sanitize AI-born metadata before saving it to the library — a DNA's name/description
  * enters future compiler/executor prompts; control characters and name fences are an

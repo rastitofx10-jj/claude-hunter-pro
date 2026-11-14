@@ -115,37 +115,9 @@ export function TokenBanner() {
     setToken("");
     setMasked(null);
     try {
-      const res = await fetch("/api/settings/token", { method: "DELETE" });
-      // Round 9 — check res.ok BEFORE invalidating: on a failed DELETE (network/500)
-      // the invalidated server-token query refetched, found exists=true, and the
-      // adoption effect immediately re-adopted the token the user just removed —
-      // the banner flipped back to "active" with no error shown (the catch swallowed
-      // the real cause). Now: a failed delete surfaces the failure and does NOT
-      // re-adopt; only a successful delete refreshes the caches.
-      if (!res.ok) {
-        let msg = `The server returned ${res.status} — the token was not removed`;
-        try {
-          const j = (await res.json()) as { error?: string };
-          if (j?.error) msg = j.error;
-        } catch {
-          // keep default
-        }
-        setSaveError(msg);
-        // restore local state to the truth: the token is still on the server
-        if (serverInfo?.exists) {
-          setToken(SERVER_TOKEN);
-          setMasked(serverInfo.masked ?? null);
-        }
-        return;
-      }
+      await fetch("/api/settings/token", { method: "DELETE" });
     } catch {
-      // network-level failure — same honesty: no re-adoption race, error surfaced
-      setSaveError("Removing the token failed (network) — it is still saved on the server");
-      if (serverInfo?.exists) {
-        setToken(SERVER_TOKEN);
-        setMasked(serverInfo.masked ?? null);
-      }
-      return;
+      // ignore
     } finally {
       // Reset the cache so the removed token isn't re-adopted from cache
       queryClient.invalidateQueries({ queryKey: ["server-token"] });

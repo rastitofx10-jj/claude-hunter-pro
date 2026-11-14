@@ -51,12 +51,7 @@ export async function POST(req: NextRequest) {
     // manual Genesis mine was a bypass door for exactly the "gene #133 entered with
     // 11 bytes" defect class, feeding stub genes into mission compilation and the
     // codex export. Same gate, same discipline, single source.
-    // round 9: the response keeps `artifacts` as the KEPT ARRAY (the old success
-    // path returned kept.length — a NUMBER — while the client read
-    // `.artifacts.length`, so every success toast said "undefined artifacts saved");
-    // `saved`/`rejectedCount`/`downloadErrors` carry the honest counts, and an
-    // all-rejected mine gets a note so the client branches to the truth.
-    const { kept, rejected, downloadErrors } = gateArtifacts(pkg.artifacts);
+    const { kept, rejected } = gateArtifacts(pkg.artifacts);
     const fullName = `${owner}/${repo}`;
     for (const a of kept) {
       await db.dnaArtifact.upsert({
@@ -84,31 +79,9 @@ export async function POST(req: NextRequest) {
     if (rejected.length > 0) {
       warnings.push(`${rejected.length} low-quality gene(s) rejected at ingestion (stub/structure/placeholder gate) — only verified capability files enter the library`);
     }
-    if (downloadErrors.length > 0) {
-      warnings.push(`${downloadErrors.length} file download(s) failed at the transport layer (rate limit / timeout) — those files were NOT graded and can be re-mined later`);
-    }
-    if (kept.length === 0 && (rejected.length > 0 || downloadErrors.length > 0)) {
-      return NextResponse.json({
-        ...pkg,
-        artifacts: [],
-        saved: 0,
-        rejectedCount: rejected.length,
-        downloadErrors: downloadErrors.length,
-        rawFound: pkg.artifacts.length,
-        qualityRejected: rejected.slice(0, 6),
-        warnings,
-        note:
-          downloadErrors.length > 0 && rejected.length === 0
-            ? "No genes could be graded — every file download failed at the transport layer (rate limit / timeout). The repo was NOT marked empty — try mining again later."
-            : "Every mined file was rejected by the quality gate — nothing entered the library (stub/structure/placeholder gate).",
-      });
-    }
     return NextResponse.json({
       ...pkg,
-      artifacts: kept,
-      saved: kept.length,
-      rejectedCount: rejected.length,
-      downloadErrors: downloadErrors.length,
+      artifacts: kept.length,
       rawFound: pkg.artifacts.length,
       qualityRejected: rejected.slice(0, 6),
       warnings,

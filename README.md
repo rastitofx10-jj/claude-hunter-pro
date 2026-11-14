@@ -2,7 +2,7 @@
 
 Competitive-intelligence hunter for the Claude ecosystem. The app scans live GitHub for repositories built with **premium Claude models (5.5+)**, scores each candidate for genuine token-investment signals, mines their capability files (SKILL.md files, slash commands, agent definitions, CLAUDE.md) into a growing **DNA library**, and compiles that DNA into autonomous missions it then executes stage by stage. Every executed mission files a field report that is distilled back into the library, so the system accumulates a capability memory no ordinary Claude session ever has.
 
-> **Iron rule:** the model threshold is locked in code — only 5.5 and above qualifies (Opus 5.5, Fable, Opus 6+). The entire 4.x family and anything else below the threshold is blocked server-side, in the filters and in scoring. It cannot be changed from the UI. See `src/lib/claude-models.ts` (`MIN_QUALIFYING_VERSION = 5.5`).
+> **Iron rule:** the model threshold is locked in code — only premium models qualify: the Mythos tier (Claude Fable 5.2, Claude Mythos 5.2) and Opus / Sonnet / Haiku **5.5 and above**. The 4.x family, Opus 5 / Sonnet 5 and everything older is real but blocked server-side, in the filters, and in the scoring. Pins above the known lineup (for example "opus 6") stay *unverified* until an Anthropic-owned repo confirms them. The threshold is not user-configurable from the UI.
 
 ## Key features
 
@@ -15,7 +15,7 @@ Competitive-intelligence hunter for the Claude ecosystem. The app scans live Git
 - **Genesis chimera synthesis** — merges the best-of-breed genes from several DNA-rich repos into a single chimera persona with principles, work orders and a breakthrough idea.
 - **Adversarial auditor** — the system audits itself: live re-verification of elite evidence against the actual repos (code search + raw grep for ground truth) and an anti-slop prompt that demands exact citations.
 - **Watchlist** — repos saved for tracking with detected models, evidence and notes, auto-saved from hunt verdicts.
-- **Rate-aware GitHub client** — per-request timeouts, rate-limit detection (403/429) with exponential backoff, quota snapshots, and throttled parallel enrichment. The LLM side goes through a global serial queue (concurrency 1) with gentle 429 retry, so concurrent operations never knock each other out.
+- **Rate-aware GitHub client** — per-request timeouts, rate-limit detection (403/429) with exponential backoff, quota snapshots, and throttled parallel enrichment. The Claude side goes through a bounded-concurrency gateway with retry/backoff (see *Claude API layer*).
 
 ## The live hunt kill chain
 
@@ -36,9 +36,9 @@ Generation 2+ hunts seed the previous hunt's evolved queries (up to 10) on top o
 
 - **Next.js 16** (App Router) + **React 19** + TypeScript 5
 - **Prisma + SQLite** — models: `Mission`, `DnaArtifact`, `SweepRun`, `LiveHunt`, `Chimera`, `SavedRepo`, `SearchHistory`, `Setting`
-- **z-ai-web-dev-sdk** — server-side-only LLM layer (JSON engine with a repair chain; global serial queue, concurrency 1, 429 retry)
+- **Claude API (direct, zero SDK)** — `src/lib/llm.ts`: streaming Messages API client with a bounded concurrency pool, retry with `retry-after`, adaptive-thinking effort control, structured outputs, prompt caching and token/cost accounting
 - **GitHub REST** — rate-aware client (timeouts, backoff, quota tracking, throttled parallel enrichment)
-- **Tailwind CSS 4 + shadcn/ui** — full RTL layout, light/dark theming
+- **Tailwind CSS 4 + shadcn/ui** — English-only, left-to-right UI, light/dark theming
 - **TanStack Query + zustand** — server state and local UI state
 
 ## Setup
@@ -59,6 +59,29 @@ bun run dev
 node scripts/dna-restore.mjs
 ```
 
+## Claude API layer
+
+Every AI feature (swarm, attack plan, missions, chimeras, audit) goes through one gateway, `src/lib/llm.ts`.
+
+```bash
+# .env
+ANTHROPIC_API_KEY=sk-ant-...        # required for all AI features
+bun run llm:check                   # live smoke test of every tier (one tiny request each)
+```
+
+| Tier | Default model | Used for |
+|---|---|---|
+| `frontier` | `claude-fable-5-2` | opt-in per call (highest capability) |
+| `deep` | `claude-opus-5-5` | mission planning, phase execution, chimeras, adversarial audit, attack plan |
+| `balanced` | `claude-sonnet-5-5` | swarm triage + investment profiles, report distillation |
+| `fast` | `claude-haiku-5-5` | cheap classification calls |
+
+Override with `HUNTER_MODEL_FRONTIER|DEEP|BALANCED|FAST`, parallelism with `HUNTER_LLM_CONCURRENCY` (default 4), gateway with `ANTHROPIC_BASE_URL`. `GET /api/llm` reports configuration, per-model token usage and estimated cost without calling the API.
+
+The layer follows the 5.x request rules: no `thinking` field (adaptive thinking is always on), depth via `output_config.effort`, no sampling parameters, no prefill, no forced tool choice, JSON via `output_config.format`. Every request is streamed, system prompts are cached, 429/5xx/529 are retried with backoff, truncated answers are retried with a larger budget, refusals surface as typed errors, and every system prompt carries an English-only rule.
+
+Tests: `bun run test:models` (model gate, 53 checks), `bun run test:llm` (offline mock of the Messages API, 27 checks), `bun scripts/test-frontier-families.ts` and `bun scripts/test-frontier-radar.ts` (need `bunx prisma generate`; the radar test also needs the dev DB).
+
 ## Scripts
 
 | Command | What it does |
@@ -78,6 +101,7 @@ Highlights from `scripts/` (all against the dev server on :3000):
 - `node scripts/run-gen7.mjs` — start a live hunt and pump stages until done
 - `node scripts/chimera-live.mjs [topN]` — synthesize a chimera from the top DNA-rich repos
 - `node scripts/audit-dna-quality.mjs` — DNA library quality audit (size distribution, misclassifications, duplicates, field DNA)
+- `node scripts/purge-non-english.mjs [snapshot] [--dry]` — removes self-generated non-English rows from the snapshot (third-party mined files are never touched)
 
 ## Documentation
 

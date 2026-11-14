@@ -44,15 +44,6 @@ async function reapStaleRuns(): Promise<void> {
   }
 }
 
-/** Round 9 — the reaper is now reachable from the read path too. Before, it ran
- *  ONLY inside hasActiveRun(), whose only caller is startSweep() — a sweep killed
- *  by a server restart left its row "running" forever, the UI disabled the launch
- *  button, and since no POST could ever fire, the 15-minute reaper was dead-locked
- *  out of the exact scenario it was built for. The GET list now reaps first. */
-export async function reapStaleSweeps(): Promise<void> {
-  await reapStaleRuns();
-}
-
 export async function hasActiveRun(): Promise<boolean> {
   await reapStaleRuns();
   const running = await db.sweepRun.findFirst({ where: { status: "running" }, select: { id: true } });
@@ -101,16 +92,9 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     // the next frontier version before anyone registers it: repo descriptions,
     // topics, and the file paths the code search matched. Fire-and-collect, never
     // blocking the sweep on the ledger.
-    // Round 9 — repo hits are DEDUPED by fullName before the radar scan: a repo
-    // surfaced by 3 overlapping repo queries was scanned 3×, inflating the
-    // ledger's per-entry `mentions` +3 from a single repo and letting spam that
-    // matches many broad queries outrank genuinely viral signals.
     try {
       let emergingSeen = 0;
-      const seenRepos = new Set<string>();
       for (const h of repoHits) {
-        if (seenRepos.has(h.fullName)) continue;
-        seenRepos.add(h.fullName);
         emergingSeen += (await scanAndRecord(
           `${h.fullName} ${h.description ?? ""} ${h.topics.join(" ")}`,
           h.fullName,

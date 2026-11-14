@@ -129,21 +129,21 @@ export function AnalyzeSheet({
               {data.score.meetsModelThreshold ? (
                 <Alert className="border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
                   <Sparkles className="h-4 w-4" />
-                  <AlertTitle className="text-sm">Meets the model threshold (real premium)</AlertTitle>
+                  <AlertTitle className="text-sm">Meets the model threshold (premium 5.5+)</AlertTitle>
                   <AlertDescription className="text-xs">
-                    Real premium models were detected (Opus 4.5 / Sonnet 4.5 / Haiku 4.5...) — the project passes the strict criterion.
+                    Premium models were detected (Fable / Mythos / Opus, Sonnet, Haiku 5.5+) — the project passes the strict criterion.
                   </AlertDescription>
                 </Alert>
               ) : (
                 <Alert variant="destructive">
                   <TriangleAlert className="h-4 w-4" />
-                  <AlertTitle className="text-sm">⛔ Below threshold — a real premium model required</AlertTitle>
+                  <AlertTitle className="text-sm">⛔ Below threshold — a premium 5.5+ model is required</AlertTitle>
                   <AlertDescription className="text-xs">
-                    No real Claude model was detected (Opus 4.5, Sonnet 4.5...).
-                    {data.models.some((m) => m.label.includes("(fictional)"))
-                      ? " Fictional model pins (hallucinated strings like 'fable') were found — they do not exist and contribute nothing."
+                    No premium Claude model (5.5+ or Mythos tier) was detected.
+                    {data.models.some((m) => m.label.includes("(unverified)"))
+                      ? " Unverified model pins (versions above the known lineup) were found — they earn no credit until Anthropic's own repos confirm them."
                       : data.models.some((m) => !m.qualifying)
-                      ? " Only ancient-era models were found — they contribute nothing to the score."
+                      ? " Only below-threshold models (4.x and older) were found — they contribute nothing to the score."
                       : ""}
                   </AlertDescription>
                 </Alert>
@@ -171,7 +171,7 @@ export function AnalyzeSheet({
               <div className="rounded-xl border bg-card p-4 space-y-3">
                 <p className="text-sm font-semibold">Token Investment Score — Breakdown</p>
                 {[
-                  { label: "Premium real models (Opus 4.5…)", v: data.score.modelScore, max: 45 },
+                  { label: "Premium models (Fable / Opus 5.5…)", v: data.score.modelScore, max: 45 },
                   { label: "Payment & API evidence", v: data.score.paidScore, max: 30 },
                   { label: "Traction & community activity", v: data.score.tractionScore, max: 25 },
                   { label: "Cost/token mentions", v: data.score.usageScore, max: 15 },
@@ -220,9 +220,9 @@ export function AnalyzeSheet({
                           {m.label}
                         </span>
                         {m.qualifying ? (
-                          <Badge className="bg-orange-100 text-[10px] text-orange-800 hover:bg-orange-100 dark:bg-orange-900 dark:text-orange-200">✅ Real · weight {m.weight}</Badge>
+                          <Badge className="bg-orange-100 text-[10px] text-orange-800 hover:bg-orange-100 dark:bg-orange-900 dark:text-orange-200">✅ Premium · weight {m.weight}</Badge>
                         ) : (
-                          <Badge variant="destructive" className="text-[10px]">{m.label.includes("(fictional)") ? "⚠️ Fictional · weight 0" : "⛔ Ancient · weight 0"}</Badge>
+                          <Badge variant="destructive" className="text-[10px]">{m.label.includes("(unverified)") ? "⚠️ Unverified · weight 0" : "⛔ Below threshold · weight 0"}</Badge>
                         )}
                         {m.hits != null && <Badge variant="outline" className="text-[10px]">{m.hits} files</Badge>}
                         <span className="text-xs text-muted-foreground">Sources: {m.sources.join(", ")}</span>

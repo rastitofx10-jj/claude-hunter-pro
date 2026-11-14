@@ -4,7 +4,7 @@
 // This is the layer that turns a "successful repo" into portable genes for transplantation.
 // ============================================================
 
-import { ghFetch, ghFetchRaw, mapLimit, GhError } from "./github";
+import { ghFetch, ghFetchRaw, mapLimit } from "./github";
 
 export interface MinedArtifact {
   path: string;
@@ -15,14 +15,6 @@ export interface MinedArtifact {
   rawUrl: string | null;
   size: number;
   truncated: boolean;
-  /** Round 9: non-null when the content download itself FAILED (403 secondary
-   *  rate limit, 429, 5xx, 20s timeout, DNS blip). A failed download is UNKNOWN,
-   *  not a stub — the quality gate reports it separately and the strike ledger
-   *  must not blame the repo. 404/422 (file genuinely gone) stays null: a clean
-   *  miss, identical to the file never existing. Before: every transport error
-   *  collapsed into content=null → "stub: 0B" → strike → a real elite repo got
-   *  permanently banned off two bad minutes of network. */
-  downloadError?: string | null;
 }
 
 export interface DnaPackage {
@@ -136,25 +128,14 @@ export async function mineDna(
       let content: string | null = null;
       let rawUrl: string | null = null;
       let truncated = false;
-      let downloadError: string | null = null;
       try {
         content = await ghFetchRaw(
           `/repos/${full}/contents/${c.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`,
           token
         );
         rawUrl = `https://github.com/${full}/blob/${branch}/${c.path.split("/").map(encodeURIComponent).join("/")}`; // path encoding — spaces/#/? in file names break the raw link
-      } catch (e) {
+      } catch {
         content = null;
-        // 404/422 — the file is genuinely gone from the tree (a clean miss: the
-        // tree snapshot raced a push). Anything else is a TRANSPORT failure and
-        // is recorded as such so downstream never grades a network error as a
-        // repo property ("stub") — the exact class round 8 closed in auditor.ts
-        // grepRawFile; this was the other instance, silently striking elite repos.
-        if (e instanceof GhError && (e.status === 404 || e.status === 422)) {
-          // clean miss — stays a null-content artifact
-        } else {
-          downloadError = (e instanceof Error ? e.message : "download failed").slice(0, 160);
-        }
       }
       if (content && content.length > MAX_FILE_BYTES) {
         content = content.slice(0, MAX_FILE_BYTES) + "\n\n… [truncated for mining]";
@@ -169,7 +150,6 @@ export async function mineDna(
         rawUrl,
         size: c.size,
         truncated,
-        downloadError,
       };
     }
   );

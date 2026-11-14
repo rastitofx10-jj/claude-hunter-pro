@@ -81,14 +81,12 @@ export function ResultsSection({
         </div>
       </div>
 
-      {/* ⛔ Blocking transparency: repos with ONLY ancient (Claude ≤2-era) models
-          were hidden completely — round 9: the old copy inverted the gate ("below the
-          5.5 threshold… 4.x family is blocked") while 4.x is the REAL premium tier. */}
+      {/* ⛔ Blocking transparency: repos with only 4.x models were hidden completely */}
       {(blockedHidden ?? 0) > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50/60 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">
           <ShieldX className="h-4 w-4 shrink-0" />
           <span>
-            <strong>{blockedHidden}</strong> repos were hidden entirely — only ancient (Claude ≤2-era) models were detected in them, with no qualifying real-model evidence.
+            <strong>{blockedHidden}</strong> repos were hidden entirely — only models below the 5.5 threshold were detected in them (the 4.x family is blocked).
           </span>
         </div>
       )}

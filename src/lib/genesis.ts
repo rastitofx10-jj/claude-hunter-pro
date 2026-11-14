@@ -9,9 +9,8 @@
 
 import type { MinedArtifact } from "./dna-miner";
 import { extractJson, isTimeoutError, sanitizeSlug, str, strArr } from "./ai-json";
-import { llmComplete } from "./zai";
+import { llmComplete } from "./llm";
 import { detectClaudeModels } from "./claude-models";
-import { detectEmergingModels } from "./emerging-models";
 import { repairSkillMdFrontmatter } from "./skill-md";
 import { db } from "./db";
 
@@ -38,12 +37,12 @@ export interface ChimeraResult {
   breakthrough: string;
   sources: string[];
   generatedAt: string;
-  /** Set when the synthesis still carried fictional/unconfirmed model strings after
+  /** Set when the synthesis still carried unverified model strings after
    *  a feedback retry — the skillMd then ends with a self-documenting truth notice. */
   truthNotice?: string;
 }
 
-const TIMEOUT_MS = 110_000;
+const TIMEOUT_MS = 300_000; // adaptive thinking + large structured answers need headroom
 
 // ---------- post-birth model-truth gate (born 2026-11-13, after chimera #5) ----------
 // Field fact: chimera #5 was synthesized with a routing block that routed work to
@@ -54,7 +53,7 @@ const TIMEOUT_MS = 110_000;
 
 /** Fiction ids the radar has authority-confirmed as REAL waves (org:anthropics hit) —
  *  those may be referenced as pending adoption; they are not contamination. */
-export async function authorityConfirmedWaveIds(): Promise<Set<string>> {
+async function authorityConfirmedWaveIds(): Promise<Set<string>> {
   try {
     const row = await db.setting.findUnique({ where: { key: "frontierLedger" } });
     if (!row) return new Set();
@@ -66,26 +65,16 @@ export async function authorityConfirmedWaveIds(): Promise<Set<string>> {
   }
 }
 
-/** Scan every output field for fictional/unconfirmed model strings.
- *  Returns the offending ids (fiction minus authority-confirmed waves).
- *  Round 9 — UNKNOWN families join the scan: a hallucinated new-family id
- *  (claude-nova-5-0) produced zero detectClaudeModels hits (the regexes only
- *  know opus/sonnet/haiku/fable), so the 3-layer gate was blind to the one
- *  candidate class the radar itself recognizes. detectEmergingModels candidate
- *  ids minus confirmed waves now count as contamination exactly like
- *  known-family fiction. */
-export function scanChimeraContamination(text: string, confirmedWaves: Set<string>): string[] {
+/** Scan every output field for unverified model strings.
+ *  Returns the offending ids (fiction minus authority-confirmed waves). */
+function scanChimeraContamination(text: string, confirmedWaves: Set<string>): string[] {
   const det = detectClaudeModels(text);
-  const known = det.fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
-  const unknown = detectEmergingModels(text)
-    .map((s) => s.id)
-    .filter((id) => !confirmedWaves.has(id) && !known.includes(id));
-  return [...known, ...new Set(unknown)];
+  return det.fiction.map((f) => f.id).filter((id) => !confirmedWaves.has(id));
 }
 
 /** The self-documenting retraction appended when retries did not clean the output. */
 function modelTruthNotice(ids: string[]): string {
-  return `\n\n---\n\n## MODEL TRUTH NOTICE (post-birth gate)\n\nThe synthesis above contained references to fictional or unconfirmed model ids:\n${ids.map((id) => `- \`${id}\` — not a real available model (fiction or unconfirmed single-source signal)`).join("\n")}\n\nPer the real-model gate: only REAL Anthropic models may be routed to — Opus 4.5 is the strongest that exists today; Sonnet 4.5 and Haiku 4.5 are real; the 4.x family is the real premium tier. Treat every routing line above that names a listed id as if it named the real registry ladder instead. The radar (org:anthropics authority) is the only path by which a wave above 4.5 becomes adoptable — day-one, automatically.\n`;
+  return `\n\n---\n\n## MODEL TRUTH NOTICE (post-birth gate)\n\nThe synthesis above referenced model ids that are not in the verified lineup:\n${ids.map((id) => `- \`${id}\` — unverified (not confirmed by Anthropic's own repos)`).join("\n")}\n\nPer the premium-model gate: route work only to Claude Fable 5.2 / Mythos 5.2, Opus 5.5, Sonnet 5.5 or Haiku 5.5. Treat the ids above as pending until the frontier radar confirms them.`;
 }
 
 const GENESIS_ROLE = `You are a supreme AI-capabilities architect (Skills Architect) on an elite team.
@@ -97,8 +86,7 @@ Iron rules:
 2. Every field in English, including the skillMd body, which is written in technical English (it is a file Claude Code will read).
 3. Never invent content that is not derived from the provided DNA — but improving, unifying, and sharpening existing patterns is allowed and encouraged.
 4. skillMd must be a complete, valid SKILL.md file: frontmatter with name and description, followed by operative instructions.
-5. Inside JSON string values, double quotes (") are forbidden — use a single quote (') only.
-   Inside skillMd you may use markdown quotes (""" or backticks) — be careful with direct double quotes.`;
+5. Escape every double quote inside JSON string values (\\"). Inside skillMd prefer backticks and fenced blocks for code and quotations.`;
 
 const EFFORTS = new Set(["minutes", "hour", "day", "week"]);
 function workOrderArr(v: unknown, max = 6): WorkOrder[] {
@@ -159,22 +147,20 @@ export async function generateChimera(
     .findMany({ select: { name: true }, orderBy: { id: "asc" } })
     .then((rows) => rows.map((r) => r.name).filter(Boolean));
 
-  const prompt = `The mined DNA (real capability files, real-model truth gate):
+  const prompt = `The mined DNA (real capability files, premium-model gate):
 
 ${digest}
 
 Our product context: ${productContext}
 
-MODEL TRUTH GATE (hard constraint, verified post-birth): only REAL Anthropic models may
-appear in skillMd / workOrders / principles. Opus 4.5 is the strongest model that exists
-today; Sonnet 4.5 and Haiku 4.5 are real; the 4.x family is the real premium tier. Frontier
-waves above 4.5 (e.g. Opus 4.6/4.7/5.5) may be referenced ONLY as pending org:anthropics
-authority confirmation — never as an available model. Fictional or unconfirmed names that
-appear in the source DNA (Fable, Fable 5.1, Sonnet 5.5, claude 5/6/7) must NEVER be routed
-to, recommended, or implied to exist — if the DNA routes work to them, translate that
-routing onto the real registry ladder instead. Field fact: chimera #5 was born (2026-11-13)
-with a Fable-5.1 routing block and had to be surgically patched — this clause exists so
-no chimera is ever born contaminated again.
+MODEL TRUTH GATE (hard constraint, verified post-birth): the premium lineup is the Mythos tier
+(Claude Fable 5.2, Claude Mythos 5.2) above Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5. The 4.x family,
+Opus 5 and Sonnet 5 are real but below the 5.5+ threshold. A model name above this lineup
+(for example Opus 6) may be referenced ONLY as pending org:anthropics authority confirmation —
+never as an available model. If the source DNA routes work to a model that is not in the lineup
+above, translate that routing onto the lineup instead. Field fact: chimera #5 was born
+(2026-11-13) with a routing block to an unconfirmed model and had to be surgically patched — this
+clause exists so no chimera is ever born contaminated again.
 
 Perform the supreme merge. Return JSON exactly in the following structure:
 {
@@ -191,7 +177,7 @@ Return 3-5 work orders, sorted by value to the product.`;
   let truthFeedback = ""; // set when a valid-JSON response carried fiction — the next attempt gets it
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      // The global queue (zai.ts) — concurrency 1 + 429 retry. The chimera is
+      // The global queue (llm.ts) — bounded concurrency + retry with backoff. The chimera is
       // the heaviest AI call in the system (a large DNA digest) — without the queue,
       // any other concurrent call would knock it over with a 429.
       const { content: raw } = await llmComplete(
@@ -204,11 +190,11 @@ Return 3-5 work orders, sorted by value to the product.`;
               (attempt === 0
                 ? ""
                 : truthFeedback
-                  ? `\n\n⚠️ MODEL TRUTH GATE REJECT — your previous response (valid JSON) still contained these fictional/unconfirmed model ids: ${truthFeedback}. Rewrite skillMd/principles/workOrders so every model reference uses the real registry ladder (Opus 4.5 strongest, Sonnet 4.5, Haiku 4.5). Return the full corrected JSON only.`
+                  ? `\n\n⚠️ MODEL TRUTH GATE REJECT — your previous response (valid JSON) still contained these unverified model ids: ${truthFeedback}. Rewrite skillMd/principles/workOrders so every model reference uses the current lineup (Fable 5.2 / Mythos 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). Return the full corrected JSON only.`
                   : "\n\n⚠️ The previous response was not valid JSON — fix double quotes and trailing commas and return JSON only."),
           },
         ],
-        { timeoutMs: TIMEOUT_MS, timeoutLabel: "Chimera generation", timeoutError: GenesisError }
+        { timeoutMs: TIMEOUT_MS, timeoutLabel: "Chimera generation", timeoutError: GenesisError , tier: "deep", effort: "high", maxTokens: 32_000 }
       );
       if (!raw.trim()) {
         lastErr = new GenesisError("The AI returned an empty response");
@@ -232,7 +218,7 @@ Return 3-5 work orders, sorted by value to the product.`;
       const contamination = scanChimeraContamination(wholeOutput, confirmedWaves);
       if (contamination.length > 0 && attempt < 2) {
         truthFeedback = contamination.join(", ");
-        lastErr = new GenesisError(`Model-truth gate: fictional/unconfirmed ids in output (${contamination.join(", ")})`);
+        lastErr = new GenesisError(`Model-truth gate: unverified ids in output (${contamination.join(", ")})`);
         continue; // one feedback retry with the offending ids quoted
       }
       const truthNotice = contamination.length > 0 ? modelTruthNotice(contamination) : undefined;
@@ -262,13 +248,13 @@ Return 3-5 work orders, sorted by value to the product.`;
       return {
         chimeraName: name,
         oneLiner,
-        skillMd: (truthNotice ? front.md + truthNotice : front.md),
+        skillMd: truthNotice ? front.md + truthNotice : front.md,
         principles: strArr(j.principles),
         workOrders: workOrderArr(j.workOrders),
         breakthrough: str(j.breakthrough),
         sources: sources.map((s) => s.repo),
         generatedAt: new Date().toISOString(),
-        truthNotice: truthNotice ? `fictional/unconfirmed ids retained after retry: ${contamination.join(", ")} — retraction appended to skillMd` : undefined,
+        truthNotice: truthNotice ? `unverified ids retained after retry: ${contamination.join(", ")} — retraction appended to skillMd` : undefined,
       };
     } catch (e) {
       if (isTimeoutError(e)) throw e; // timeout — no retry (up to 110 seconds per attempt)

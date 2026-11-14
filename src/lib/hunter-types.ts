@@ -63,7 +63,7 @@ export interface SearchResponse {
   items: ScoredRepo[];
   note?: string;
   querySent: string;
-  /** Number of repos hidden because only ANCIENT (Claude ≤2-era) models were detected in them — no qualifying real-model evidence */
+  /** Number of repos hidden because only 4.x-and-below models were detected in them (the full blocking rule) */
   blockedHidden?: number;
   /** false in code mode — GitHub code search does not support real pagination (100 results per query) */
   canPaginate?: boolean;
@@ -78,7 +78,7 @@ export interface ModelHit {
   sources: string[];
   hits?: number;
   version?: number;
-  /** false = not a real qualifying model (ancient era or fictional string) — weight 0, not counted in the score */
+  /** false = not a qualifying model (below the 5.5+ threshold or unverified) — weight 0, not counted in the score */
   qualifying: boolean;
 }
 
@@ -105,7 +105,7 @@ export interface AnalyzeResponse {
     paidScore: number; // max 30
     tractionScore: number; // max 25
     usageScore: number; // max 15
-    /** true only if at least one REAL registered model was detected */
+    /** true only if at least one qualifying registered model was detected */
     meetsModelThreshold: boolean;
   };
   models: ModelHit[];
