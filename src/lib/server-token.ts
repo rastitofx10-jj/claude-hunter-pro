@@ -37,6 +37,21 @@ export async function resolveToken(req: NextRequest): Promise<string | null> {
   }
 }
 
+/**
+ * Server-side token WITHOUT an incoming request — for processes that run on
+ * their own initiative (the scheduler, the autonomous daily cycle) and have
+ * no client header to honor: env ← DB.
+ */
+export async function resolveServerToken(): Promise<string | null> {
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  try {
+    const row = await db.setting.findUnique({ where: { key: TOKEN_KEY } });
+    return row?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Saves a token to the database (only if structurally valid) */
 export async function persistToken(token: string): Promise<boolean> {
   const t = token.trim();

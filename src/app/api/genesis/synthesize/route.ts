@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { generateChimera } from "@/lib/genesis";
 import { writeDnaSnapshot } from "@/lib/dna-snapshot";
 import { saveDraft } from "@/lib/chimera-draft";
+import { emitChimera } from "@/lib/event-bus";
 import type { MinedArtifact } from "@/lib/dna-miner";
 
 export const dynamic = "force-dynamic";
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
     // ---- WO3 fork: draft mode stages a validated file, never touches the live library ----
     if (draft) {
       const rec = await saveDraft(chimera);
+      emitChimera({ name: chimera.chimeraName, action: "draft", note: `staged as draft ${rec.draftId}` });
       return NextResponse.json({
         staged: true,
         draftId: rec.draftId,
@@ -91,6 +93,7 @@ export async function POST(req: NextRequest) {
     // A chimera was synthesized and saved — snapshot the library in the background.
     // Fire-and-forget: the synthesis response never waits on (or fails from) snapshot I/O.
     void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
+    emitChimera({ name: chimera.chimeraName, action: "published", note: `chimera #${saved.id} born live` });
 
     return NextResponse.json({ id: saved.id, ...chimera });
   } catch (e) {

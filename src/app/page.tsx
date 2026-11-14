@@ -15,6 +15,7 @@ import {
   Dna,
   History as HistoryIcon,
   LayoutDashboard,
+  ChartLine,
   Command as CommandIcon,
   Loader2,
 } from "lucide-react";
@@ -40,7 +41,15 @@ import { TokenBanner } from "@/components/hunter/token-banner";
 import { ThemeToggle } from "@/components/hunter/theme-toggle";
 import { CommandPalette } from "@/components/hunter/command-palette";
 import { Overview } from "@/components/hunter/overview";
+import { InsightsPanel } from "@/components/hunter/insights-panel";
+import { LiveIndicator } from "@/components/hunter/live-indicator";
+import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+import { useHunterEvents } from "@/hooks/use-hunter-events";
 import type { Recipe } from "@/lib/hunter-recipes";
+
+/** The nav model — the 8 store-backed tabs + the local "insights" overlay
+ *  (TabKey is frozen in hunter-store.ts, so the 9th tab lives at page level). */
+type PageTab = TabKey | "insights";
 
 export default function ClaudeHunterPage() {
   const token = useHunterStore((s) => s.token);
@@ -48,10 +57,34 @@ export default function ClaudeHunterPage() {
   const setActiveTab = useHunterStore((s) => s.setActiveTab);
   const qc = useQueryClient();
 
+  // The live nervous system — one SSE stream for the whole tab, shared
+  // through the live-store (connected flag, ticker, feed, invalidations).
+  useHunterEvents();
+
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchBody, setSearchBody] = useState<SearchBody>({ ...SEARCH_DEFAULTS, page: 1 });
   const [results, setResults] = useState<SearchResponse | null>(null);
   const [analyzeTarget, setAnalyzeTarget] = useState<AnalyzeTarget | null>(null);
+  // The insights tab is a page-level overlay over the persisted activeTab (TabKey
+  // is frozen in hunter-store.ts). `covered` remembers which store tab the overlay
+  // sits on — any store-level navigation makes the derived insightsOpen flip off
+  // without an effect, while the overlay itself only closes via goTab.
+  const [insights, setInsights] = useState<{ open: boolean; covered: TabKey }>({ open: false, covered: "home" });
+  const insightsOpen = insights.open && insights.covered === activeTab;
+
+  const goTab = useCallback(
+    (t: PageTab) => {
+      if (t === "insights") {
+        setInsights({ open: true, covered: activeTab });
+        return;
+      }
+      setInsights((s) => (s.open ? { open: false, covered: t } : s));
+      setActiveTab(t);
+    },
+    [activeTab, setActiveTab]
+  );
+
+  const effectiveTab: PageTab = insightsOpen ? "insights" : activeTab;
 
   // analyze requests can arrive from anywhere (palette, recipes, cards, watchlist)
   useEffect(() => {
@@ -139,16 +172,16 @@ export default function ClaudeHunterPage() {
     (r: Recipe) => {
       const body: SearchBody = { ...SEARCH_DEFAULTS, ...r.body, page: 1 };
       setSearchBody(body);
-      setActiveTab("search");
+      goTab("search");
       runSearch(body); // a recipe is an explicit search intent — run immediately, not just fill the form
     },
-    [setActiveTab, runSearch]
+    [goTab, runSearch]
   );
 
   // ---------- navigation model ----------
 
   const navItems: {
-    tab: TabKey;
+    tab: PageTab;
     label: string;
     icon: typeof Search;
     badge?: string;
@@ -162,12 +195,13 @@ export default function ClaudeHunterPage() {
     { tab: "search", label: "Search", icon: Search },
     { tab: "watchlist", label: "Watchlist", icon: Bookmark, badge: (watchData?.items?.length ?? 0) > 0 ? String(watchData?.items?.length ?? 0) : undefined },
     { tab: "history", label: "History", icon: HistoryIcon },
+    { tab: "insights", label: "Insights", icon: ChartLine },
   ];
 
   const renderTab = () => {
-    switch (activeTab) {
+    switch (effectiveTab) {
       case "home":
-        return <Overview onNavigate={setActiveTab} />;
+        return <Overview onNavigate={goTab} />;
       case "search":
         return (
           <div className="space-y-5">
@@ -231,7 +265,7 @@ export default function ClaudeHunterPage() {
         return (
           <HistoryPanel
             onReRun={(body) => {
-              setActiveTab("search");
+              goTab("search");
               const merged = { ...SEARCH_DEFAULTS, ...body, page: 1 };
               setSearchBody(merged);
               runSearch(merged);
@@ -244,6 +278,8 @@ export default function ClaudeHunterPage() {
         return <MissionControlPanel />;
       case "live":
         return <LiveHuntPanel />;
+      case "insights":
+        return <InsightsPanel />;
     }
   };
 
@@ -282,7 +318,8 @@ export default function ClaudeHunterPage() {
             >
               🔒 {THRESHOLD_LABEL} only · 4.x blocked
             </span>
-            <FrontierChip onOpenSweep={() => setActiveTab("sweep")} />
+            <FrontierChip onOpenSweep={() => goTab("sweep")} />
+            <LiveIndicator />
             <RateChip />
             <ThemeToggle />
           </div>
@@ -297,11 +334,11 @@ export default function ClaudeHunterPage() {
         <nav aria-label="Main navigation" className="hidden w-56 shrink-0 py-6 lg:block">
           <ul className="sticky top-20 space-y-1">
             {navItems.map((n) => {
-              const active = activeTab === n.tab;
+              const active = effectiveTab === n.tab;
               return (
                 <li key={n.tab}>
                   <button
-                    onClick={() => setActiveTab(n.tab)}
+                    onClick={() => goTab(n.tab)}
                     aria-current={active ? "page" : undefined}
                     className={`relative flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
                       active
@@ -338,11 +375,11 @@ export default function ClaudeHunterPage() {
           <nav aria-label="Main navigation" className="border-b bg-background/90 backdrop-blur">
             <ul className="flex gap-1 overflow-x-auto px-3 py-2" style={{ scrollbarWidth: "none" }}>
               {navItems.map((n) => {
-                const active = activeTab === n.tab;
+                const active = effectiveTab === n.tab;
                 return (
                   <li key={n.tab} className="shrink-0">
                     <button
-                      onClick={() => setActiveTab(n.tab)}
+                      onClick={() => goTab(n.tab)}
                       className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
                         active
                           ? "bg-orange-600 text-white shadow"
@@ -364,7 +401,7 @@ export default function ClaudeHunterPage() {
         <main className="min-w-0 flex-1 py-6">
           <TokenBanner />
           <motion.div
-            key={activeTab}
+            key={effectiveTab}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
@@ -418,11 +455,15 @@ export default function ClaudeHunterPage() {
         open={paletteOpen}
         setOpen={setPaletteOpen}
         actions={{
-          onNavigate: setActiveTab,
+          onNavigate: goTab,
           onRecipe: applyRecipe,
           onAnalyze: (owner, repo) => setAnalyzeTarget({ owner, repo }),
         }}
       />
+
+      {/* sonner mount — celebratory live-wire toasts (field genes, published chimeras);
+          bottom-left keeps it clear of the radix toast stack at bottom-right */}
+      <SonnerToaster position="bottom-left" closeButton />
     </div>
   );
 }

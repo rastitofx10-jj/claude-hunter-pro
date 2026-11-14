@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { distillFieldReport, MissionError } from "@/lib/mission-compiler";
 import { isTimeoutError, isPrismaNotFound } from "@/lib/ai-json";
 import { advanceStatus, OUTCOME_STATUS, TERMINAL_STATUSES } from "@/lib/mission-status";
+import { emitDnaBorn, emitMission } from "@/lib/event-bus";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -234,6 +235,23 @@ export async function POST(req: NextRequest) {
       }
     }
     if (lastErrFinal) throw lastErrFinal;
+
+    // v0.4.0 — the evolutionary loop's live narration: a field gene was born
+    // (or its birth failed) + the mission's final status. The UI activity feed
+    // and the Insights tab update through the event bus instead of polling.
+    if (distilled.newDna && savedBornDnaId) {
+      emitDnaBorn({
+        name: sanitizeBornMeta(distilled.newDna.name, 60) || "field-lesson",
+        source: `field:mission-${missionId}`,
+        origin: "field",
+        note: `born from a ${outcome} field report`,
+      });
+    }
+    emitMission({
+      missionId,
+      status: savedFinalStatus,
+      note: `field report #${savedHistoryCount} distilled (${distillMethod})`,
+    });
 
     return NextResponse.json({
       ok: true,

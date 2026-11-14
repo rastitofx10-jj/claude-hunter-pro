@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteDraft, listDrafts, publishDraft } from "@/lib/chimera-draft";
+import { emitChimera } from "@/lib/event-bus";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       return NextResponse.json({ error: res.error, validation: res.validation }, { status: 409 });
     }
+    emitChimera({ name: draftId, action: "published", note: `draft ${draftId} published as chimera #${res.id}` });
     return NextResponse.json({ ok: true, id: res.id, published: draftId, validation: res.validation, draftCleanupFailed: res.draftCleanupFailed ?? false });
   } catch (e) {
     console.error("[genesis/drafts publish]", e);

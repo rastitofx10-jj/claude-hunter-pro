@@ -190,7 +190,7 @@ function toDnaRow(r: Record<string, unknown>, content: string | null): DnaRow {
  * for the same goal. Both call sites now go through this helper.
  *
  * Design (two phases, preserving the perf characteristic of both predecessors):
- * 1. Metadata-only pre-rank over the NEWEST 500 artifacts (id DESC — freshly mined/born genes get
+ * 1. Metadata-only pre-rank over the NEWEST 900 artifacts (id DESC — freshly mined/born genes get
  *    their chance even in a large library). Content never leaves the DB at this stage; length(content)
  *    is selected as contentLen because the ranker's dedup/richness/filler rules read it (rankDnaForGoal
  *    needs exactly: id, sourceRepo, path, kind, name, description, content, contentLen). The schema
@@ -206,10 +206,13 @@ function toDnaRow(r: Record<string, unknown>, content: string | null): DnaRow {
  * error contract for that case.
  */
 export async function selectDnaForGoal(goal: string, cap = 8): Promise<ScoredDna[]> {
-  // Phase 1 — cheap metadata-only pass over the newest 500. Parameter-free SQL, passed as a
-  // $queryRaw tagged template (the safe variant — values can only travel as parameters).
+  // Phase 1 — cheap metadata-only pass over the newest 900 (was 500 — in a 1,750-gene
+  // library 1,250 genes were invisible to mission retrieval by design; the metadata-only
+  // pass is cheap enough that the ceiling can widen without touching the perf profile).
+  // Parameter-free SQL, passed as a $queryRaw tagged template (the safe variant — values
+  // can only travel as parameters).
   const metaRows = await db.$queryRaw<Record<string, unknown>[]>`SELECT id, sourceRepo, path, kind, name, description, length(content) AS contentLen
-     FROM DnaArtifact ORDER BY id DESC LIMIT 500`;
+     FROM DnaArtifact ORDER BY id DESC LIMIT 900`;
   if (metaRows.length === 0) return [];
   const preRanked = rankDnaForGoal(
     goal,

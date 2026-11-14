@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/hooks/use-toast";
 import { useHunterStore } from "@/lib/hunter-store";
+import { useLiveStore } from "@/lib/live-store";
 import { apiFetch } from "@/lib/api-client";
 
 // ---------- types ----------
@@ -145,13 +146,16 @@ export function SweepPanel() {
   const token = useHunterStore((s) => s.token);
   const qc = useQueryClient();
   const logRef = useRef<HTMLDivElement>(null);
+  // SSE connected → sweep events invalidate the queries instantly, so the
+  // polling intervals below relax (4s→12s list, 2.5s→8s detail) while live.
+  const liveConnected = useLiveStore((s) => s.connected);
 
   const listQuery = useQuery({
     queryKey: ["sweep-list"],
     queryFn: () => apiFetch<{ items: SweepListItem[]; active: SweepListItem | null }>("/api/sweep", token),
     // Refresh the list while a run is active — the history (including "in flight %")
     // used to update only on launch or window focus, going minutes-stale mid-run.
-    refetchInterval: (q) => (q.state.data?.active ? 4000 : false),
+    refetchInterval: (q) => (q.state.data?.active ? (liveConnected ? 12000 : 4000) : false),
   });
 
   const activeId = listQuery.data?.active?.id ?? null;
@@ -162,7 +166,12 @@ export function SweepPanel() {
     queryKey: ["sweep-detail", selectedId],
     queryFn: () => apiFetch<SweepDetail>(`/api/sweep/${selectedId}`, token),
     enabled: selectedId !== null,
-    refetchInterval: (q) => (q.state.data?.status === "running" || q.state.data?.audit?.status === "running" ? 2500 : false),
+    refetchInterval: (q) =>
+      q.state.data?.status === "running" || q.state.data?.audit?.status === "running"
+        ? liveConnected
+          ? 8000
+          : 2500
+        : false,
   });
 
   // Auto-scroll the query log

@@ -59,6 +59,7 @@ import { llmCallSnapshot } from "./llm";
 import { writeDnaSnapshot } from "./dna-snapshot";
 import { runNextAutopilotPhase, parseAutopilotState, AutopilotError } from "./autopilot";
 import { advanceStatus, OUTCOME_STATUS } from "./mission-status";
+import { emitHunt, emitReaped } from "./event-bus";
 
 export const LIVE_HUNT_STAGE_ORDER = [
   "hunt",
@@ -1053,6 +1054,29 @@ function chunk<T>(arr: T[], size: number): T[][] {
  */
 let startingHunt = false;
 
+/**
+ * Standalone stale-hunt reaper — exported so the scheduler can run it on a
+ * timer instead of waiting for the next user action. A run not updated for
+ * 15 minutes is dead (crash/restart); before this, a crashed hunt sat
+ * "running" forever and blocked new hunts until someone opened the panel.
+ */
+export async function reapStaleHunts(): Promise<number> {
+  try {
+    const staleCutoff = new Date(Date.now() - 15 * 60_000);
+    const dead = await db.liveHunt.updateMany({
+      where: { status: "running", updatedAt: { lt: staleCutoff } },
+      data: { status: "failed", error: "The run was interrupted (the server was restarted) — marked automatically" },
+    });
+    if (dead.count > 0) {
+      emitReaped({ target: "hunt", id: 0, note: `${dead.count} stale hunt run(s) reaped` });
+    }
+    return dead.count;
+  } catch (e) {
+    console.error("[live-hunt] stale reaper failed", e);
+    return 0;
+  }
+}
+
 export async function startLiveHunt(): Promise<{ id: number }> {
   if (startingHunt) {
     throw new LiveHuntError("A hunt start is already in progress — one moment", 409);
@@ -1060,11 +1084,7 @@ export async function startLiveHunt(): Promise<{ id: number }> {
   startingHunt = true;
   try {
     // Only one active run — a run not updated for 15 minutes is considered dead
-    const staleCutoff = new Date(Date.now() - 15 * 60_000);
-    await db.liveHunt.updateMany({
-      where: { status: "running", updatedAt: { lt: staleCutoff } },
-      data: { status: "failed", error: "The run was interrupted (the server was restarted) — marked automatically" },
-    });
+    await reapStaleHunts();
     // deterministic newest-first (round 8: no orderBy made the 409 winner arbitrary
     // if two rows were ever running simultaneously)
     const active = await db.liveHunt.findFirst({ where: { status: "running" }, select: { id: true }, orderBy: { id: "desc" } });
@@ -1079,6 +1099,7 @@ export async function startLiveHunt(): Promise<{ id: number }> {
     const hunt = await db.liveHunt.create({
       data: { status: "running", stageKey: "hunt", dnaBefore, generation, seededFrom },
     });
+    emitHunt({ huntId: hunt.id, stage: "hunt", status: "running", note: `hunt generation ${generation} started` });
     return { id: hunt.id };
   } finally {
     startingHunt = false;
@@ -1274,6 +1295,13 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
     });
 
     const state = serializeLiveHunt(updated);
+    // v0.4.0 — one live event per stage transition (or execute re-entry)
+    emitHunt({
+      huntId: id,
+      stage: isFinished ? "done" : nextStageKey,
+      status: isFinished ? "done" : "running",
+      note: rec.summary.slice(0, 140),
+    });
     if (isFinished) {
       // Campaign verdict — growth proven in numbers
       state.done = true;
@@ -1290,6 +1318,7 @@ async function runNextLocked(id: number): Promise<LiveHuntState> {
       data: { status: "failed", error: msg.slice(0, 500) },
     });
     console.error(`[live-hunt] stage ${stageKey} failed for hunt #${id}:`, e);
+    emitHunt({ huntId: id, stage: stageKey, status: "failed", note: msg.slice(0, 140) });
     // An AutopilotError with 4xx = a built-in problem — returned as-is; otherwise a server error
     const status = e instanceof LiveHuntError ? e.status : e instanceof AutopilotError ? e.status : 500;
     const err = new LiveHuntError(msg, status || 500);

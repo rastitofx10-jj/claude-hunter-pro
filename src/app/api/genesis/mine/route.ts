@@ -4,6 +4,7 @@ import { GhError } from "@/lib/github";
 import { mineDna } from "@/lib/dna-miner";
 import { gateArtifacts } from "@/lib/quality-gate";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
+import { emitDnaBorn } from "@/lib/event-bus";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,14 @@ export async function POST(req: NextRequest) {
     }
     if (rejected.length > 0) {
       warnings.push(`${rejected.length} low-quality gene(s) rejected at ingestion (stub/structure/placeholder gate) — only verified capability files enter the library`);
+    }
+    if (kept.length > 0) {
+      emitDnaBorn({
+        name: `${fullName} +${kept.length}`,
+        source: fullName,
+        origin: "mined",
+        note: `manual mine — ${kept.length} gene(s) entered the library`,
+      });
     }
     return NextResponse.json({
       ...pkg,

@@ -3,6 +3,7 @@ import { harvest } from "@/lib/harvester";
 import { GhError } from "@/lib/github";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 import { writeDnaSnapshot } from "@/lib/dna-snapshot";
+import { emitDnaBorn } from "@/lib/event-bus";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -30,6 +31,12 @@ export async function POST(req: NextRequest) {
   try {
     const token = await resolveToken(req);
     const result = await harvest(token, maxRepos);
+    // v0.4.0 — one live event per productive repo (the feed shows the library exploding)
+    for (const rep of result.reposMined) {
+      if (rep.newCount > 0) {
+        emitDnaBorn({ name: `${rep.repo} +${rep.newCount}`, source: rep.repo, origin: "mined" });
+      }
+    }
     // The harvest just upserted artifacts into the library — snapshot it automatically in the
     // background (the manual script required a human to remember). Fire-and-forget: the response
     // never waits on (or fails from) snapshot I/O.
