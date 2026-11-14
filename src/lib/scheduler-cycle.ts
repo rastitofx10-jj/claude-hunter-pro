@@ -71,17 +71,22 @@ export async function writeAutonomyConfig(cfg: AutonomyConfig): Promise<void> {
  * still respects the in-process lock. Returns true if a cycle actually ran.
  */
 export async function runDailyCycle(force: boolean): Promise<boolean> {
+  // round 11: the lock is taken BEFORE the first await — same synchronous
+  // discipline as every other lock in this codebase (startingSweep,
+  // startingHunt, publishingDrafts). The old order (check → await config →
+  // set flag) left a DB-round-trip window where a scheduler tick and a manual
+  // POST /api/settings/autonomy {trigger:true} BOTH passed the flag check and
+  // ran the FULL cycle twice — double harvest = double GitHub quota burn.
   if (cycleRunning) return false;
-
-  if (!force) {
-    const cfg = await readAutonomyConfig();
-    if (cfg.mode !== "daily") return false;
-    const last = cfg.lastCycleAt ? Date.parse(cfg.lastCycleAt) : Number.NaN;
-    if (Number.isFinite(last) && Date.now() - last < DAILY_MIN_GAP_MS) return false;
-  }
-
   cycleRunning = true;
   try {
+    if (!force) {
+      const cfg = await readAutonomyConfig();
+      if (cfg.mode !== "daily") return false;
+      const last = cfg.lastCycleAt ? Date.parse(cfg.lastCycleAt) : Number.NaN;
+      if (Number.isFinite(last) && Date.now() - last < DAILY_MIN_GAP_MS) return false;
+    }
+
     const startedAt = new Date().toISOString();
     // record the fire time immediately — a 6-minute cycle ticking every 10s
     // must not double-fire (in-process lock covers same-process races; the

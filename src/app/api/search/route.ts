@@ -99,6 +99,37 @@ export async function POST(req: NextRequest) {
   if (body.sort !== undefined && typeof body.sort !== "string") {
     return NextResponse.json({ error: "sort must be a string" }, { status: 400 });
   }
+  // round 11: the numeric fields had NO runtime guard — a JSON body like
+  // {"page": {}} cast `as SearchBody` sailed through as NaN and produced
+  // per_page=NaN / page=NaN URLs (GitHub 422 → generic 400 with no clue).
+  // Same discipline as the string guards above: narrow first, 400 otherwise.
+  if (
+    body.perPage !== undefined && body.perPage !== null &&
+    (typeof body.perPage !== "number" || !Number.isFinite(body.perPage))
+  ) {
+    return NextResponse.json({ error: "perPage must be a number" }, { status: 400 });
+  }
+  if (
+    body.page !== undefined && body.page !== null &&
+    (typeof body.page !== "number" || !Number.isFinite(body.page))
+  ) {
+    return NextResponse.json({ error: "page must be a number" }, { status: 400 });
+  }
+  if (
+    body.minStars !== undefined && body.minStars !== null &&
+    (typeof body.minStars !== "number" || !Number.isFinite(body.minStars))
+  ) {
+    return NextResponse.json({ error: "minStars must be a number" }, { status: 400 });
+  }
+  if (
+    body.pushedWithinDays !== undefined && body.pushedWithinDays !== null &&
+    (typeof body.pushedWithinDays !== "number" || !Number.isFinite(body.pushedWithinDays))
+  ) {
+    return NextResponse.json({ error: "pushedWithinDays must be a number" }, { status: 400 });
+  }
+  if (body.ownerType !== undefined && typeof body.ownerType !== "string") {
+    return NextResponse.json({ error: "ownerType must be a string" }, { status: 400 });
+  }
 
   const mode = body.mode === "code" ? "code" : "repos";
   const perPage = Math.min(Math.max(body.perPage ?? 24, 6), 60);

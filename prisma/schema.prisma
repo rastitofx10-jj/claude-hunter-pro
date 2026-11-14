@@ -62,12 +62,21 @@ model DnaArtifact {
   // Without this field there is no lawful commercial distribution of derivatives.
   license     String?
   createdAt   DateTime @default(now())
+  // round 11 (2026-11-14): in-place rewrites (harvest re-mine, field-lesson
+  // upsert, live-hunt grow retry, manual mine) change content WITHOUT moving
+  // createdAt — the snapshot digest (count+maxId+maxCreatedAt) was blind to
+  // them and disaster recovery silently restored STALE gene content.
+  // @updatedAt moves on every in-place write; the digest folds it in.
+  // @default(now()) makes the column addable to a table with existing rows
+  // (SQLite ALTER) without a rewrite-of-history.
+  updatedAt   DateTime @updatedAt @default(now())
 
   @@unique([sourceRepo, path])
   @@index([sourceRepo])
   @@index([kind])
   // Stats/growth queries order artifacts by createdAt — previously a full scan + sort
   @@index([createdAt])
+  @@index([updatedAt])
 }
 
 // Chimera — a merged AI creation synthesized from several elite repos + work orders for our product

@@ -29,8 +29,17 @@
 
 export const MIN_QUALIFYING_VERSION = 5.5; // Opus / Sonnet / Haiku at 5.5+; Mythos-tier families qualify from v5
 export const THRESHOLD_LABEL = "5.5+";
+
+// round 11 — registry vintage, surfaced instead of implied. This file is a
+// MANUALLY CURATED POLICY SNAPSHOT locked in code, not a live-verified
+// registry: it has no feed from Anthropic and its own header documents that
+// an earlier edit of it was wrong for months and steered the whole system
+// backwards. Consumers (and the UI) may present the gate as a dated policy
+// decision — never as "verified against Anthropic today".
+export const REGISTRY_AS_OF = "2026-11-13";
+
 export const THRESHOLD_RULE_TEXT =
-  "Only premium Claude models count: Mythos-tier models (Fable, Mythos) and Opus / Sonnet / Haiku 5.5 and above. The 4.x family, Opus 5 / Sonnet 5 and everything older are blocked. Versions above the known lineup stay unverified until Anthropic's own repos confirm them.";
+  "Only premium Claude models count: Mythos-tier models (Fable, Mythos) and Opus / Sonnet / Haiku 5.5 and above. The 4.x family, Opus 5 / Sonnet 5 and everything older are blocked. Versions above the known lineup stay unverified until Anthropic's own repos confirm them. (Registry is a manually-curated policy locked in code, as of 2026-11-13 — not a live Anthropic feed.)";
 
 export type ModelFamily = "opus" | "sonnet" | "haiku" | "fable" | "mythos" | "generic";
 

@@ -9,6 +9,15 @@ import type { MinedArtifact } from "@/lib/dna-miner";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
+// round 11: the legacy publish-now path had NO in-flight guard — a double-click
+// (or two tabs) ran two full generateChimera LLM syntheses in parallel (~30k+ tokens
+// each) and both created a live row: duplicate chimeras, the exact duplication
+// publishDraft's publishingDrafts lock + clash re-check was built to prevent.
+// The lock is taken synchronously BEFORE the first await (house discipline), and
+// the name clash is re-checked right before the create — the twin defense the
+// draft path already uses.
+let synthesizeInFlight = false;
+
 /**
  * Chimera creation: AI fusion of DNA from several elite repos + work orders.
  * WO3 (chimera #3 verified-mutation-flywheel): body flag `draft: true` stages the
@@ -17,6 +26,21 @@ export const maxDuration = 120;
  * behavior so the existing UI flow is untouched.
  */
 export async function POST(req: NextRequest) {
+  if (synthesizeInFlight) {
+    return NextResponse.json(
+      { error: "A synthesis is already in flight — wait for it to finish (the LLM work is expensive)" },
+      { status: 409 },
+    );
+  }
+  synthesizeInFlight = true;
+  try {
+    return await synthesize(req);
+  } finally {
+    synthesizeInFlight = false;
+  }
+}
+
+async function synthesize(req: NextRequest): Promise<NextResponse> {
   let repos: string[] = [];
   let productContext = "";
   let draft = false;
@@ -75,6 +99,18 @@ export async function POST(req: NextRequest) {
         validation: rec.validation,
         ...chimera,
       });
+    }
+
+    // re-check name uniqueness right before the create — generateChimera suffixes
+    // against names it SAW, but a parallel creation (another process, a draft that
+    // published mid-synthesis) can have taken the exact name since. Same defense
+    // publishDraft uses; a twin click would otherwise create two live rows.
+    const clash = await db.chimera.findFirst({ where: { name: chimera.chimeraName } });
+    if (clash) {
+      return NextResponse.json(
+        { error: `Chimera name "${chimera.chimeraName}" collides with chimera #${clash.id} — synthesize again (the name is generated, a retry rolls a fresh one)` },
+        { status: 409 },
+      );
     }
 
     const saved = await db.chimera.create({

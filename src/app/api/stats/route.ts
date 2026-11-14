@@ -6,7 +6,7 @@ import { safeJsonParse } from "@/lib/ai-json";
 // Intelligence analytics — one read-only route that turns the raw
 // operational DB into the numbers the Insights tab renders:
 //
-//   dnaGrowth     — genes born per day (last 30 days) + running total
+//   dnaGrowth     — genes born per day (last 30 days) + the REAL library size per day
 //   library        — total / field / mined + kind breakdown
 //   topRepos       — the richest DNA sources
 //   missions       — status funnel
@@ -34,10 +34,21 @@ function dayKey(d: Date): string {
 
 export async function GET() {
   const now = Date.now();
+  // round 11: the growth window is computed BEFORE the parallel read round so the
+  // window query itself can join it (the old code loaded EVERY gene row — name,
+  // repo, kind, createdAt — on every panel open; a 20k-gene library would have
+  // shipped ~1MB of rows per request just to count 30 days of births).
+  const since = now - 30 * 24 * 3600_000;
   try {
-    const [dnaRows, missionRows, huntRows, sweepRows, chimeraCount, llmUsageRow, ledgerRow] =
+    const [totalGenes, fieldGenes, windowRows, kindGroups, repoGroups, latestRows, missionRows, huntRows, sweepRows, chimeraCount, llmUsageRow, ledgerRow] =
       await Promise.all([
-        db.dnaArtifact.findMany({ select: { sourceRepo: true, kind: true, createdAt: true, name: true } }),
+        db.dnaArtifact.count(),
+        db.dnaArtifact.count({ where: { sourceRepo: { startsWith: "field:" } } }),
+        // only rows born INSIDE the 30-day window — the growth chart's entire need
+        db.dnaArtifact.findMany({ where: { createdAt: { gte: new Date(since) } }, select: { createdAt: true } }),
+        db.dnaArtifact.groupBy({ by: ["kind"], _count: { _all: true } }),
+        db.dnaArtifact.groupBy({ by: ["sourceRepo"], _count: { _all: true } }),
+        db.dnaArtifact.findMany({ orderBy: { createdAt: "desc" }, take: 8, select: { name: true, sourceRepo: true, kind: true, createdAt: true } }),
         db.mission.findMany({ select: { status: true, createdAt: true } }),
         db.liveHunt.findMany({ select: { status: true, llmCalls: true, elapsedMs: true, dnaBefore: true, dnaAfter: true, createdAt: true } }),
         db.sweepRun.findMany({ select: { status: true, stats: true, createdAt: true }, orderBy: { id: "desc" }, take: 50 }),
@@ -46,37 +57,36 @@ export async function GET() {
         db.setting.findUnique({ where: { key: FRONTIER_LEDGER_KEY } }),
       ]);
 
-    // ---- DNA growth (last 30 days) ----
-    const since = now - 30 * 24 * 3600_000;
+    // ---- DNA growth (last 30 days) + the REAL library size per day ----
     const perDay = new Map<string, number>();
-    for (const row of dnaRows) {
-      const t = row.createdAt.getTime();
-      if (t < since) continue;
+    for (const row of windowRows) {
       const k = dayKey(row.createdAt);
       perDay.set(k, (perDay.get(k) ?? 0) + 1);
     }
     const growthDays: { day: string; born: number; total: number }[] = [];
-    let runningTotal = 0;
     for (let i = 29; i >= 0; i--) {
       const d = dayKey(new Date(now - i * 24 * 3600_000));
-      const born = perDay.get(d) ?? 0;
-      runningTotal += born;
-      growthDays.push({ day: d.slice(5), born, total: runningTotal });
+      growthDays.push({ day: d.slice(5), born: perDay.get(d) ?? 0, total: 0 });
+    }
+    // round 11: the Insights chart labels this line "library total" — but it used
+    // to plot a rolling 30-day cumulative SUM starting at 0 regardless of how
+    // large the library actually was (a 1794-gene library drew a line rising from
+    // ~zero — a silent misrepresentation). Now each day's point IS the library
+    // size on that day: today's real total minus everything born after it.
+    let bornAfter = 0;
+    for (let i = growthDays.length - 1; i >= 0; i--) {
+      growthDays[i].total = totalGenes - bornAfter;
+      bornAfter += growthDays[i].born;
     }
 
     // ---- library composition ----
-    const fieldRepos = dnaRows.filter((r) => r.sourceRepo.startsWith("field:"));
     const kinds = new Map<string, number>();
-    for (const r of dnaRows) kinds.set(r.kind, (kinds.get(r.kind) ?? 0) + 1);
+    for (const g of kindGroups) kinds.set(g.kind, g._count._all);
 
     // ---- top sources (non-field, by gene count) ----
-    const repoCounts = new Map<string, number>();
-    for (const r of dnaRows) {
-      if (r.sourceRepo.startsWith("field:")) continue;
-      repoCounts.set(r.sourceRepo, (repoCounts.get(r.sourceRepo) ?? 0) + 1);
-    }
-    const topRepos = [...repoCounts.entries()]
-      .map(([repo, genes]) => ({ repo, genes }))
+    const topRepos = repoGroups
+      .filter((g) => !g.sourceRepo.startsWith("field:"))
+      .map((g) => ({ repo: g.sourceRepo, genes: g._count._all }))
       .sort((a, b) => b.genes - a.genes)
       .slice(0, 10);
 
@@ -160,17 +170,13 @@ export async function GET() {
     return NextResponse.json({
       generatedAt: new Date().toISOString(),
       dna: {
-        total: dnaRows.length,
-        field: fieldRepos.length,
-        mined: dnaRows.length - fieldRepos.length,
+        total: totalGenes,
+        field: fieldGenes,
+        mined: totalGenes - fieldGenes,
         kinds: [...kinds.entries()].map(([kind, count]) => ({ kind, count })),
         growthDays,
         topRepos,
-        latest: dnaRows
-          .slice()
-          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-          .slice(0, 8)
-          .map((r) => ({ name: r.name, repo: r.sourceRepo, kind: r.kind, at: r.createdAt.toISOString() })),
+        latest: latestRows.map((r) => ({ name: r.name, repo: r.sourceRepo, kind: r.kind, at: r.createdAt.toISOString() })),
       },
       missions: {
         total: missionRows.length,

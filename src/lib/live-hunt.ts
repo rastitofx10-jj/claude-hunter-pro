@@ -133,6 +133,10 @@ interface SwarmStageState {
   triage: TriageVerdict[];
   profiles: SharpProfile[];
   autoSaved: number;
+  // round 11: a re-save of an already-archived elite repo is NOT a new save.
+  // "N auto-saved" used to count stars/score refreshes of existing rows as
+  // fresh archives — the evidence over-reported by exactly the refresh count.
+  autoRefreshed: number;
   autoSavedSkipped: number;
   llmCalls: number;
   llmFailures: string[];
@@ -448,7 +452,7 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
       summary: "No candidates from the previous stage — the swarm skips",
       // Conform to the full SwarmStageState shape — before, autoSaved/autoSavedSkipped were missing
       // and readSwarmState read them as undefined in the skip case (it only worked by luck, thanks to ??)
-      evidence: { flat: [], triage: [], profiles: [], elite: [], watch: [], autoSaved: 0, autoSavedSkipped: 0, llmCalls: 0, llmFailures: [] },
+      evidence: { flat: [], triage: [], profiles: [], elite: [], watch: [], autoSaved: 0, autoRefreshed: 0, autoSavedSkipped: 0, llmCalls: 0, llmFailures: [] },
     };
   }
 
@@ -457,10 +461,15 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
 
   // Triage — a single batch of 12 (HTTP time limit preserved)
   const batch = flat.slice(0, 12);
-  // Count per call, not per content: a model that returned a valid [] — the call happened and it cost.
-  // (Before: a valid-empty answer wasn't counted and the counter in the verdict under-reported)
-  const triage = (await llmTry(() => triageBatch(batch), failures, "triage")) ?? [];
-  calls++; // llmTry returns null only on failure; ?? [] represents success even when empty
+  // round 11: the counter counts REAL calls only. The old `?? []; calls++` shape
+  // counted a FAILED call as successful — llmTry returns null exactly on
+  // failure, the fallback object is truthy, and the evidence lied upward.
+  // A valid-empty answer from a REAL call still counts (the call happened and
+  // it cost) — that's what the null-check preserves and the `calls++`-after-
+  // `??`-fallback pattern destroyed.
+  const triageResult = await llmTry(() => triageBatch(batch), failures, "triage");
+  const triage = triageResult ?? [];
+  if (triageResult !== null) calls++; // a REAL call (even a valid-empty one) — never a failed one
 
   const eliteNames = new Set(triage.filter((t) => t.verdict === "elite").map((t) => t.fullName));
   const watchNames = new Set(triage.filter((t) => t.verdict === "watch").map((t) => t.fullName));
@@ -479,7 +488,8 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
 
   // Auto-archiving: live elite enters the saved list with an explicit marker — intel preserved across generations
   // One up-front query instead of findUnique per elite — before, up to 12×2 sequential DB rounds (N+1)
-  let autoSaved = 0;
+  let autoSaved = 0; // CREATES only — a refresh of an existing row never inflates this
+  let autoRefreshed = 0;
   let autoSavedSkipped = 0;
   const triageMap = new Map(triage.map((t) => [t.fullName, t]));
   const eliteFullNames = elite.map((e) => e.fullName);
@@ -514,7 +524,8 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
             where: { fullName: e.fullName },
             data: { stars: e.stars ?? existing.stars, score: Math.max(existing.score, Math.min(100, Math.round(e.score ?? 0))) },
           });
-          autoSaved++;
+          // a refresh of a row we archived on an earlier hunt — counted apart from creates
+          autoRefreshed++;
         } else {
           autoSavedSkipped++;
         }
@@ -525,10 +536,12 @@ async function stageSwarm(ctx: HuntCtx): Promise<{ summary: string; evidence: Re
   }
 
   const summary = `${triage.length} triaged · ${elite.length} elite · ${watch.length} watch · ${profiles.length} profiles · ${autoSaved} auto-saved${
+    autoRefreshed ? ` · ${autoRefreshed} refreshed` : ""
+  }${
     failures.length ? ` · ${failures.length} failures` : ""
   }`;
 
-  const state: SwarmStageState = { flat, elite, watch, triage, profiles, autoSaved, autoSavedSkipped, llmCalls: calls, llmFailures: failures };
+  const state: SwarmStageState = { flat, elite, watch, triage, profiles, autoSaved, autoRefreshed, autoSavedSkipped, llmCalls: calls, llmFailures: failures };
   return { summary, evidence: state as unknown as Record<string, unknown> };
 }
 
@@ -542,20 +555,26 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
   let calls = 0;
   const safePatterns: MarketPatterns = { patterns: [], stackConsensus: [], marketShift: "" };
 
-  const patterns =
-    (await llmTry(() => patternSynthesis(swarm.elite, swarm.watch), failures, "patterns")) ?? safePatterns;
-  if (patterns !== safePatterns) calls++;
+  const patternsResult =
+    await llmTry(() => patternSynthesis(swarm.elite, swarm.watch), failures, "patterns");
+  const patterns = patternsResult ?? safePatterns;
+  if (patternsResult !== null) calls++;
 
+  // round 11: same null-vs-fallback discipline as triage above — a FAILED call
+  // must never increment the evidence counter. The old `?? {…}; if (x) calls++`
+  // shape always found the fallback truthy and counted the failure as work.
+  const attackResult =
+    await llmTry(() => attackPlan(swarm.elite, swarm.profiles, patterns), failures, "attack plan");
   const attack =
-    (await llmTry(() => attackPlan(swarm.elite, swarm.profiles, patterns), failures, "attack plan")) ?? {
+    attackResult ?? {
       topMoves: [],
       differentiators: [],
       immediateActions: [],
     };
-  if (attack) calls++; // A successful call counts even if the model returned a valid-empty plan
+  if (attackResult !== null) calls++; // a REAL call — even a valid-empty plan
 
-  const queryEvo =
-    (await llmTry(
+  const queryEvoResult =
+    await llmTry(
       () =>
         queryEvolution(
           ((readHuntEvidence(ctx)?.queries as { q?: unknown; count?: unknown; error?: unknown }[] | undefined) ?? []).map((r) => ({
@@ -567,11 +586,12 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
         ),
       failures,
       "query evolution"
-    )) ?? { nextQueries: [], blindSpots: [], rationale: "" };
-  if (queryEvo) calls++;
+    );
+  const queryEvo = queryEvoResult ?? { nextQueries: [], blindSpots: [], rationale: "" };
+  if (queryEvoResult !== null) calls++;
 
-  const brief =
-    (await llmTry(
+  const briefResult =
+    await llmTry(
       () =>
         execBrief({
           statsLine: (readHuntEvidence(ctx)?.statsLine as string | undefined) ?? "",
@@ -582,8 +602,10 @@ async function stageAttack(ctx: HuntCtx): Promise<{ summary: string; evidence: R
         }),
       failures,
       "briefing"
-    )) ?? { headline: "No briefing received", keyIntel: [], decisiveMove: "", riskMap: failures.slice(0, 3) };
-  if (brief) calls++;
+    );
+  const brief =
+    briefResult ?? { headline: "No briefing received", keyIntel: [], decisiveMove: "", riskMap: failures.slice(0, 3) };
+  if (briefResult !== null) calls++; // a REAL call — even a "no briefing" valid answer
 
   const summary = `${patterns.patterns.length} patterns · ${attack.topMoves.length} moves · ${queryEvo.nextQueries.length} next queries${
     failures.length ? ` · ${failures.length} LLM failures` : ""

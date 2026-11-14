@@ -3,20 +3,15 @@ import { db } from "@/lib/db";
 import { buildMissionBundle, type CompiledMission } from "@/lib/mission-compiler";
 import { isPrismaNotFound, safeJsonParse } from "@/lib/ai-json";
 import { parseAutopilotState } from "@/lib/autopilot";
+import { ALLOWED_TRANSITIONS } from "@/lib/mission-status";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Valid state transitions in the mission state machine — you can move forward, not backward
- * (previously: PATCH accepted any transition, including done → compiled).
- */
-const ALLOWED_TRANSITIONS: Record<string, Set<string>> = {
-  compiled: new Set(["in_progress", "partial", "done", "failed"]),
-  in_progress: new Set(["partial", "done", "failed"]),
-  partial: new Set(["in_progress", "done", "failed"]),
-  failed: new Set(["in_progress", "partial", "done"]),
-  done: new Set([]), // final — no going back
-};
+// The transition table itself lives in mission-status.ts (round 11) — the
+// single status-law source. It is the HUMAN override table: unlike the
+// machine law (advanceStatus), a human MAY resume a failed/partial mission
+// (failed→in_progress, partial→in_progress) — an explicit decision is not
+// an automated accident. See mission-status.ts for the documented divergence.
 
 const VALID_STATUSES = new Set(Object.keys(ALLOWED_TRANSITIONS));
 

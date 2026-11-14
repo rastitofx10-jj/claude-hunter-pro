@@ -52,7 +52,11 @@ export function parseAutopilotState(raw: string | null): AutopilotState {
       phaseIndex: s.phaseIndex,
       title: typeof s.title === "string" ? s.title : `Phase ${s.phaseIndex + 1}`,
       deliverable: typeof s.deliverable === "string" ? s.deliverable : "",
-      executedAt: typeof s.executedAt === "string" ? s.executedAt : new Date(0).toISOString(),
+      // round 11: a missing executedAt on a malformed historical row is an honest
+      // EMPTY string — the UI already tolerates "" (its own fallback) and never
+      // renders this field. A 1970-01-01 placeholder was a fabricated timestamp
+      // for a phase whose execution time is simply unknown.
+      executedAt: typeof s.executedAt === "string" ? s.executedAt : "",
     }));
   const failures = (Array.isArray(parsed.failures) ? parsed.failures : [])
     .map((f): AutopilotFailure | null => {
@@ -119,6 +123,19 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   // the very fiction the truth migration purged. Closed outright.
   if (TERMINAL_STATUSES.includes(mission.status)) {
     throw new AutopilotError(`Mission is ${mission.status} (fiction-purged) — autopilot is closed for it`, 409);
+  }
+  // round 11: a mission a field report marked FAILED is closed for the machine too.
+  // The old rank law had failed == in_progress, so the next pump wrote
+  // "in_progress" back over it — a failed mission resurrecting itself silently,
+  // forever. A human who disagrees resumes it DELIBERATELY via PATCH
+  // (failed → in_progress is in ALLOWED_TRANSITIONS on purpose) — and only then
+  // does autopilot run again. Executing phases on a mission declared failed is
+  // spending LLM quota on work the evidence already condemned.
+  if (mission.status === "failed") {
+    throw new AutopilotError(
+      "Mission is marked failed — a field report condemned it. Resume it deliberately (PATCH status → in_progress) before running more phases",
+      409,
+    );
   }
 
   const planRaw = safeJsonParse<{ phases?: MissionPhase[] } | null>(mission.plan, null);
@@ -253,9 +270,20 @@ async function runNextAutopilotPhaseLocked(missionId: number): Promise<NextPhase
   const currentStatus = fresh?.status ?? mission.status;
   const status = advanceStatus(currentStatus, computed);
 
+  // round 11: the final write is split so the state save can never clobber a
+  // concurrent status decision. The autopilot state (steps/failures) is OURS —
+  // written unconditionally; the status is a RACE PRONE field (a parallel PATCH
+  // or report may have set it during the 220s window) — written CAS-style,
+  // conditioned on the status we just re-read. If the condition lost, the
+  // mission row keeps the OTHER writer's decision and ours is dropped — the
+  // reverse of the old behavior, which unconditionally trampled PATCH/report.
   await db.mission.update({
     where: { id: missionId },
-    data: { autopilot: JSON.stringify(newState), autopilotAt: new Date(), status },
+    data: { autopilot: JSON.stringify(newState), autopilotAt: new Date() },
+  });
+  await db.mission.updateMany({
+    where: { id: missionId, status: currentStatus },
+    data: { status },
   });
 
   // v0.4.0 — one live event per phase execution/failure (the client used to poll blindly)

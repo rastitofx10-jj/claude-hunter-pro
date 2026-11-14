@@ -79,7 +79,7 @@ interface Finding {
 }
 
 interface Briefing {
-  triage?: { fullName: string; verdict: string; confidence: number; reason: string }[];
+  triage?: { fullName: string; verdict: string; confidence: number | null; reason: string }[];
   profiles?: { fullName: string; investment: number; moneyLevel: string; signature: string; stealThis: string[]; blindSpot: string }[];
   patterns?: { patterns: { pattern: string; repos: string[]; insight: string }[]; stackConsensus: string[]; marketShift: string };
   attack?: { topMoves: { move: string; why: string; effort: string }[]; differentiators: string[]; immediateActions: string[] };
@@ -94,7 +94,8 @@ interface AuditResult {
   stage: string;
   evidenceChecks: { fullName: string; claimed: string; filesFound: number; verified: boolean; proofFile?: string; error?: string }[];
   precision: number;
-  specificityScore: number;
+  // null = the audit never measured it (omitted field / not computed) — rendered "—"
+  specificityScore: number | null;
   slopFlags: { claim: string; why: string }[];
   refutedClaims: { claim: string; why: string }[];
   verdict: string;
@@ -447,13 +448,28 @@ export function SweepPanel() {
                       <p className="text-[11px] text-muted-foreground">Live evidence accuracy</p>
                     </div>
                     <div className="rounded-lg border bg-card p-2 text-center">
-                      <p className={`text-2xl font-bold ${audit.specificityScore >= 80 ? "text-emerald-600" : audit.specificityScore >= 60 ? "text-amber-600" : "text-red-600"}`}>
-                        {audit.specificityScore}/100
+                      <p
+                        className={
+                          audit.specificityScore === null
+                            ? "text-2xl font-bold text-muted-foreground"
+                            : audit.specificityScore >= 80
+                              ? "text-2xl font-bold text-emerald-600"
+                              : audit.specificityScore >= 60
+                                ? "text-2xl font-bold text-amber-600"
+                                : "text-2xl font-bold text-red-600"
+                        }
+                      >
+                        {audit.specificityScore === null ? "—" : `${audit.specificityScore}/100`}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">Anti-slop score</p>
+                      <p className="text-[11px] text-muted-foreground">Anti-slop score{audit.specificityScore === null ? " (not measured)" : ""}</p>
                     </div>
                     <div className="rounded-lg border bg-card p-2 text-center">
-                      <p className="text-2xl font-bold">{audit.evidenceChecks.length}</p>
+                      {/* round 11: this tile showed evidenceChecks.length — ALL checks run,
+                          including refuted and errored ones — under the label "Evidence verified
+                          live". Now it shows what the label says: verified out of checked. */}
+                      <p className="text-2xl font-bold">
+                        {audit.evidenceChecks.filter((c) => c.verified).length}/{audit.evidenceChecks.length}
+                      </p>
                       <p className="text-[11px] text-muted-foreground">Evidence verified live</p>
                     </div>
                     <div className="rounded-lg border bg-card p-2 text-center">

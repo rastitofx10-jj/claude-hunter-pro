@@ -44,7 +44,9 @@ export interface AuditResult {
   stage: string;
   evidenceChecks: EvidenceCheck[];
   precision: number; // percentage of verified evidence out of those conclusively checked
-  specificityScore: number; // 0-100 anti-slop
+  // null = not computed (running/failed) or the model omitted the field —
+  // round 11: `?? 50` fabricated a plausible midpoint on omission; absence is honest.
+  specificityScore: number | null;
   slopFlags: SlopFlag[];
   refutedClaims: SlopFlag[];
   verdict: string;
@@ -216,7 +218,7 @@ export async function antiSlopAudit(
   briefing: Record<string, unknown> | null,
   checks: EvidenceCheck[],
   findings: FindingLike[]
-): Promise<{ specificityScore: number; slopFlags: SlopFlag[]; refutedClaims: SlopFlag[]; verdict: string }> {
+): Promise<{ specificityScore: number | null; slopFlags: SlopFlag[]; refutedClaims: SlopFlag[]; verdict: string }> {
   // A lawful separation: an API error is not a refutation. Previously a "refuted" row was
   // counted even when verification failed technically (rate limit/network) — and it was
   // fed to the LLM as ground truth that the evidence was false, dragging precision down
@@ -261,9 +263,12 @@ Return exactly this JSON:
 {"specificityScore": 0-100, "slopFlags": [{"claim": "...", "why": "..."}], "refutedClaims": [{"claim": "...", "why": "..."}], "verdict": "2-3 sentences: how trustworthy the report is and what must be fixed"}`;
 
   const j = await llmJson(prompt);
-  const score = Number(j.specificityScore ?? j.score ?? 50);
+  // round 11: a missing score stays null — the old `?? 50` printed a synthetic
+  // midpoint ("Anti-slop score 50/100") for a measurement that never happened.
+  const rawScore = j.specificityScore ?? j.score;
+  const score = rawScore === undefined || rawScore === null ? null : Number(rawScore);
   return {
-    specificityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 50,
+    specificityScore: score !== null && Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : null,
     slopFlags: parseFlags(j.slopFlags),
     refutedClaims: parseFlags(j.refutedClaims),
     verdict: str(j.verdict, "No audit verdict received"),
@@ -299,7 +304,7 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
     // Stage A
     await writeAudit(runId, {
       status: "running", stage: "evidence", evidenceChecks: [], precision: 0,
-      specificityScore: 0, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
+      specificityScore: null, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
     });
     const checks = await verifyEvidenceLive(findings, token);
     // Precision = verified out of only the conclusively checked — API errors are not
@@ -312,7 +317,7 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
     // Stage B
     await writeAudit(runId, {
       status: "running", stage: "antislop", evidenceChecks: checks, precision,
-      specificityScore: 0, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
+      specificityScore: null, slopFlags: [], refutedClaims: [], verdict: "", llmCalls: 0,
     });
     const slop = await antiSlopAudit(briefing, checks, findings);
 
@@ -335,7 +340,7 @@ async function executeAudit(runId: number, token: string | null): Promise<void> 
       stage: "failed",
       evidenceChecks: [],
       precision: 0,
-      specificityScore: 0,
+      specificityScore: null,
       slopFlags: [],
       refutedClaims: [],
       verdict: "",
@@ -380,7 +385,7 @@ export async function startAudit(req: NextRequest, runId: number): Promise<void>
         stage: "failed",
         evidenceChecks: [],
         precision: 0,
-        specificityScore: 0,
+        specificityScore: null,
         slopFlags: [],
         refutedClaims: [],
         verdict: "",

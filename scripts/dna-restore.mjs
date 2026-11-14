@@ -78,8 +78,16 @@ try {
   // → primary-key collision → RESTORE_FAIL mid-loop, earlier rows committed, later rows
   // skipped. Now: id-first (heal), natural-key second (update), create only when neither
   // exists — and the update branch restores the fields it never touched.
+  // round 11 parity with src/lib/dna-restore.ts: an id collision with a DIFFERENT
+  // re-grown gene is no longer a SKIP — the gene is RE-HOMED under a fresh
+  // autoincrement id when its natural key is free. Field fact (2026-11-14): the
+  // recycle re-grew 64 genes at ids 1..64 and this script skipped 62 snapshot
+  // genes forever — their content sat in the snapshot file but never re-entered
+  // the live library. Re-homing returns the content (search, compilation, export);
+  // stale id refs dangle either way (the gene was absent under that id).
   let genes = 0;
   let geneIdSkips = 0;
+  let geneIdRehomed = 0;
   for (const a of snap.dnaArtifacts ?? []) {
     const byId = await db.dnaArtifact.findUnique({ where: { id: a.id } });
     if (byId) {
@@ -100,10 +108,33 @@ try {
         genes++;
         continue;
       }
-      // id occupied by a DIFFERENT gene (post-wipe regrowth) — the snapshot gene has no
-      // safe home; skip loudly rather than crash half-way through the library
+      // id occupied by a DIFFERENT gene (post-wipe regrowth) — try to re-home the
+      // snapshot gene under a fresh id; only if even its natural key is taken is it
+      // truly a duplicate (already re-grown) and may be skipped
+      const byKey = await db.dnaArtifact.findUnique({
+        where: { sourceRepo_path: { sourceRepo: a.sourceRepo, path: a.path } },
+      });
+      if (!byKey) {
+        await db.dnaArtifact.create({
+          data: {
+            sourceRepo: a.sourceRepo,
+            path: a.path,
+            kind: a.kind,
+            name: a.name,
+            description: a.description,
+            content: a.content,
+            rawUrl: a.rawUrl,
+            size: a.size,
+            license: a.license ?? null,
+            createdAt: dt(a.createdAt),
+          },
+        });
+        geneIdRehomed++;
+        genes++;
+        continue;
+      }
       geneIdSkips++;
-      console.warn(`  gene id ${a.id} (${a.sourceRepo}/${a.path}) collides with a re-grown gene — skipped`);
+      console.warn(`  gene id ${a.id} (${a.sourceRepo}/${a.path}) already present under id ${byKey.id} — skipped as duplicate`);
       continue;
     }
     await db.dnaArtifact.upsert({
@@ -220,15 +251,23 @@ try {
     hunts++;
   }
 
-  // 6) SweepRun — id-preserving recreate
+  // 6) SweepRun — id-preserving recreate, with one honesty fix: a snapshot row
+  //    captured MID-RUN (status "running") describes a process that died with the
+  //    server — no executeSweep loop survives a recycle. Restoring it as "running"
+  //    is a GHOST that blocks new sweeps (409) for up to 15 minutes after the
+  //    restore (Prisma stamps a fresh updatedAt, the reaper clock restarts).
+  //    Restored as failed — same law the crash-recovery reaper applies.
+  //    (LiveHunt rows stay as-is: hunts ARE resumable — the scheduler's
+  //    orphan-takeover continues them by design.)
   let sweeps = 0;
   for (const s of snap.sweepRuns ?? []) {
     const existing = await db.sweepRun.findUnique({ where: { id: s.id } });
     if (existing) continue;
+    const wasRunning = s.status === "running";
     await db.sweepRun.create({
       data: {
         id: s.id,
-        status: s.status,
+        status: wasRunning ? "failed" : s.status,
         phase: s.phase,
         progress: s.progress,
         queries: s.queries,
@@ -236,7 +275,9 @@ try {
         findings: s.findings,
         briefing: s.briefing,
         audit: s.audit,
-        error: s.error,
+        error: wasRunning
+          ? "The run was interrupted (the server was recycled mid-run) — restored as failed by the restore"
+          : s.error,
         createdAt: dt(s.createdAt),
       },
     });
@@ -276,7 +317,7 @@ try {
   }
 
   console.log(
-    `RESTORE_OK | repos=${repos} genes=${genes}${geneIdSkips ? ` geneIdSkips=${geneIdSkips}` : ""} chimeras=${chimeras} missions=${missions} hunts=${hunts} sweeps=${sweeps} history=${history} learning=${learning}`,
+    `RESTORE_OK | repos=${repos} genes=${genes}${geneIdSkips ? ` geneIdSkips=${geneIdSkips}` : ""}${geneIdRehomed ? ` geneIdRehomed=${geneIdRehomed}` : ""} chimeras=${chimeras} missions=${missions} hunts=${hunts} sweeps=${sweeps} history=${history} learning=${learning}`,
   );
   const total = await db.dnaArtifact.count();
   console.log(`  library now: ${total} genes`);

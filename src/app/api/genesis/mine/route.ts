@@ -5,6 +5,7 @@ import { mineDna } from "@/lib/dna-miner";
 import { gateArtifacts } from "@/lib/quality-gate";
 import { captureTokenFrom, resolveToken } from "@/lib/server-token";
 import { emitDnaBorn } from "@/lib/event-bus";
+import { writeDnaSnapshot } from "@/lib/dna-snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,12 @@ export async function POST(req: NextRequest) {
         origin: "mined",
         note: `manual mine — ${kept.length} gene(s) entered the library`,
       });
+      // round 11: a manual Genesis mine IS a library-growth moment — the snapshot
+      // header promises "every library-growth moment" fires a snapshot, but this
+      // path never did (only the NEXT growth event would cover it, and a recycle
+      // in between lost the manual mine). Fire-and-forget, same as the other
+      // four growth paths.
+      void writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
     }
     return NextResponse.json({
       ...pkg,

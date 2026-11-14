@@ -34,24 +34,55 @@ export async function GET(req: NextRequest) {
   }
 
   const encoder = new TextEncoder();
-  let unsubscribe: (() => void) | null = null;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  let closed = false;
+  // round 11: the teardown is hoisted OUT of start() and the write-catch now
+  // CALLS it. Before, an enqueue throw only flipped `closed = true` — if the
+  // runtime then never delivered the abort/cancel (a real possibility), the
+  // listener stayed subscribed and the 15s heartbeat kept no-op'ing for the
+  // connection's lifetime: a leak with a pulse. Also, the old cleanup()
+  // bailed early on `closed` — the very flag the write-catch had just set —
+  // so even calling it would have been a no-op. teardown is idempotent on
+  // its own (nulling every resource), not via the flag.
+  let teardown: (() => void) | null = null;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let closed = false;
+      let unsubscribe: (() => void) | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+      teardown = () => {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
+        if (unsubscribe) {
+          unsubscribe();
+          unsubscribe = null;
+        }
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed by the runtime — fine
+        }
+      };
+
       const write = (chunk: string) => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(chunk));
         } catch {
-          // the client vanished mid-write — cleanup below will handle it
-          closed = true;
+          // the client vanished mid-write — release the listener + heartbeat
+          // NOW, not "when the abort signal maybe fires"
+          teardown?.();
         }
       };
 
-      // welcome packet — the client flips its "LIVE" indicator on this
+      // welcome packet — the client flips its "LIVE" indicator on this.
+      // If this very first write throws (client gone before connect), teardown
+      // already released everything — do NOT subscribe/heartbeat on a dead stream.
       write(`event: hello\ndata: ${JSON.stringify({ kind: "hello", t: Date.now() })}\n\n`);
+      if (closed) return;
 
       unsubscribe = subscribeEvents((e: HunterEvent) => {
         write(`event: hunter\ndata: ${JSON.stringify(e)}\n\n`);
@@ -62,25 +93,12 @@ export async function GET(req: NextRequest) {
         write(`: hb ${Date.now()}\n\n`);
       }, HEARTBEAT_MS);
 
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        if (heartbeat) clearInterval(heartbeat);
-        if (unsubscribe) unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          // already closed by the runtime
-        }
-      };
-
       // client disconnect / page close / refresh
-      req.signal.addEventListener("abort", cleanup);
+      req.signal.addEventListener("abort", () => teardown?.());
     },
     cancel() {
-      closed = true;
-      if (heartbeat) clearInterval(heartbeat);
-      if (unsubscribe) unsubscribe();
+      // the runtime tore the stream down (client gone) — same release path
+      teardown?.();
     },
   });
 

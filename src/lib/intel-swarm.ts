@@ -96,7 +96,10 @@ function chunk<T>(arr: T[], size: number): T[][] {
 export interface TriageVerdict {
   fullName: string;
   verdict: "elite" | "watch" | "noise";
-  confidence: number;
+  // null = the model omitted the field — an honest ABSENCE, not a fabricated
+  // midpoint. (round 11: `?? 50` used to print a plausible-looking 50 on every
+  // omitted confidence — a missing measurement disguised as a measurement.)
+  confidence: number | null;
   reason: string;
 }
 
@@ -121,11 +124,15 @@ function parseTriage(j: Record<string, unknown>, batch: CandidateFlat[]): Triage
       : /\belite\b/.test(v) && !/\b(?:not|non|never|no|anti)\s+elite\b/.test(v) ? "elite"
       : /\bwatch\b/.test(v) ? "watch"
       : "noise";
-    const conf = Number(o.confidence ?? o.confidenceScore ?? 50);
+    // round 11: an omitted/confidence-shaped-wrong field is null — never a
+    // synthetic 50. The rest of the pipeline already treats null as "pending"
+    // (findings render "Pending" without triage), so absence stays absence.
+    const rawConf = o.confidence ?? o.confidenceScore;
+    const conf = rawConf === undefined || rawConf === null ? null : Number(rawConf);
     out.push({
       fullName,
       verdict,
-      confidence: Number.isFinite(conf) ? Math.max(0, Math.min(100, Math.round(conf))) : 50,
+      confidence: conf !== null && Number.isFinite(conf) ? Math.max(0, Math.min(100, Math.round(conf))) : null,
       reason: str(o.reason ?? o.why, "no reasoning given"),
     });
   }

@@ -22,6 +22,7 @@ import { access, mkdir, rename, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { emitSnapshot } from "./event-bus";
+import { autoRestoreIfWiped } from "./dna-restore";
 
 /** Date → ISO string, so the JSON is fully deterministic (same normalization the script does) */
 const iso = (d: Date) => d.toISOString();
@@ -56,12 +57,14 @@ let snapshotQueueTail: Promise<void> = Promise.resolve();
 // tables, re-stringifies ~20MB and rewrites the file for nothing.
 // The digest fingerprints what WOULD be serialized using SQL aggregates only
 // — per-table count + max id + max createdAt/updatedAt — plus a sha1 of each
-// learning row's value: zero rows are ever loaded just to decide. The three
-// createdAt-only tables (DnaArtifact / Chimera / SearchHistory) are append-only
-// in practice — nothing in the app updates their rows in place — so count +
-// maxId + maxCreatedAt is change-complete for them; the four tables carrying
-// @updatedAt also fold in their freshest update timestamp, so an in-place edit
-// (score, status, stage) moves the digest too.
+// learning row's value: zero rows are ever loaded just to decide. DnaArtifact /
+// Chimera / SearchHistory are append-only PLUS (round 11) in-place-updatable
+// through harvest re-mine, field-lesson upserts, live-hunt grow retries and
+// manual mines — DnaArtifact therefore got an @updatedAt column and its
+// maxUpdatedAt folds into the digest, so an in-place gene rewrite (same
+// count, same id, same createdAt, NEW content) moves the digest and the
+// snapshot actually rewrites. The createdAt-only era silently skipped those
+// writes and disaster recovery would have restored STALE gene content.
 // NOTE: the same-second write guard suggested in the v0.5 plan is deliberately
 // NOT layered on top — the digest already kills the identical-rewrite case,
 // and a time-based guard would also skip a LEGITIMATE write when two real
@@ -75,7 +78,7 @@ let lastSnapshotDigest: string | null = null;
  *  zero row loads, cheap enough to run on every snapshot attempt. */
 async function computeSnapshotDigest(): Promise<string> {
   const [dna, repos, chimeras, missions, hunts, sweeps, history, learningRows] = await Promise.all([
-    db.dnaArtifact.aggregate({ _count: { _all: true }, _max: { id: true, createdAt: true } }),
+    db.dnaArtifact.aggregate({ _count: { _all: true }, _max: { id: true, createdAt: true, updatedAt: true } }),
     db.savedRepo.aggregate({ _count: { _all: true }, _max: { id: true, createdAt: true, updatedAt: true } }),
     db.chimera.aggregate({ _count: { _all: true }, _max: { id: true, createdAt: true } }),
     db.mission.aggregate({ _count: { _all: true }, _max: { id: true, createdAt: true, updatedAt: true } }),
@@ -98,7 +101,7 @@ async function computeSnapshotDigest(): Promise<string> {
   return createHash("sha1")
     .update(
       [
-        part("dnaArtifacts", dna._count._all, dna._max.id, dna._max.createdAt, null),
+        part("dnaArtifacts", dna._count._all, dna._max.id, dna._max.createdAt, dna._max.updatedAt),
         part("savedRepos", repos._count._all, repos._max.id, repos._max.createdAt, repos._max.updatedAt),
         part("chimeras", chimeras._count._all, chimeras._max.id, chimeras._max.createdAt, null),
         part("missions", missions._count._all, missions._max.id, missions._max.createdAt, missions._max.updatedAt),
@@ -204,7 +207,7 @@ async function writeDnaSnapshotNow(): Promise<void> {
       searchHistory: history.length,
     },
     learningState,
-    dnaArtifacts: artifacts.map((a) => ({ ...a, createdAt: iso(a.createdAt) })),
+    dnaArtifacts: artifacts.map((a) => ({ ...a, createdAt: iso(a.createdAt), updatedAt: iso(a.updatedAt) })),
     savedRepos: savedRepos.map((r) => ({ ...r, createdAt: iso(r.createdAt), updatedAt: iso(r.updatedAt) })),
     chimeras: chimeras.map((c) => ({ ...c, createdAt: iso(c.createdAt) })),
     missions: missions.map((m) => ({ ...m, createdAt: iso(m.createdAt), updatedAt: iso(m.updatedAt) })),
@@ -215,7 +218,7 @@ async function writeDnaSnapshotNow(): Promise<void> {
 
   const json = JSON.stringify(snapshot, null, 1);
 
-  // ---------- regression ratchet (v0.4.0) ----------
+  // ---------- regression ratchet (v0.4.0) + self-heal (round 11) ----------
   // The disaster-recovery file must never be DESTROYED by the very mechanism
   // that's supposed to protect it. Real incident (2026-11-14, integration day):
   // the environment recycled and wiped the DB to zero rows; a growth-event
@@ -226,16 +229,24 @@ async function writeDnaSnapshotNow(): Promise<void> {
   // half of what the existing snapshot holds (when the old file holds ≥ 200
   // genes). A deliberate wipe still has its path: the manual script
   // (scripts/dna-snapshot.mjs) writes without this guard — a human decision.
+  // Round 11: detecting the wipe is no longer the END of the story. The same
+  // incident struck twice on 2026-11-14 and the DB sat at 64 genes for hours
+  // with the guard merely logging. Now the ratchet fires the in-app restore
+  // (dna-restore.ts — idempotent, id-preserving, event-emitting) so the library
+  // heals itself; the next growth-event snapshot then writes the healed state.
   const newGenes = snapshot.counts.dnaArtifacts;
   const oldGenes = await readSnapshotGeneCount(target);
   if (oldGenes !== null && oldGenes >= 200 && newGenes < Math.floor(oldGenes / 2)) {
     console.error(
-      `[dna-snapshot] REGRESSION BLOCKED — refusing to overwrite a ${oldGenes}-gene snapshot with ${newGenes} genes (the DB looks wiped/recycled). Restore first: node scripts/dna-restore.mjs — or run the manual snapshot script to force.`,
+      `[dna-snapshot] REGRESSION BLOCKED — refusing to overwrite a ${oldGenes}-gene snapshot with ${newGenes} genes (the DB looks wiped/recycled). Self-healing via dna-restore…`,
     );
     emitSnapshot({
       written: false,
-      note: `regression blocked — kept the ${oldGenes}-gene snapshot (DB holds only ${newGenes})`,
+      note: `regression blocked — kept the ${oldGenes}-gene snapshot (DB holds only ${newGenes}); self-healing`,
     });
+    // never throws (internal try/catch) — the .catch is belt-and-braces so the
+    // snapshot queue chain stays un-rejectable no matter what a future edit does
+    void autoRestoreIfWiped().catch(() => undefined);
     return;
   }
 

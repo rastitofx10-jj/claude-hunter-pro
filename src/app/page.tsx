@@ -111,7 +111,9 @@ export default function ClaudeHunterPage() {
 
   const { data: missionData } = useQuery({
     queryKey: ["missions"],
-    queryFn: () => apiFetch<{ items: unknown[] }>("/api/mission", token),
+    // total = the REAL count from the server (items is capped at 50 — the old
+    // badge counted items.length and froze at the cap)
+    queryFn: () => apiFetch<{ items: unknown[]; total: number }>("/api/mission", token),
   });
 
   const saveRepo = useMutation({
@@ -195,7 +197,7 @@ export default function ClaudeHunterPage() {
   }[] = [
     { tab: "home", label: "Home", icon: LayoutDashboard },
     { tab: "live", label: "Live Hunt", icon: Swords },
-    { tab: "mission", label: "Missions", icon: Target, badge: missionData?.items.length ? String(missionData.items.length) : undefined },
+    { tab: "mission", label: "Missions", icon: Target, badge: missionData?.total ? String(missionData.total) : undefined },
     { tab: "sweep", label: "Sweep", icon: Satellite },
     { tab: "genesis", label: "Genesis", icon: Dna },
     { tab: "search", label: "Search", icon: Search },

@@ -128,13 +128,23 @@ async function advanceOrphanMission(): Promise<void> {
       }
       if (pending === 0) continue; // everything closed — waiting for a field report, not our job
 
-      // take it over — the per-mission lock serializes against any live pump
-      const res = await runNextAutopilotPhase(row.id);
-      emitAutonomy({
-        note: `scheduler took over mission #${row.id} — phase ${res.stepsDone}/${res.totalPhases}`,
-        mode: "watchdog",
-      });
-      return; // one phase per tick — the LLM queue stays calm
+      // round 11: per-ROW try. One candidate throwing (a 409 — the mission was
+      // failed/reaped/PATCHed between the read above and the call; round 11 made
+      // autopilot reject failed missions too) used to abort the WHOLE loop, so
+      // the remaining candidates (up to 20) were silently skipped for that tick.
+      try {
+        // take it over — the per-mission lock serializes against any live pump
+        const res = await runNextAutopilotPhase(row.id);
+        emitAutonomy({
+          note: `scheduler took over mission #${row.id} — phase ${res.stepsDone}/${res.totalPhases}`,
+          mode: "watchdog",
+        });
+        return; // one phase per tick — the LLM queue stays calm
+      } catch (e) {
+        // routine here: the row's state changed under us between read and call
+        console.error(`[scheduler] takeover of mission #${row.id} skipped:`, e instanceof Error ? e.message : e);
+        continue;
+      }
     }
   } catch (e) {
     console.error("[scheduler] orphan-mission advance failed:", e);
@@ -154,12 +164,21 @@ async function advanceOrphanHunt(): Promise<void> {
     for (const row of rows) {
       if (Date.now() - row.updatedAt.getTime() < HUNT_ORPHAN_MS) continue; // pump alive
 
-      const state = await runNextLiveHuntStage(row.id);
-      emitAutonomy({
-        note: `scheduler took over hunt #${row.id} — stage "${state.stageKey}"`,
-        mode: "watchdog",
-      });
-      return; // one stage per tick
+      // round 11: per-ROW try — one 409 (the hunt just failed/was reaped between
+      // the read and the call) used to abort the whole loop and the remaining
+      // candidates (up to 5) were silently skipped for that tick.
+      try {
+        const state = await runNextLiveHuntStage(row.id);
+        emitAutonomy({
+          note: `scheduler took over hunt #${row.id} — stage "${state.stageKey}"`,
+          mode: "watchdog",
+        });
+        return; // one stage per tick
+      } catch (e) {
+        // 409s (hunt just failed/was reaped between read and call) are routine here
+        console.error(`[scheduler] takeover of hunt #${row.id} skipped:`, e instanceof Error ? e.message : e);
+        continue;
+      }
     }
   } catch (e) {
     // 409s (hunt just failed/was reaped between read and call) are routine here

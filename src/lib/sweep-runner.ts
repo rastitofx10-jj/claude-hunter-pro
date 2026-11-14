@@ -6,7 +6,7 @@
 // ============================================================
 
 import { db } from "./db";
-import { safeJsonParse } from "./ai-json";
+import { safeJsonParse, isPrismaNotFound } from "./ai-json";
 import {
   buildAdaptiveArsenal,
   runQueryArsenal,
@@ -27,6 +27,13 @@ import type { NextRequest } from "next/server";
 
 const activeRuns = new Set<number>();
 let startingSweep = false; // start lock: closes the race window between the check and creation (double POST = one sweep)
+
+// round 11: a run row deleted mid-sweep used to be discovered by NOTHING — every
+// progress write silently failed while executeSweep kept burning GitHub search
+// quota (6.5s/query) and a full LLM swarm for minutes on a run nobody could see.
+// updateRun now records the deletion; executeSweep checks aliveness at every
+// phase boundary AND inside every progress callback, and aborts.
+const deletedRuns = new Set<number>();
 
 /** A running row not updated beyond this = finished (crash/restart) — released automatically.
  * Before: a stuck running row blocked new sweeps forever (permanent 409). */
@@ -76,8 +83,12 @@ async function updateRun(
         note: next.phase !== prev.phase ? `phase → ${next.phase}` : undefined,
       });
     }
-  } catch {
-    // The run was deleted mid-operation — stop silently
+  } catch (e) {
+    // The run was deleted mid-operation (P2025) — record it so executeSweep
+    // STOPS instead of burning quota on an invisible run. Other errors (a
+    // transient busy/locked SQLite) stay silent as before — they are not a
+    // deletion signal.
+    if (isPrismaNotFound(e)) deletedRuns.add(id);
   } finally {
     if (data.status === "done" || data.status === "failed") sweepShadow.delete(id);
   }
@@ -90,7 +101,15 @@ const sweepShadow = new Map<number, { phase: string; progress: number; status: s
 async function executeSweep(runId: number, token: string | null): Promise<void> {
   const startedAt = Date.now();
   activeRuns.add(runId);
+  // throws the moment the run row is known deleted — lands in the catch below,
+  // which tries a (doomed, swallowed) failed-status write and stops the sweep
+  const ensureAlive = () => {
+    if (deletedRuns.has(runId)) {
+      throw new Error("The run row was deleted mid-sweep — aborted so no further quota/LLM work is spent on an invisible run");
+    }
+  };
   try {
+    ensureAlive();
     // ---------- Stage A: queries ----------
     // Frontier rotation: each completed sweep seeds the next slice — the sweep
     // probes different frontier coordinates every run instead of repeating.
@@ -106,6 +125,7 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
 
     const { codeHits, repoHits } = await runQueryArsenal(token, arsenal, async (report, done, total) => {
       reports.push(report);
+      ensureAlive(); // the row may have been deleted during this multi-minute stage
       const progress = Math.round((done / total) * 40);
       await updateRun(runId, {
         progress: Math.max(1, progress),
@@ -132,9 +152,11 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     } catch { /* radar must never stall the sweep */ }
 
     // ---------- Stage B: consolidation + enrichment ----------
+    ensureAlive();
     await updateRun(runId, { phase: "enrich", progress: 41 });
     let candidates: Candidate[] = consolidateCandidates(codeHits, repoHits, emergingQs);
     const enriched = await enrichCandidates(candidates, token, 30);
+    ensureAlive();
     await updateRun(runId, { phase: "mine", progress: 52 });
 
     // ---------- Stage C: DNA mining ----------
@@ -147,6 +169,7 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     // rate-limited good query isn't punished for a transient failure).
     const cleanQueries = reports.filter((r) => !r.error).map((r) => r.q);
     const minedReports = await mineTopCandidates(candidates, token, 8, async (done, total, rep) => {
+      ensureAlive(); // stop mining the moment the row is gone
       if (!rep.error) {
         reposMined++;
         dnaAddedTotal.n += rep.newCount;
@@ -185,6 +208,7 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     ]);
 
     // ---------- Stage D: prompt swarm ----------
+    ensureAlive();
     await updateRun(runId, { phase: "swarm", progress: 71 });
     // The mine phase just completed and the library may have grown — snapshot it automatically
     // in the background (the manual script required a human to remember). Fire-and-forget:
@@ -200,10 +224,14 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     let swarm: SwarmResult | null = null;
     try {
       swarm = await runSwarm(flat, executedQueries, dnaAddedTotal.n, statsLine, async (done, total) => {
+        ensureAlive(); // the LLM swarm is minutes long — a deleted row must stop it too
         const progress = 71 + Math.round((done / Math.max(1, total)) * 27);
         await updateRun(runId, { progress });
       });
     } catch (e) {
+      // a deleted-row abort must NOT be mislabeled "the whole swarm fell" and
+      // let the sweep run to completion — rethrow to the outer catch (failed)
+      if (deletedRuns.has(runId)) throw e;
       // The whole swarm fell — the sweep is still worthwhile with the raw findings
       await updateRun(runId, {
         briefing: JSON.stringify({
@@ -281,6 +309,10 @@ async function executeSweep(runId: number, token: string | null): Promise<void> 
     });
   } finally {
     activeRuns.delete(runId);
+    // round 11: the shadow entry leaked whenever the run never reached a terminal
+    // status write (row deleted mid-sweep) — deleted here unconditionally instead
+    sweepShadow.delete(runId);
+    deletedRuns.delete(runId);
   }
 }
 
