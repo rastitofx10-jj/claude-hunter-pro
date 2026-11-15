@@ -1,3 +1,40 @@
+# Upgrade notes — v0.6.0 (merge of both lineages + decoder/assembler)
+
+Your latest upload branched from v0.4.0 and did not contain my v0.5.0 work (official sources, folder-mode mining, Mythos watch).
+This release is **your tree (reflexion, born-DNA gates, dna-restore, round-12 fixes) + everything from v0.5.0 + the new pieces below.**
+All your round-12 changes are untouched.
+
+## New
+
+- **Gene decoder** (`gene-decoder.ts`): deterministic parse of mined files into structure — frontmatter (scalars, inline arrays, dash lists,
+  CRLF/BOM), requested tools (commas inside `Bash(...)` respected), referenced files, premium model pins, hook events + commands, MCP servers + launch commands, issues.
+- **Plugin assembler** (`gene-assembler.ts`, `zip-store.ts`, `POST /api/assemble`, Genesis button): selected repos → an installable Claude Code plugin as a
+  zip (dependency-free STORE zip, verified with `unzip -t`). Gates: permissive licenses only (override: `acceptLicenseRisk`, with a loud NOTICE),
+  hooks + MCP only with `allowExecutables` (commands listed for review, `permissions`/`env` never imported), content-hash dedupe, name-collision
+  renames with the frontmatter `name:` rewritten to the directory, skills without a description excluded, orphan references excluded, 2 MB cap.
+- From v0.5.0: official-source mining (`anthropic-sources.ts`, `/api/official`, button), folder-mode kinds `plugin-manifest` / `hook-config` / `skill-ref`
+  (quality gate aware, 60 B floor for manifests), five Mythos/Fable frontier queries and a Mythos recipe.
+
+## Boundary
+
+Claude Mythos Preview is not public (trusted organizations under Project Glasswing), so there is no public Mythos source to find. This tool mines
+Anthropic's published repos and community projects that pin the Mythos tier; it does not search for leaked or internal material and decrypts nothing.
+
+## Bugs still present in the upload, fixed here
+
+1. **Prompt cache ignored the structured-output schema** — a free-text answer could be served to a schema-constrained caller (and vice versa). Schema is now in the key.
+2. **`test-llm-layer.mts` failed 2 checks and crashed in your tree** (identical prompts hit the new cache; the in-flight counter went negative after an aborted request). Rewritten per-window and cache-aware, +3 cache/schema-key checks.
+3. Hebrew had returned to four scripts (`license-*`, `daily-cycle`, `e2e-round6`) and `truth-migration.ts` was re-enabled — both restored (done in the v0.5.0 merge base).
+
+## Tests (all run here, with stubbed Prisma / gateway clients)
+
+model gate 53 · frontier families 79 · official sources 30 · **assembler 50 (new)** · frontmatter repair 15 · reflexion gates (all pass) · LLM layer 31.
+Partial `tsc` over `src/lib` + `src/app/api`: only errors are the missing generated Prisma types and the gateway SDK types.
+Not run: `next build`, `eslint`, the TSX components (no React types in the sandbox), live GitHub / Claude calls. Run
+`bun install && bunx prisma generate && bun run typecheck && bun run test:assembler` first.
+
+---
+
 # Upgrade notes — Claude layer rebuild (v0.3.0)
 
 ## 1. The model registry was inverted (critical)

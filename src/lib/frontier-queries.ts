@@ -60,6 +60,11 @@ export const FRONTIER_MODEL_POOL: FrontierQuery[] = [
   { q: '"claude-opus-5-5" eval', kind: "code", why: "eval harnesses measuring the current flagship" },
   { q: '"claude-haiku-5-5" filename:CLAUDE.md', kind: "code", why: "cheap-tier contracts wired to Haiku 5.5 (routing, subagents)" },
   { q: '"claude-mythos-5-2"', kind: "code", why: "mythos 5.2 pins — top-tier adopters" },
+  { q: '"claude-mythos-5-2" filename:SKILL.md', kind: "code", why: "skills written for the Mythos tier" },
+  { q: '"claude-fable-5-2" filename:CLAUDE.md', kind: "code", why: "project contracts pinning Fable 5.2" },
+  { q: '"claude-fable-5-2" "claude-opus-5-5"', kind: "code", why: "routers pairing the Mythos tier with Opus 5.5" },
+  { q: '"claude-mythos-5-2" OR "claude-fable-5-2" path:.claude', kind: "code", why: "Claude Code configs on the Mythos tier" },
+  { q: '"Project Glasswing"', kind: "code", why: "public tooling and write-ups around the Glasswing program" },
 ];
 
 /** Deterministic rotation: `count` items from `pool`, starting at `seed % pool.length`.

@@ -82,6 +82,24 @@ The layer follows the 5.x request rules: no `thinking` field (adaptive thinking 
 
 Tests: `bun run test:models` (model gate, 53 checks), `bun run test:llm` (offline mock of the Messages API, 27 checks), `bun scripts/test-frontier-families.ts` and `bun scripts/test-frontier-radar.ts` (need `bunx prisma generate`; the radar test also needs the dev DB).
 
+## Official sources (Anthropic's public repos)
+
+Genesis → **Mine Anthropic official sources** (or `POST /api/official`; `GET /api/official` previews the ranking) mines the public
+repos of Anthropic's GitHub orgs in folder mode: skills with their `references/`, plugin manifests, hook configs, commands, agents and
+contract files. Re-runs skip repos mined in the last 7 days (`{"remine": true}` forces it). Genes keep the repo's SPDX license.
+
+## Gene decoder and plugin assembler
+
+`src/lib/gene-decoder.ts` turns a mined file into structure (frontmatter, requested tools, referenced files, model pins, hook events and
+commands, MCP servers and launch commands). `src/lib/gene-assembler.ts` builds an **installable Claude Code plugin** from genes:
+`skills/<slug>/SKILL.md` (+ `references/`), `commands/`, `agents/`, optional merged `.mcp.json` and `hooks/hooks.json`,
+`.claude-plugin/plugin.json`, `README.md` and a `NOTICE.md` crediting every source.
+
+Genesis → **Assemble plugin (.zip)** (or `POST /api/assemble {name, repos|geneIds, format:"zip"}`). Rules, all reported and none silent:
+only permissive licenses (MIT, Apache-2.0, BSD, ISC, Unlicense, CC0, 0BSD, Zlib, BSL-1.0) and our own born genes are bundled;
+hooks and MCP servers (they run commands) are excluded unless `allowExecutables` is set, and then every command is listed for review;
+`permissions`/`env` blocks are never imported; duplicates, name collisions and orphan references are handled and reported.
+
 ## Scripts
 
 | Command | What it does |

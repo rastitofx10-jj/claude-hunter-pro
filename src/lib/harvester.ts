@@ -251,14 +251,15 @@ export async function discoverEliteRepos(
 export async function harvestRepo(
   fullName: string,
   token: string | null,
-  pre?: RepoMeta
+  pre?: RepoMeta,
+  mineOpts?: { folderMode?: boolean; maxArtifacts?: number }
 ): Promise<HarvestRepoReport & { updatedCount: number }> {
   const [owner, ...rest] = fullName.split("/");
   const repo = rest.join("/");
   if (!owner || !repo) throw new Error(`Invalid repo name: ${fullName}`);
 
   // The branch from the discovery GraphQL saves an extra /repos call per repo
-  const pkg = await mineDna(owner, repo, token, { defaultBranch: pre?.defaultBranch });
+  const pkg = await mineDna(owner, repo, token, { defaultBranch: pre?.defaultBranch, ...mineOpts });
 
   let newCount = 0;
   let updatedCount = 0;

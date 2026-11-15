@@ -25,6 +25,13 @@ export const RECIPES: Recipe[] = [
     body: { mode: "code", model: "claude-opus-5-5" },
   },
   {
+    id: "mythos-code",
+    emoji: "🜂",
+    title: "Code running Mythos 5.2",
+    desc: "Code search for claude-mythos-5-2 — public projects pinned to the Mythos tier (Mythos Preview itself is not public)",
+    body: { mode: "code", model: "claude-mythos-5-2" },
+  },
+  {
     id: "fable-code",
     emoji: "🚀",
     title: "Code running Fable 5.2",

@@ -51,7 +51,7 @@ model DnaArtifact {
   id          Int      @id @default(autoincrement())
   sourceRepo  String   // owner/name
   path        String   // Full path inside the repo
-  kind        String   // skill | command | agent | claude-md | agents-md | mcp-config
+  kind        String   // skill | command | agent | claude-md | agents-md | mcp-config | plugin-manifest | hook-config | skill-ref
   name        String   // Capability name
   description String?
   content     String?  // File content (full or excerpt)

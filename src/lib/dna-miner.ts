@@ -6,9 +6,21 @@
 
 import { ghFetch, ghFetchRaw, mapLimit } from "./github";
 
+/** The classic five kinds plus the folder-mode kinds (official-source mining). */
+export type DnaKind =
+  | "skill"
+  | "command"
+  | "agent"
+  | "claude-md"
+  | "agents-md"
+  | "mcp-config"
+  | "plugin-manifest" // .claude-plugin/plugin.json | marketplace.json — how a capability bundle is declared
+  | "hook-config" // hooks/hooks.json | .claude/settings.json — lifecycle contracts and permissions
+  | "skill-ref"; // references/*.md next to a SKILL.md — the skill's own deep documentation
+
 export interface MinedArtifact {
   path: string;
-  kind: "skill" | "command" | "agent" | "claude-md" | "agents-md" | "mcp-config";
+  kind: DnaKind;
   name: string;
   description: string | null;
   content: string | null;
@@ -48,10 +60,27 @@ const MAX_FILE_BYTES = 12_000; // per-file content truncation — enough for the
 const TEST_PATH_RE =
   /(^|\/)(tests?|__tests__|spec|specs|fixtures)(\/|$)|[._-]test\.[a-z]+$|\.spec\.[a-z]+$/i;
 
-/** Classify a path into a DNA kind */
-function classify(path: string): MinedArtifact["kind"] | null {
+/** Directory of a SKILL.md ("skills/pdf/SKILL.md" → "skills/pdf"; a root SKILL.md → ""). */
+export function skillDirOf(path: string): string | null {
+  if (!/(^|\/)skill\.md$/i.test(path)) return null;
+  return path.slice(0, path.length - "SKILL.md".length).replace(/\/$/, "");
+}
+
+/**
+ * Classify a path into a DNA kind.
+ * `folder` (official-source mode) additionally recognizes the folder-level kinds; without it the
+ * behavior is byte-for-byte the classic five-kind classifier, so existing harvests do not change.
+ * `skillDirs` is the set of directories that contain a SKILL.md (needed for "skill-ref").
+ */
+export function classifyPath(path: string, folder?: { skillDirs: Set<string> }): DnaKind | null {
   const p = path.toLowerCase();
   if (TEST_PATH_RE.test(p)) return null;
+  if (folder) {
+    if (/(^|\/)\.claude-plugin\/(plugin|marketplace)\.json$/.test(p)) return "plugin-manifest";
+    if (/(^|\/)hooks\/hooks\.json$/.test(p) || /(^|\/)\.claude\/settings\.json$/.test(p)) return "hook-config";
+    const ref = path.match(/^(.*?)\/?(?:references?|resources)\/[^/]+\.md$/i);
+    if (ref && folder.skillDirs.has(ref[1])) return "skill-ref";
+  }
   if (p === "claude.md") return "claude-md";
   if (p === "agents.md") return "agents-md";
   // Exactly SKILL.md (at any folder depth) — before, p.includes("skill") mistakenly
@@ -65,6 +94,20 @@ function classify(path: string): MinedArtifact["kind"] | null {
 
 /** Extract the name from frontmatter or from the path */
 function extractName(path: string, content: string | null, kind: MinedArtifact["kind"]): string {
+  if (kind === "skill-ref") {
+    const parts = path.split("/");
+    return `${parts[parts.length - 3] ?? "skill"}/${parts[parts.length - 1].replace(/\.md$/i, "")}`;
+  }
+  if ((kind === "plugin-manifest" || kind === "hook-config") && content) {
+    try {
+      const j = JSON.parse(content) as { name?: unknown };
+      if (typeof j.name === "string" && j.name.trim()) return j.name.trim().slice(0, 80);
+    } catch {
+      /* fall through to the path-based name */
+    }
+    const parts = path.split("/");
+    return `${parts[0] === ".claude-plugin" || parts[0] === "hooks" || parts[0] === ".claude" ? "root" : parts[0]}:${parts[parts.length - 1].replace(/\.json$/i, "")}`;
+  }
   if (content) {
     // \r?\n — repos written on Windows with CRLF were never detected as frontmatter at all
     const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -86,6 +129,14 @@ function extractName(path: string, content: string | null, kind: MinedArtifact["
 /** Extract the description from frontmatter */
 function extractDescription(content: string | null): string | null {
   if (!content) return null;
+  if (content.trimStart().startsWith("{")) {
+    try {
+      const j = JSON.parse(content) as { description?: unknown };
+      if (typeof j.description === "string" && j.description.trim()) return j.description.trim().slice(0, 300);
+    } catch {
+      /* not JSON after all */
+    }
+  }
   const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (m) {
     const d = m[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
@@ -103,7 +154,13 @@ export async function mineDna(
   owner: string,
   repo: string,
   token: string | null,
-  opts?: { defaultBranch?: string | null }
+  opts?: {
+    defaultBranch?: string | null;
+    /** Official-source mode: also mine plugin manifests, hook configs and skill reference docs. */
+    folderMode?: boolean;
+    /** Per-repo artifact cap (default 12; folder mode default 40). */
+    maxArtifacts?: number;
+  }
 ): Promise<DnaPackage> {
   const full = `${owner}/${repo}`;
   let branch = opts?.defaultBranch || "";
@@ -117,13 +174,22 @@ export async function mineDna(
     token
   );
 
-  const candidates = (tree.tree ?? [])
-    .filter((t) => t.type === "blob")
-    .map((t) => ({ path: t.path, size: t.size ?? 0, kind: classify(t.path) }))
-    .filter((t): t is { path: string; size: number; kind: NonNullable<ReturnType<typeof classify>> } => !!t.kind)
+  const blobs = (tree.tree ?? []).filter((t) => t.type === "blob");
+  const folder = opts?.folderMode
+    ? {
+        skillDirs: new Set(
+          blobs.map((t) => skillDirOf(t.path)).filter((d): d is string => d !== null && !TEST_PATH_RE.test(d.toLowerCase()))
+        ),
+      }
+    : undefined;
+  const cap = Math.max(1, Math.min(opts?.maxArtifacts ?? (folder ? 40 : 12), 60));
+
+  const candidates = blobs
+    .map((t) => ({ path: t.path, size: t.size ?? 0, kind: classifyPath(t.path, folder) }))
+    .filter((t): t is { path: string; size: number; kind: NonNullable<ReturnType<typeof classifyPath>> } => !!t.kind)
     // Priority: skills and commands first, then CLAUDE.md; a reasonable size cap
     .sort((a, b) => rank(a.kind) - rank(b.kind))
-    .slice(0, 12);
+    .slice(0, cap);
 
   // Throttled parallelism (6) — 12 downloads at once × 2 repos in parallel = 24 open
   // calls that could take down a GitHub secondary limit. A shared pool engine from github.ts.
@@ -188,5 +254,11 @@ function rank(kind: MinedArtifact["kind"]): number {
       return 4;
     case "mcp-config":
       return 5;
+    case "plugin-manifest":
+      return 3; // a manifest explains the whole bundle — ahead of the contract files
+    case "hook-config":
+      return 6;
+    case "skill-ref":
+      return 7;
   }
 }

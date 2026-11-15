@@ -302,14 +302,18 @@ function llmCacheKey(
   model: string,
   effort: LlmEffort | null,
   system: string,
-  turns: ReadonlyArray<{ role: "user" | "assistant"; content: string }>
+  turns: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
+  schema: Record<string, unknown> | null = null
 ): string {
   // The normalized request: the post-split system (includes the English-only
-  // rule) + the exact turns the transport would send. Two logical asks that
-  // differ only in message-array shape share a key — correct, they serialize
-  // to the same wire request anyway.
+  // rule) + the exact turns the transport would send + the structured-output
+  // schema. The schema MUST be part of the key: it is part of the wire request,
+  // and a cached free-text answer served to a schema-constrained caller (or the
+  // reverse) breaks the very guarantee the schema exists to give. Two logical
+  // asks that differ only in message-array shape still share a key — correct,
+  // they serialize to the same wire request anyway.
   return createHash("sha1")
-    .update(`${model}::${effort ?? "no-effort"}::${system}\u0000${JSON.stringify(turns)}`)
+    .update(`${model}::${effort ?? "no-effort"}::${schema ? JSON.stringify(schema) : "no-schema"}::${system}\u0000${JSON.stringify(turns)}`)
     .digest("hex");
 }
 
@@ -751,7 +755,7 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
 
   // prompt-dedup cache (direct transport). A hit skips even the pool acquire
   // — no network, no slot, no timeout: the dedup's whole point.
-  const directKey = llmCacheKey(model, effort, system, turns);
+  const directKey = llmCacheKey(model, effort, system, turns, schema);
   const directHit = llmCacheGet(directKey);
   if (directHit) {
     cacheHits++;

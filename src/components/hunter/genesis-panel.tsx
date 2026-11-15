@@ -85,6 +85,9 @@ const KIND_META: Record<string, { label: string; emoji: string; color: string }>
   "claude-md": { label: "CLAUDE.md", emoji: "📘", color: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
   "agents-md": { label: "AGENTS.md", emoji: "📗", color: "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300" },
   "mcp-config": { label: "MCP", emoji: "🔌", color: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300" },
+  "plugin-manifest": { label: "Plugin", emoji: "📦", color: "bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300" },
+  "hook-config": { label: "Hooks", emoji: "🪝", color: "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300" },
+  "skill-ref": { label: "Skill ref", emoji: "📚", color: "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-950 dark:text-fuchsia-300" },
 };
 
 export function GenesisPanel() {
@@ -153,6 +156,41 @@ export function GenesisPanel() {
     onError: (e: Error) => toast({ title: "Mining failed", description: e.message, variant: "destructive" }),
   });
 
+  // ---------- assemble an installable plugin from the selected repos' genes ----------
+  const [allowExecutables, setAllowExecutables] = useState(false);
+  const assemble = useMutation({
+    mutationFn: () =>
+      apiFetch<{
+        ok: boolean;
+        filename: string;
+        zipBase64: string;
+        files: string[];
+        report: { included: unknown[]; excluded: { gene: string; reason: string }[]; conflicts: string[]; warnings: string[] };
+      }>("/api/assemble", token, {
+        method: "POST",
+        body: JSON.stringify({
+          name: `hunter-${new Date().toISOString().slice(0, 10)}-${selectedRepos.size}repos`,
+          repos: Array.from(selectedRepos),
+          allowExecutables,
+          format: "zip",
+        }),
+      }),
+    onSuccess: (data) => {
+      const bytes = Uint8Array.from(atob(data.zipBase64), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({
+        title: `Plugin assembled — ${data.report.included.length} components`,
+        description: `${data.report.excluded.length} genes excluded (license / executables / duplicates) · ${data.report.conflicts.length} conflicts · ${data.report.warnings.length} warnings. NOTICE.md credits every source.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Assembly failed", description: e.message, variant: "destructive" }),
+  });
+
   const synthesize = useMutation({
     mutationFn: () =>
       apiFetch<ChimeraResponse>("/api/genesis/synthesize", token, {
@@ -196,6 +234,24 @@ export function GenesisPanel() {
       });
     },
     onError: (e: Error) => toast({ title: "Harvest failed", description: e.message, variant: "destructive" }),
+  });
+
+  // ---------- official sources: Anthropic's public orgs, folder-mode mining ----------
+  const harvestOfficial = useMutation({
+    mutationFn: () =>
+      apiFetch<HarvestResult>("/api/official", token, {
+        method: "POST",
+        body: JSON.stringify({ maxRepos: 5 }),
+      }),
+    onSuccess: (data) => {
+      setHarvestResult(data);
+      void qc.invalidateQueries({ queryKey: ["dna-library"] });
+      toast({
+        title: data.artifactsAdded > 0 ? `Official sources mined ⚡ +${data.artifactsAdded} genes` : "Official sources: nothing new right now",
+        description: `${data.reposMined.length} repos mined · ${data.skippedAlreadyMined} skipped (mined in the last 7 days) · library: ${data.totalLibrary} genes`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Official harvest failed", description: e.message, variant: "destructive" }),
   });
 
   // Live timer during harvest — defined after the mutation (avoids TDZ) · feedback that the pipeline is alive
@@ -382,12 +438,13 @@ export function GenesisPanel() {
                 <Zap className="h-4 w-4" /> Autonomous harvest — one click and the library explodes
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                The engine discovers elite repos on its own from real-frontier code searches (opus-4-5 · sonnet-4-5 · haiku-4-5), ranks them by skill richness, and mines the 6 richest
+                The engine discovers elite repos on its own from frontier code searches (fable-5-2 · mythos-5-2 · opus-5-5 · sonnet-5-5 · haiku-5-5), ranks them by skill richness, and mines the 6 richest
               </p>
             </div>
+            <div className="flex shrink-0 flex-col gap-2">
             <Button
               onClick={() => harvest.mutate()}
-              disabled={harvest.isPending}
+              disabled={harvest.isPending || harvestOfficial.isPending}
               className="shrink-0 bg-gradient-to-l from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700"
             >
               {harvest.isPending ? (
@@ -400,6 +457,23 @@ export function GenesisPanel() {
                 </>
               )}
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => harvestOfficial.mutate()}
+              disabled={harvestOfficial.isPending || harvest.isPending}
+              title="Mines Anthropic's public GitHub orgs (anthropics, modelcontextprotocol) folder by folder: skills + references, plugin manifests, hook configs"
+            >
+              {harvestOfficial.isPending ? (
+                <>
+                  <Loader2 className="ml-1.5 h-4 w-4 animate-spin" /> Mining official sources…
+                </>
+              ) : (
+                <>
+                  <Zap className="ml-1.5 h-4 w-4" /> Mine Anthropic official sources
+                </>
+              )}
+            </Button>
+            </div>
           </div>
           {harvestResult && (
             <div className="mt-3 rounded-md border bg-background p-3 text-xs">
@@ -612,6 +686,27 @@ export function GenesisPanel() {
             </>
           )}
         </Button>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
+          <Button
+            variant="outline"
+            onClick={() => assemble.mutate()}
+            disabled={assemble.isPending || selectedRepos.size === 0}
+            title="Builds an installable Claude Code plugin (skills + references, commands, agents) from the selected repos. Only permissively licensed genes are bundled; NOTICE.md credits every source."
+          >
+            {assemble.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> Assembling…
+              </>
+            ) : (
+              <>📦 Assemble plugin (.zip) from {selectedRepos.size} repos</>
+            )}
+          </Button>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <input type="checkbox" checked={allowExecutables} onChange={(e) => setAllowExecutables(e.target.checked)} />
+            include hooks &amp; MCP servers (they run commands — review the README before installing)
+          </label>
+        </div>
 
         {/* chimera result */}
         {chimera && (

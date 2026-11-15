@@ -7,7 +7,8 @@ import type { AddressInfo } from "node:net";
 type Handler = (body: any, req: http.IncomingMessage, res: http.ServerResponse, n: number) => void;
 let handler: Handler = () => {};
 let requestCount = 0;
-let inFlight = 0;
+let epoch = 0;
+const live: Record<number, number> = {};
 let maxInFlight = 0;
 const seen: any[] = [];
 
@@ -18,9 +19,12 @@ const server = http.createServer((req, res) => {
     const body = JSON.parse(raw || "{}");
     seen.push({ headers: req.headers, body });
     requestCount++;
-    inFlight++;
-    maxInFlight = Math.max(maxInFlight, inFlight);
-    res.on("close", () => inFlight--);
+    // in-flight is tracked PER TEST WINDOW (epoch): a ghost from a previous test (an aborted
+    // request whose socket lingers) can neither inflate nor deflate the current window's maximum
+    const myEpoch = epoch;
+    live[myEpoch] = (live[myEpoch] ?? 0) + 1;
+    if (myEpoch === epoch) maxInFlight = Math.max(maxInFlight, live[myEpoch]);
+    res.on("close", () => { live[myEpoch]--; });
     handler(body, req, res, requestCount);
   });
 });
@@ -60,13 +64,7 @@ const reset = () => {
   seen.length = 0;
   requestCount = 0;
   maxInFlight = 0;
-  // undici's abort (the timeout test) does NOT close the server-side socket — the aborted
-  // response lingers as a "ghost" whose close event never fires, and its stale in-flight
-  // slot leaked into the NEXT test's max (the concurrency test measured cap+1). The ghost
-  // belongs to the PREVIOUS test's window: zero the counter so each test measures only
-  // its own arrivals. A ghost's eventual close can only push the counter DOWN — never
-  // above the cap — so the pool's true cap is still measured honestly.
-  inFlight = 0;
+  epoch++; // new measurement window — see the server handler
 };
 
 // 1. request shape + response parsing
@@ -158,7 +156,7 @@ check("schema sent as output_config.format json_schema", seen[0].body.output_con
 // 9. llmJson repairs fenced/prose-wrapped JSON when no schema
 reset();
 handler = (_b, _r, res) => okStream(res, 'Here you go:\n```json\n{"x": 2,}\n```');
-j = await llm.llmJson("sys", "user");
+j = await llm.llmJson("sys", "user-fenced-case");
 check("fenced JSON with trailing comma repaired", j.x === 2);
 
 // 10. timeout is typed + flagged + not retried
@@ -175,9 +173,21 @@ check("timeout → typed error, flagged, single attempt", err instanceof MyErr &
 process.env.HUNTER_LLM_CONCURRENCY = "2";
 reset();
 handler = (_b, _r, res) => setTimeout(() => okStream(res, "x"), 80);
-await Promise.all(Array.from({ length: 6 }, () => llm.llmComplete([{ role: "user", content: "a" }])));
+await Promise.all(Array.from({ length: 6 }, (_, i) => llm.llmComplete([{ role: "user", content: `pool-case-${i}` }])));
 check(`concurrency capped at 2 (max in flight = ${maxInFlight})`, maxInFlight === 2 && requestCount === 6);
 delete process.env.HUNTER_LLM_CONCURRENCY;
+
+// 11b. prompt-dedup cache: identical request → one wire call; the schema is part of the key
+reset();
+handler = (_b, _r, res) => okStream(res, '{"v": 1}');
+const dedupSchema = { type: "object", properties: { v: { type: "number" } }, required: ["v"], additionalProperties: false };
+await llm.llmJson("sys-dedup", "same prompt");
+await llm.llmJson("sys-dedup", "same prompt");
+check("identical prompt served from cache (1 wire call)", requestCount === 1);
+await llm.llmJson("sys-dedup", "same prompt", { schema: dedupSchema });
+check("same prompt WITH a schema is a different request (cache key includes the schema)", requestCount === 2 && seen[1].body.output_config?.format?.type === "json_schema");
+await llm.llmJson("sys-dedup", "same prompt", { schema: dedupSchema });
+check("schema request is cached on its own key", requestCount === 2);
 
 // 12. stats + attempts counter
 const stats = llm.llmStats();
