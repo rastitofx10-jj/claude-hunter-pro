@@ -1112,6 +1112,13 @@ export async function startLiveHunt(): Promise<{ id: number }> {
   if (startingHunt) {
     throw new LiveHuntError("A hunt start is already in progress — one moment", 409);
   }
+  // Round 13 pre-flight: same rationale as the stage-level check, but BEFORE the
+  // hunt row is created — a token-less start must not leave a doomed "running"
+  // row behind that the user then has to watch fail. Checked before the 409:
+  // a missing token is the more actionable error when both conditions hold.
+  if (!(await getStoredToken())) {
+    throw new LiveHuntError("No GitHub token on the server — the live hunt requires a token (Settings → Token)", 400);
+  }
   startingHunt = true;
   try {
     // Only one active run — a run not updated for 15 minutes is considered dead

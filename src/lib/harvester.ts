@@ -354,6 +354,13 @@ export async function harvestRepo(
  * Nothing is swallowed: failed queries, failed repos — all in the report.
  */
 export async function harvest(token: string | null, maxRepos = 6): Promise<HarvestResult> {
+  // Round 13 fail-fast — same rationale as the hunt/sweep pre-flight: a token-less
+  // harvest burns the whole discovery volley on 401s before the report says so.
+  if (!token || !token.trim()) {
+    const err = new Error("No GitHub token on the server — a harvest requires a token (Settings → Token)");
+    (err as Error & { status?: number }).status = 400;
+    throw err;
+  }
   const { candidates, queriesRun, queriesFailed } = await discoverEliteRepos(token, {
     enrichCount: Math.min(12, maxRepos + 6),
   });

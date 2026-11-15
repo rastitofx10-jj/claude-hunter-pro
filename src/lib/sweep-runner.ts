@@ -358,6 +358,17 @@ export async function startSweep(req: NextRequest): Promise<{ id: number }> {
  * autonomous daily cycle (the scheduler has no client header to resolve).
  */
 export async function beginSweep(token: string | null): Promise<{ id: number }> {
+  // Round 13 fail-fast — mirrors the live-hunt's pre-flight: without a token every
+  // query in the arsenal would 401 one-by-one (minutes of backoff), only to be caught
+  // much later by the round-12 "all queries failed" truth guard. Refuse immediately
+  // with the actionable message instead of burning the quota-less round.
+  // Checked BEFORE the 409: a missing token is the more actionable error when both
+  // conditions hold at once.
+  if (!token || !token.trim()) {
+    const err = new Error("No GitHub token on the server — a deep sweep requires a token (Settings → Token)");
+    (err as Error & { status?: number }).status = 400;
+    throw err;
+  }
   if (startingSweep || (await hasActiveRun())) {
     const err = new Error("A sweep is already running — wait for it to finish or check the status");
     (err as Error & { status?: number }).status = 409;

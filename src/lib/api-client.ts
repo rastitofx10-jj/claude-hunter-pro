@@ -29,7 +29,14 @@ export async function apiFetch<T>(
     },
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok || data?.error) {
+  // Round 13: ONLY the HTTP status decides transport failure. A 200 body may legally
+  // carry a top-level `error` field as DOMAIN data (a failed sweep run's stored
+  // message, /api/sweep/[id]) — treating that as a load failure showed a false
+  // "Failed to load sweep data" banner over data that loaded fine. Routes in this
+  // codebase always pair { error } with a 4xx/5xx status (verified by grep), so
+  // !res.ok remains the sole trigger; the error message inside the body is still
+  // used as the thrown message.
+  if (!res.ok) {
     // The full error body is attached to the Error — the live-hunt pump reads the
     // failed hunt's state from it (payload.hunt) and stops instead of running in
     // an infinite loop.

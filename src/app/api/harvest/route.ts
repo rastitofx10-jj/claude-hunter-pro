@@ -53,8 +53,16 @@ export async function POST(req: NextRequest) {
         { status: 429 }
       );
     }
+    // Round 13: an error carrying a 4xx status (e.g. the token pre-flight in harvest())
+    // gets its precise message and code surfaced — the caller can act on it
+    // ("add a token") instead of a generic "see the server log" 500.
+    const status = (e as { status?: number }).status ?? 500;
+    if (status < 500) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : "The harvest was rejected" }, { status });
+    }
     return NextResponse.json({ error: "The autonomous harvest failed — details in the server log" }, { status: 500 });
   } finally {
     harvestRunning = false;
   }
 }
+
