@@ -33,6 +33,13 @@ interface AutonomyInfo {
   nextCycleAt: string | null;
   triggered?: boolean;
   note?: string;
+  /** Round 14: a harvest+sweep cycle is executing right now — disable the
+   * trigger and show live state instead of letting a second click silently
+   * no-op (which reads as "failed to launch"). */
+  cycleInFlight?: boolean;
+  /** "cycle" = the cycle function itself is running; "sweep" = the previous
+   * cycle's sweep is still in flight. Either way the trigger honestly refuses. */
+  blockedBy?: "cycle" | "sweep" | null;
 }
 
 function parseable(iso: string | null | undefined): Date | null {
@@ -51,6 +58,10 @@ export function AutonomyControl() {
     queryFn: () => apiFetch<AutonomyInfo>("/api/settings/autonomy", token),
     enabled: mounted,
     staleTime: 30_000,
+    // Round 14: while a cycle (or its sweep) is executing, poll fast — the card
+    // flips back to "off — manual only" the moment the state lands (the SSE
+    // invalidation also fires, but the poll covers a browser that missed it).
+    refetchInterval: (query) => (query.state.data?.blockedBy ? 5_000 : 30_000),
   });
 
   const modeM = useMutation({
@@ -82,7 +93,24 @@ export function AutonomyControl() {
         body: JSON.stringify({ trigger: true }),
       }),
     onSuccess: (d) => {
-      toast.success(d.note ?? "The autonomous cycle is starting");
+      // Round 14: an in-flight rejection is NOT an error — it is the honest
+      // "already running" answer. Anything else is the usual success note.
+      if (d.triggered === false) {
+        toast.info("A cycle is already running", { description: d.note });
+      } else {
+        toast.success(d.note ?? "The autonomous cycle is starting");
+      }
+      // Seed the cache with the returned truth so the button disables immediately
+      // (before the 5s poll would pick it up).
+      void qc.setQueryData<AutonomyInfo>(["autonomy"], (old) =>
+        old
+          ? {
+              ...old,
+              cycleInFlight: d.cycleInFlight ?? false,
+              blockedBy: d.triggered === false ? (d.blockedBy ?? "cycle") : (old.blockedBy ?? "cycle"),
+            }
+          : old,
+      );
       void qc.invalidateQueries({ queryKey: ["autonomy"] });
     },
     onError: (e: Error) => toast.error("Could not trigger the cycle", { description: e.message }),
@@ -91,6 +119,9 @@ export function AutonomyControl() {
   const daily = data?.mode === "daily";
   const last = parseable(data?.lastCycleAt);
   const next = parseable(data?.nextCycleAt);
+  const blocked = data?.blockedBy === "cycle" || data?.blockedBy === "sweep";
+  const inFlight = data?.blockedBy === "cycle";
+  const sweepHold = data?.blockedBy === "sweep";
   const busy = modeM.isPending || triggerM.isPending;
 
   return (
@@ -108,13 +139,33 @@ export function AutonomyControl() {
       <CardContent className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-semibold">{daily ? "Daily mode armed" : "Off — manual only"}</p>
+            <p className="text-sm font-semibold">
+              {inFlight ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />
+                  A cycle is running right now
+                </span>
+              ) : sweepHold ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />
+                  Previous sweep still in flight
+                </span>
+              ) : daily ? (
+                "Daily mode armed"
+              ) : (
+                "Off — manual only"
+              )}
+            </p>
             <p className="text-[11px] text-muted-foreground">
-              {daily
-                ? next
-                  ? `Next: ${formatDistanceToNow(next, { addSuffix: true })} · ${format(next, "HH:mm")}`
-                  : "Next cycle: at the scheduler's next tick"
-                : "The hunter only moves when you drive it"}
+              {inFlight
+                ? "Harvesting elite repos and sweeping — events stream into the live feed"
+                : sweepHold
+                  ? "The last cycle's deep sweep is finishing — a new cycle would duplicate it"
+                  : daily
+                    ? next
+                      ? `Next: ${formatDistanceToNow(next, { addSuffix: true })} · ${format(next, "HH:mm")}`
+                      : "Next cycle: at the scheduler's next tick"
+                    : "The hunter only moves when you drive it"}
             </p>
           </div>
           <Switch
@@ -134,15 +185,19 @@ export function AutonomyControl() {
             size="sm"
             className="gap-1.5"
             onClick={() => triggerM.mutate()}
-            disabled={!mounted || triggerM.isPending}
-            title="Fire the harvest + deep sweep cycle now, regardless of the schedule"
+            disabled={!mounted || triggerM.isPending || blocked}
+            title={
+              blocked
+                ? "The current cycle / sweep is still executing — it finishes on its own"
+                : "Fire the harvest + deep sweep cycle now, regardless of the schedule"
+            }
           >
-            {triggerM.isPending ? (
+            {triggerM.isPending || blocked ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
             ) : (
               <Play className="h-3.5 w-3.5" aria-hidden />
             )}
-            Run the cycle now
+            {inFlight ? "Cycle in flight" : sweepHold ? "Sweep finishing" : "Run the cycle now"}
           </Button>
         </div>
       </CardContent>

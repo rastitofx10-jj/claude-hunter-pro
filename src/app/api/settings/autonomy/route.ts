@@ -3,6 +3,8 @@ import {
   readAutonomyConfig,
   writeAutonomyConfig,
   triggerAutonomousCycle,
+  cycleInFlight,
+  cycleBlockedReason,
   DAILY_MIN_GAP_MS,
 } from "@/lib/scheduler-cycle";
 
@@ -41,7 +43,14 @@ function serializeNextCycle(cfg: {
 export async function GET() {
   try {
     const cfg = await readAutonomyConfig();
-    return NextResponse.json(serializeNextCycle(cfg));
+    // Round 14: the in-flight flag rides along — the UI shows "a cycle is running
+    // right now" (or "the previous sweep still is") instead of a clickable
+    // button that silently no-ops.
+    return NextResponse.json({
+      ...serializeNextCycle(cfg),
+      cycleInFlight: cycleInFlight(),
+      blockedBy: await cycleBlockedReason(),
+    });
   } catch {
     return NextResponse.json({ error: "Failed to read the autonomy config" }, { status: 500 });
   }
@@ -57,6 +66,25 @@ export async function POST(req: NextRequest) {
 
   try {
     if (body.trigger === true) {
+      // Round 14 honesty fix: the OLD code always answered `triggered: true, "the
+      // cycle is starting"` — even when the in-process lock rejected the request and
+      // NOTHING started. The user clicked again, got the same cheerful lie, and saw
+      // no effect at all ("it failed to launch"). Now the second click gets the truth:
+      // a cycle or its sweep is already in flight, and when it is not.
+      const blocked = await cycleBlockedReason();
+      if (blocked) {
+        const cfg = await readAutonomyConfig();
+        return NextResponse.json({
+          ...serializeNextCycle(cfg),
+          cycleInFlight: blocked === "cycle",
+          blockedBy: blocked,
+          triggered: false,
+          note:
+            blocked === "cycle"
+              ? "A cycle is already in flight right now — it finishes on its own; watch the live feed"
+              : "The previous cycle's deep sweep is still running — the next cycle will fire after it lands",
+        });
+      }
       // Manual kick — force=true bypasses the mode/gap checks by design
       // (an explicit human action), still guarded by the in-process lock.
       // It does NOT persistently enable daily mode.
@@ -64,6 +92,7 @@ export async function POST(req: NextRequest) {
       const cfg = await readAutonomyConfig();
       return NextResponse.json({
         ...serializeNextCycle(cfg),
+        cycleInFlight: true,
         triggered: true,
         note: "The autonomous cycle is starting — watch the live feed",
       });

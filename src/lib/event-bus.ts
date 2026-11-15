@@ -42,7 +42,18 @@ export interface HunterEvent {
 
 type Listener = (e: HunterEvent) => void;
 
-const listeners = new Set<Listener>();
+// Round 14 CRITICAL FIX — the bus MUST be process-wide, not module-instance-wide.
+// Next.js dev compiles each route into its own bundle: any route that gets
+// hot-reloaded receives a FRESH instance of this module, splitting the old
+// `const listeners = new Set()` into two disconnected worlds. Emitters running
+// on the new instance then broadcast to zero SSE subscribers (the /api/events
+// stream still holds the OLD instance's listener set) — events silently vanish,
+// the live feed goes deaf exactly after code changes, and the user sees no
+// feedback from running operations ("it failed to launch"). The globalThis
+// singleton (the same discipline as the Prisma dev client) pins ONE set for
+// every module instance in the process, compile graph be damned.
+const busGlobal = globalThis as typeof globalThis & { __hunterEventBus__?: Set<Listener> };
+const listeners: Set<Listener> = (busGlobal.__hunterEventBus__ ??= new Set<Listener>());
 
 /** Fan-out to every subscriber. Exception-isolated per listener. */
 export function emit(kind: HunterEventKind, payload: Record<string, unknown> = {}): void {

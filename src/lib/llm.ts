@@ -198,27 +198,52 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ---------- concurrency pool ----------
 
-let active = 0;
-const waiters: Array<() => void> = [];
+// Round 14: the LLM layer's singletons are pinned to globalThis — the same fix
+// the event bus needed. Next.js dev hot-reloads split this module into per-route
+// instances; without a shared home the concurrency pool would allow 4 × N parallel
+// calls and the stats/cache would silently undercount (the UI would show numbers
+// from whichever instance it was compiled with). One process, one state.
+const llmGlobal = globalThis as typeof globalThis & {
+  __hunterLlmState__?: {
+    active: number;
+    waiters: Array<() => void>;
+    attemptsTotal: number;
+    statsByModel: Map<string, ModelStats>;
+    lastError: { at: string; message: string } | null;
+    llmCache: Map<string, LlmResult>;
+    cacheHits: number;
+    cacheMisses: number;
+  };
+};
+// (The usage ledger's debounce timer stays per-instance — harmless: it only
+// schedules flushes, and the flush itself reads the shared state below.)
+const S = (llmGlobal.__hunterLlmState__ ??= {
+  active: 0,
+  waiters: [],
+  attemptsTotal: 0,
+  statsByModel: new Map<string, ModelStats>(),
+  lastError: null,
+  llmCache: new Map<string, LlmResult>(),
+  cacheHits: 0,
+  cacheMisses: 0,
+});
 
 async function acquire(): Promise<void> {
-  if (active < concurrencyLimit()) {
-    active++;
+  if (S.active < concurrencyLimit()) {
+    S.active++;
     return;
   }
-  await new Promise<void>((resolve) => waiters.push(resolve));
-  active++;
+  await new Promise<void>((resolve) => S.waiters.push(resolve));
+  S.active++;
 }
 
 function release(): void {
-  active--;
-  const next = waiters.shift();
+  S.active--;
+  const next = S.waiters.shift();
   if (next) next();
 }
 
 // ---------- instrumentation ----------
-
-let attemptsTotal = 0;
 
 interface ModelStats {
   calls: number;
@@ -230,8 +255,11 @@ interface ModelStats {
   costUsd: number;
 }
 
-const statsByModel = new Map<string, ModelStats>();
-let lastError: { at: string; message: string } | null = null;
+const statsByModel: Map<string, ModelStats> = S.statsByModel;
+// Round 14 note: statsByModel is a shared Map reference — mutations through it
+// hit the one process-wide instance. The PRIMITIVES (attemptsTotal, lastError,
+// cacheHits/Misses) have NO safe local alias (a local `let` is a copy that
+// silently forks state) — every read/write below goes to S.* directly.
 
 function bump(model: string, u: LlmUsage | null, failed: boolean): void {
   const s =
@@ -251,7 +279,7 @@ function bump(model: string, u: LlmUsage | null, failed: boolean): void {
 
 /** Monotonic count of real API attempts (retries included, BOTH transports) — used by live-hunt stage accounting. */
 export function llmCallSnapshot(): number {
-  return attemptsTotal + zaiAttemptSnapshot();
+  return S.attemptsTotal + zaiAttemptSnapshot();
 }
 
 /** Process-wide usage snapshot for the status endpoint and stage evidence. */
@@ -262,16 +290,16 @@ export function llmStats() {
   const totalCost = Array.from(statsByModel.values()).reduce((a, s) => a + s.costUsd, 0);
   return {
     transport: llmTransport(),
-    attempts: attemptsTotal + zaiAttemptSnapshot(),
-    inFlight: active,
-    queued: waiters.length,
+    attempts: S.attemptsTotal + zaiAttemptSnapshot(),
+    inFlight: S.active,
+    queued: S.waiters.length,
     estimatedCostUsd: Number(totalCost.toFixed(4)),
     models,
-    lastError,
+    lastError: S.lastError,
     // v0.5: the prompt-dedup cache became observable — a rising hit rate is
     // the proof the dedup pays for itself (and the signal to raise the cap)
-    cacheHits,
-    cacheMisses,
+    cacheHits: S.cacheHits,
+    cacheMisses: S.cacheMisses,
   };
 }
 
@@ -294,9 +322,10 @@ export function llmStats() {
 // phantom answer to the NEXT caller of the original shape.
 
 const LLM_CACHE_MAX = 100;
-const llmCache = new Map<string, LlmResult>();
-let cacheHits = 0;
-let cacheMisses = 0;
+// Round 14: the cache itself is part of the globalThis-pinned state (see the
+// concurrency-pool section above) — hot-reloaded route instances share ONE
+// cache instead of N divergent copies.
+const llmCache: Map<string, LlmResult> = S.llmCache;
 
 function llmCacheKey(
   model: string,
@@ -726,11 +755,11 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
     const zaiKey = llmCacheKey(marker, effort, system, turns);
     const zaiHit = llmCacheGet(zaiKey);
     if (zaiHit) {
-      cacheHits++;
+      S.cacheHits++;
       noteCall(marker, tier, 0, 0, 0, "cache hit");
       return zaiHit;
     }
-    cacheMisses++;
+    S.cacheMisses++;
     try {
       const r = await zaiComplete(
         system ? [{ role: "system", content: system }, ...turns] : turns,
@@ -748,7 +777,7 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
       return result;
     } catch (e) {
       bump(marker, null, true);
-      lastError = { at: new Date().toISOString(), message: e instanceof Error ? e.message : String(e) };
+      S.lastError = { at: new Date().toISOString(), message: e instanceof Error ? e.message : String(e) };
       throw e;
     }
   }
@@ -758,11 +787,11 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
   const directKey = llmCacheKey(model, effort, system, turns, schema);
   const directHit = llmCacheGet(directKey);
   if (directHit) {
-    cacheHits++;
+    S.cacheHits++;
     noteCall(model, tier, 0, 0, 0, "cache hit");
     return directHit;
   }
-  cacheMisses++;
+  S.cacheMisses++;
 
   await acquire();
   try {
@@ -771,7 +800,7 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
     // cache guard at the success seam below
     let requestMutated = false;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      attemptsTotal++;
+      S.attemptsTotal++;
       try {
         const body = buildBody(model, system, turns, maxTokens, effort, schema, opts.cacheSystem !== false);
         const out = await attemptOnce(body, timeoutMs, opts.signal);
@@ -796,7 +825,7 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
         lastErr = e;
         if (e instanceof TimeoutSignal) {
           bump(model, null, true);
-          lastError = { at: new Date().toISOString(), message: `${label} timed out` };
+          S.lastError = { at: new Date().toISOString(), message: `${label} timed out` };
           // typed timeout, flagged so upper layers never retry it
           throw markTimeoutError(new Err(`${label} timed out`));
         }
@@ -822,7 +851,7 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
           continue;
         }
         bump(model, null, true);
-        lastError = { at: new Date().toISOString(), message: e instanceof Error ? e.message : String(e) };
+        S.lastError = { at: new Date().toISOString(), message: e instanceof Error ? e.message : String(e) };
         throw e;
       }
     }

@@ -42,6 +42,13 @@ export interface AutonomyConfig {
 
 let cycleRunning = false;
 
+/** Round 14: is a cycle executing right now (in THIS process)? The API layer
+ * reports it to the UI so "Run the cycle now" can show live state instead of
+ * silently no-op'ing on a second click while the first cycle is still in flight. */
+export function cycleInFlight(): boolean {
+  return cycleRunning;
+}
+
 /** Read the autonomy config (missing row = off) */
 export async function readAutonomyConfig(): Promise<AutonomyConfig> {
   try {
@@ -87,6 +94,15 @@ export async function runDailyCycle(force: boolean): Promise<boolean> {
       if (Number.isFinite(last) && Date.now() - last < DAILY_MIN_GAP_MS) return false;
     }
 
+    // Round 14: the previous cycle's sweep keeps running ~10 minutes AFTER the
+    // cycle function itself returned. Firing a fresh cycle on top of it doubles
+    // the harvest quota for nothing — skip honestly and say so in the feed.
+    const sweepBusy = await db.sweepRun.findFirst({ where: { status: "running" }, select: { id: true } });
+    if (sweepBusy) {
+      emitAutonomy({ note: `cycle held — the previous sweep #${sweepBusy.id} is still in flight` });
+      return false;
+    }
+
     const startedAt = new Date().toISOString();
     // record the fire time immediately — a 6-minute cycle ticking every 10s
     // must not double-fire (in-process lock covers same-process races; the
@@ -106,6 +122,14 @@ export async function runDailyCycle(force: boolean): Promise<boolean> {
     } catch {
       // a sweep is already running (user-initiated) — the cycle still counts
     }
+
+    // Round 14: mid-cycle feedback — before this, the live feed went QUIET for the
+    // whole 4-6 minute harvest (only "started" and "done" bracketed it), which the
+    // user reasonably read as "it failed to launch". One event per real milestone.
+    emitAutonomy({
+      note: `cycle: harvest ${harv.reposMined.length} repo(s), +${harv.artifactsAdded} genes${sweepId ? `, deep sweep #${sweepId} launched` : ", sweep skipped (one already running)"}`,
+      mode: before.mode,
+    });
 
     await writeDnaSnapshot().catch((e) => console.error("[dna-snapshot]", e));
 
@@ -140,4 +164,14 @@ export async function runDailyCycle(force: boolean): Promise<boolean> {
 /** Fire-and-forget manual trigger (API route) — never blocks the response */
 export function triggerAutonomousCycle(): void {
   void runDailyCycle(true).catch(() => undefined);
+}
+
+/** Round 14: honest pre-flight for the manual trigger — a fresh cycle would sit on
+ * the previous cycle's still-running sweep and duplicate the harvest quota burn.
+ * The route reports BOTH the in-process cycle flag and the sweep state so the
+ * user gets "it is already running" instead of a no-op. */
+export async function cycleBlockedReason(): Promise<"cycle" | "sweep" | null> {
+  if (cycleRunning) return "cycle";
+  const sweepBusy = await db.sweepRun.findFirst({ where: { status: "running" }, select: { id: true } });
+  return sweepBusy ? "sweep" : null;
 }
