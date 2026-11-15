@@ -19,7 +19,7 @@
 import { db } from "@/lib/db";
 import { safeJsonParse } from "./ai-json";
 import { tierOf } from "./github";
-import { TOKEN_KEY } from "./server-token";
+import { TOKEN_KEY, restoreTokenFromFile } from "./server-token";
 import {
   buildAdaptiveArsenal,
   runQueryArsenal,
@@ -113,7 +113,7 @@ interface HuntCtx {
   seededFrom: number | null;
 }
 
-// ---------- Server token (DB ← env) ----------
+// ---------- Server token (DB ← env ← durable mirror) ----------
 
 async function getStoredToken(): Promise<string | null> {
   try {
@@ -122,7 +122,22 @@ async function getStoredToken(): Promise<string | null> {
   } catch {
     // fall back to env
   }
-  return process.env.GITHUB_TOKEN ?? null;
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  // Round 14 self-heal choke point: a sandbox recycle wipes the github_pat row
+  // (field fact ×3) while the library self-heal deliberately never restores
+  // secrets. When DB+env are both empty, give the durable mirror one chance to
+  // re-seed the row — then re-read. Covers every consumer (start pre-flight,
+  // the hunt stage, the mine stage) with one choke point instead of per-callsite
+  // fallbacks. The extra file read happens ONLY on the failure path — the happy
+  // path never touches the mirror.
+  await restoreTokenFromFile();
+  try {
+    const row = await db.setting.findUnique({ where: { key: TOKEN_KEY } });
+    if (row?.value?.trim()) return row.value.trim();
+  } catch {
+    // fall through
+  }
+  return null;
 }
 
 // ---------- Helper structures ----------
@@ -1116,6 +1131,8 @@ export async function startLiveHunt(): Promise<{ id: number }> {
   // hunt row is created — a token-less start must not leave a doomed "running"
   // row behind that the user then has to watch fail. Checked before the 409:
   // a missing token is the more actionable error when both conditions hold.
+  // (Round 14: the durable-mirror self-heal lives INSIDE getStoredToken — one
+  // choke point for start/hunt/mine alike.)
   if (!(await getStoredToken())) {
     throw new LiveHuntError("No GitHub token on the server — the live hunt requires a token (Settings → Token)", 400);
   }

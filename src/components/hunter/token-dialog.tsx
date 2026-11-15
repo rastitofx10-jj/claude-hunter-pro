@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { KeyRound, ExternalLink, CheckCircle2, XCircle, Loader2, Trash2 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ interface ServerTokenInfo {
 
 export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
   const { token, setToken } = useHunterStore();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [test, setTest] = useState<{ loading: boolean; ok?: boolean; info?: RateInfo }>({ loading: false });
@@ -128,6 +129,9 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                     setToken(SERVER_TOKEN);
                     setSaveError(null);
                     setDraft("");
+                    // Round 14 — propagate to every ["server-token"] observer
+                    // (the Live Hunt panel's no-token alert) immediately.
+                    void queryClient.invalidateQueries({ queryKey: ["server-token"] });
                   } else {
                     setSaveError("Verification passed but saving to the server failed — try again");
                   }
@@ -156,6 +160,9 @@ export function TokenDialog({ trigger }: { trigger?: React.ReactNode }) {
                   setToken("");
                   setDraft("");
                   setTest({ loading: false });
+                  // Round 14 — the no-token alert in the Live Hunt panel must
+                  // reappear the moment the token is cleared here.
+                  void queryClient.invalidateQueries({ queryKey: ["server-token"] });
                 }}
               >
                 <Trash2 className="h-4 w-4" /> Clear saved token

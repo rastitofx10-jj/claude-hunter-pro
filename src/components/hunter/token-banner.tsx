@@ -103,6 +103,10 @@ export function TokenBanner() {
         setEditing(false);
         setDraft("");
         setSaveError(null);
+        // Round 14 — every ["server-token"] observer (the Live Hunt panel's
+        // no-token alert, the dialog) must learn immediately that the token
+        // now exists; otherwise the stale alert keeps claiming it doesn't.
+        void queryClient.invalidateQueries({ queryKey: ["server-token"] });
       } else {
         setSaveError("Saving to the server failed — try again");
       }

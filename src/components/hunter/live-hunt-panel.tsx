@@ -19,10 +19,12 @@ import {
   History,
   Brain,
   Sparkles,
+  KeyRound,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -353,6 +355,19 @@ export function LiveHuntPanel() {
     queryFn: () => apiFetch<HuntResponse>("/api/live-hunt", token),
   });
 
+  // Round 14 — honest pre-click state: when the server holds no GitHub token
+  // (a sandbox recycle wiped it), the user sees WHY the hunt cannot run BEFORE
+  // pressing the button, instead of a destructive toast after. Shares the
+  // ["server-token"] cache with the token banner/dialog, so a save anywhere
+  // clears this alert everywhere.
+  const serverTokenQuery = useQuery({
+    queryKey: ["server-token"],
+    queryFn: () => apiFetch<{ exists: boolean; masked: string | null; updatedAt: string | null }>("/api/settings/token", ""),
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const serverHasNoToken = serverTokenQuery.data?.exists === false;
+
   const applyResponse = useCallback((data: HuntResponse) => {
     if (data.hunt) setHunt(data.hunt);
     if (data.stageTitles) setRespTitles((prev) => ({ ...prev, ...data.stageTitles! }));
@@ -368,6 +383,11 @@ export function LiveHuntPanel() {
     onSuccess: (data) => {
       applyResponse(data);
       void queryClient.invalidateQueries({ queryKey: ["live-hunt-list"] });
+      // Round 14: a successful start can be the product of a server-side
+      // self-heal (token re-seeded from the durable mirror mid-pre-flight).
+      // The cached ["server-token"] answer may still say exists:false —
+      // invalidate so the banner and this panel's alert re-read the truth.
+      void queryClient.invalidateQueries({ queryKey: ["server-token"] });
     },
     onError: (e: Error) => {
       toast({ title: "Failed to open the hunt", description: e.message, variant: "destructive" });
@@ -479,6 +499,19 @@ export function LiveHuntPanel() {
             from the targets, compiles a mission from the new genes, executes it autonomously, distills the field
             lessons into a new gene — and wraps up with full evidence.
           </p>
+          {/* Round 14 — the honest pre-click state: no token on the server = the hunt cannot run.
+              Shown inline BEFORE the button, not as a destructive toast after the click. */}
+          {serverHasNoToken && (
+            <Alert className="border-amber-400/60 bg-amber-500/10">
+              <KeyRound className="h-4 w-4 text-amber-600" aria-hidden />
+              <AlertTitle className="text-sm">No GitHub token on the server — the hunt cannot run</AlertTitle>
+              <AlertDescription className="text-xs leading-relaxed">
+                The autonomous hunt mines GitHub live and needs a token (free — 5,000 requests/hour). Paste it in the
+                orange “GitHub token” card at the top of the page. Once saved, it is verified against GitHub and
+                automatically survives server recycles.
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="lg"

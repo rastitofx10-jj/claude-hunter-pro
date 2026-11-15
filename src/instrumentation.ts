@@ -13,6 +13,19 @@
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // Round 14 — FIRST, before anything that touches GitHub: re-seed the PAT from
+  // the durable mirror if the sandbox recycle wiped db/custom.db. Field fact
+  // (3× recycles so far): the library self-heal restores genes/hunts/sweeps but
+  // never the token, so "Start an autonomous live hunt" failed with 400
+  // "No GitHub token" after every recycle until the human re-pasted the PAT.
+  // This is a file read + one upsert (~ms) — awaited, so even the very first
+  // user request already sees a working token. Never throws.
+  try {
+    const { restoreTokenFromFile } = await import("./lib/server-token");
+    await restoreTokenFromFile();
+  } catch (e) {
+    console.error("[instrumentation] token mirror restore failed:", e);
+  }
   try {
     const { startScheduler } = await import("./lib/scheduler");
     startScheduler();

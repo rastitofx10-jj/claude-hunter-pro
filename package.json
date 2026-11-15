@@ -18,7 +18,8 @@
     "llm:check": "node scripts/llm-check.mjs",
     "test:official": "bun scripts/test-official-sources.ts",
     "test:preflight": "bun scripts/test-preflight-tokens.ts",
-    "test:assembler": "bun scripts/test-assembler.ts"
+    "test:assembler": "bun scripts/test-assembler.ts",
+    "test:tokenfile": "bun scripts/test-token-persistence.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

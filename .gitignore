@@ -7,6 +7,9 @@ node_modules/
 # local SQLite database (custom.db — contains the server-side GitHub PAT in Setting)
 db/
 
+# round 14 — durable GitHub PAT mirror (survives db/ recycles; NEVER commit)
+reports/state/gh-token.txt
+
 # dev server / background service logs
 dev.log
 server.log
