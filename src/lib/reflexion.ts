@@ -62,7 +62,14 @@ export interface ReflexionTelemetry {
   collectedAt: string;
   library: { total: number; byKind: Record<string, number>; topSources: { repo: string; genes: number }[]; bornLast7d: number; bornLast24h: number };
   yieldStats: { tracked: number; top: { q: string; runs: number; genes: number; weight: number }[]; sterile: { q: string; runs: number; genes: number }[] };
-  missions: { total: number; byStatus: Record<string, number>; lessonsTotal: number };
+  missions: {
+    total: number;
+    byStatus: Record<string, number>;
+    lessonsTotal: number;
+    /** Round 15: legacy fiction-purges split from current-era performance. */
+    currentEraNote: string;
+    currentEra: { active: number; byStatus: Record<string, number> };
+  };
   hunts: { total: number; avgDnaGrowth: number | null; lastError: string | null };
   sweeps: { total: number; byStatus: Record<string, number> };
   watchlist: number;
@@ -151,7 +158,22 @@ export async function gatherReflexionTelemetry(): Promise<ReflexionTelemetry> {
       bornLast24h: born24h,
     },
     yieldStats: { tracked: allYields.length, top, sterile },
-    missions: { total: missions, byStatus: byStatusM, lessonsTotal },
+    missions: {
+      total: missions,
+      byStatus: byStatusM,
+      lessonsTotal,
+      // Round 15: 'voided' is written ONLY by scripts/truth-migration.ts (a one-time
+      // purge of fictional deliverables from the pre-truth era, terminal state).
+      // The LLM kept reading those 23 purged rows as a CURRENT failure rate
+      // ("62% void rate") and burned reflexion cycles re-flagging a solved problem
+      // instead of hunting real ones. The lens is now split explicitly.
+      currentEraNote:
+        "byStatus.voided counts LEGACY fiction-purged missions (a one-time truth-migration purge, terminal). Current-era performance = currentEra.byStatus only. NEVER report the voided share as a current failure rate or as an active weakness.",
+      currentEra: {
+        active: missions - (byStatusM.voided ?? 0),
+        byStatus: Object.fromEntries(Object.entries(byStatusM).filter(([s]) => s !== "voided")),
+      },
+    },
     hunts: { total: hunts.length, avgDnaGrowth: avgGrowth === null ? null : Number(avgGrowth.toFixed(1)), lastError },
     sweeps: { total: sweepsRaw, byStatus: byStatusS },
     watchlist: watchlistCount,
