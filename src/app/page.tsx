@@ -19,6 +19,7 @@ import {
   Command as CommandIcon,
   Loader2,
   BrainCircuit,
+  MessageSquareText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,16 +45,17 @@ import { CommandPalette } from "@/components/hunter/command-palette";
 import { Overview } from "@/components/hunter/overview";
 import { InsightsPanel } from "@/components/hunter/insights-panel";
 import { ReflexionPanel } from "@/components/hunter/reflexion-panel";
+import { OperatorIntelPanel } from "@/components/hunter/operator-intel";
 import { LiveIndicator } from "@/components/hunter/live-indicator";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { useHunterEvents } from "@/hooks/use-hunter-events";
 import type { Recipe } from "@/lib/hunter-recipes";
 
-/** The nav model — the 8 store-backed tabs + the local "insights" and "reflexion"
- *  overlays (TabKey is frozen in hunter-store.ts, so the 9th/10th tabs live at
- *  page level). */
-type PageTab = TabKey | "insights" | "reflexion";
-type OverlayTab = "insights" | "reflexion";
+/** The nav model — the 8 store-backed tabs + the local "insights", "reflexion"
+ *  and "intel" overlays (TabKey is frozen in hunter-store.ts, so the 9th/10th/11th
+ *  tabs live at page level). */
+type PageTab = TabKey | "insights" | "reflexion" | "intel";
+type OverlayTab = "insights" | "reflexion" | "intel";
 
 export default function ClaudeHunterPage() {
   const token = useHunterStore((s) => s.token);
@@ -77,10 +79,11 @@ export default function ClaudeHunterPage() {
   const [overlay, setOverlay] = useState<{ tab: OverlayTab | null; covered: TabKey }>({ tab: null, covered: "home" });
   const insightsOpen = overlay.tab === "insights" && overlay.covered === activeTab;
   const reflexionOpen = overlay.tab === "reflexion" && overlay.covered === activeTab;
+  const intelOpen = overlay.tab === "intel" && overlay.covered === activeTab;
 
   const goTab = useCallback(
     (t: PageTab) => {
-      if (t === "insights" || t === "reflexion") {
+      if (t === "insights" || t === "reflexion" || t === "intel") {
         setOverlay({ tab: t, covered: activeTab });
         return;
       }
@@ -90,7 +93,7 @@ export default function ClaudeHunterPage() {
     [activeTab, setActiveTab]
   );
 
-  const effectiveTab: PageTab = insightsOpen ? "insights" : reflexionOpen ? "reflexion" : activeTab;
+  const effectiveTab: PageTab = insightsOpen ? "insights" : reflexionOpen ? "reflexion" : intelOpen ? "intel" : activeTab;
 
   // analyze requests can arrive from anywhere (palette, recipes, cards, watchlist)
   useEffect(() => {
@@ -205,6 +208,7 @@ export default function ClaudeHunterPage() {
     { tab: "history", label: "History", icon: HistoryIcon },
     { tab: "insights", label: "Insights", icon: ChartLine },
     { tab: "reflexion", label: "Reflexion", icon: BrainCircuit },
+    { tab: "intel", label: "Operator Intel", icon: MessageSquareText },
   ];
 
   const renderTab = () => {
@@ -291,6 +295,8 @@ export default function ClaudeHunterPage() {
         return <InsightsPanel />;
       case "reflexion":
         return <ReflexionPanel />;
+      case "intel":
+        return <OperatorIntelPanel />;
     }
   };
 

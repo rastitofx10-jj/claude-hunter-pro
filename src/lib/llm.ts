@@ -64,6 +64,11 @@ export interface LlmOptions {
   cacheSystem?: boolean;
   /** Abort from the caller side. */
   signal?: AbortSignal;
+  /** Round 15 — sanctioned exception to the English-only law, for the Operator
+   * Intel Q&A ONLY: conversational answers are written in the language of the
+   * user's question. Library artifacts (genes, SKILL.md, names) stay English —
+   * they feed English compiler/executor prompts downstream. */
+  multilingualAnswer?: boolean;
 }
 
 export interface LlmUsage {
@@ -512,10 +517,14 @@ interface ApiBody {
 export const ENGLISH_ONLY_RULE =
   "Language rule: write every output in English only — including JSON string values, markdown files, names and notes — even when the input, the evidence or the source repositories are written in another language. Quote non-English source text only when it is essential evidence, and translate it.";
 
-function splitMessages(messages: LlmMessage[]): { system: string; turns: ApiBody["messages"] } {
+function splitMessages(messages: LlmMessage[], multilingual = false): { system: string; turns: ApiBody["messages"] } {
   const system = [
     ...messages.filter((m) => m.role === "system").map((m) => m.content),
-    ENGLISH_ONLY_RULE,
+    ...(multilingual
+      ? [
+          "Language rule (sanctioned exception, conversational endpoint): answer in the SAME language the user's question is written in — Hebrew question → Hebrew answer, English question → English answer. Library artifacts you cite (gene names, SKILL.md excerpts) stay verbatim in English.",
+        ]
+      : [ENGLISH_ONLY_RULE]),
   ]
     .join("\n\n")
     .trim();
@@ -737,7 +746,7 @@ export async function llmComplete(messages: LlmMessage[], opts: LlmOptions = {})
   const timeoutMs = opts.timeoutMs ?? 240_000;
   const label = opts.timeoutLabel ?? "AI call";
   const Err: ErrorFactory = opts.timeoutError ?? Error;
-  const { system, turns } = splitMessages(messages);
+  const { system, turns } = splitMessages(messages, opts.multilingualAnswer === true);
 
   // ---------- Fallback transport (no ANTHROPIC_API_KEY) ----------
   // When no key is configured (e.g. this sandbox): the hosted gateway

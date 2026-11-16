@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { NextRequest } from "next/server";
 
@@ -30,6 +30,21 @@ export const TOKEN_KEY = "github_pat";
  */
 export const TOKEN_FILE =
   process.env.HUNTER_TOKEN_FILE ?? path.join("reports", "state", "gh-token.txt");
+
+/**
+ * Round 15 — the upload fallback. Field fact (2026-11-16): the mirror itself
+ * was missing after the latest recycle because the token had been persisted
+ * BEFORE the mirror code existed (only persistToken writes the mirror, and
+ * nobody re-stored the token after that deploy). The user's demonstrated
+ * recovery pattern is uploading the PAT as a .secret file into upload/
+ * (twice so far: token.secret, טוקן טיטפקס10.secret) — that folder proved
+ * durable across every recycle. Restore chain: DB → mirror → newest
+ * upload/*.secret. A live DB token is NEVER overwritten. When the heal came
+ * from upload/, the mirror is written too — so the NEXT recycle heals from
+ * the mirror without even needing the fallback.
+ * HUNTER_UPLOAD_DIR overrides the path for the isolated test suite.
+ */
+export const UPLOAD_DIR = process.env.HUNTER_UPLOAD_DIR ?? "upload";
 
 /**
  * Lenient validity check: GitHub itself is the source of truth (capture happens only after a 200 from GitHub),
@@ -90,6 +105,31 @@ async function readTokenFile(): Promise<string | null> {
   try {
     const t = (await readFile(TOKEN_FILE, "utf8")).trim();
     return looksLikeToken(t) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Newest-first scan of upload/*.secret — null when nothing valid is found */
+async function readUploadFallbackToken(): Promise<string | null> {
+  try {
+    const entries = await readdir(UPLOAD_DIR, { withFileTypes: true });
+    const names = entries
+      .filter((e) => e.isFile() && /\.secret$/i.test(e.name))
+      .map((e) => e.name);
+    if (names.length === 0) return null;
+    const withMtime = await Promise.all(
+      names.map(async (name) => {
+        const st = await stat(path.join(UPLOAD_DIR, name)).catch(() => null);
+        return { name, mtime: st?.mtimeMs ?? 0 };
+      })
+    );
+    withMtime.sort((a, b) => b.mtime - a.mtime); // freshest upload = the user's latest intent
+    for (const { name } of withMtime) {
+      const raw = (await readFile(path.join(UPLOAD_DIR, name), "utf8")).trim();
+      if (looksLikeToken(raw)) return raw;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -163,15 +203,24 @@ export async function restoreTokenFromFile(): Promise<boolean> {
   try {
     const row = await db.setting.findUnique({ where: { key: TOKEN_KEY } });
     if (row?.value?.trim()) return false; // the DB already holds a token
-    const t = await readTokenFile();
+    let t = await readTokenFile();
+    let from = "durable mirror";
+    if (!t) {
+      t = await readUploadFallbackToken();
+      from = "upload fallback (.secret)";
+    }
     if (!t) return false; // nothing to heal from
     await db.setting.upsert({
       where: { key: TOKEN_KEY },
       create: { key: TOKEN_KEY, value: t },
       update: { value: t },
     });
+    if (from !== "durable mirror") {
+      // heal the mirror too — the next recycle recovers without the fallback
+      await writeTokenFile(t);
+    }
     console.log(
-      "[server-token] token re-seeded from the durable mirror — db/custom.db was recycled"
+      `[server-token] token re-seeded from the ${from} — db/custom.db was recycled`
     );
     return true;
   } catch {

@@ -19,7 +19,7 @@ const check = (name: string, ok: boolean) => {
   console.log(`${ok ? "PASS" : "FAIL"} | ${name}`);
 };
 
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -27,10 +27,15 @@ import { execSync } from "node:child_process";
 const sandbox = mkdtempSync(path.join(tmpdir(), "hunter-token-test-"));
 const testDb = `file:${path.join(sandbox, "test.db")}`;
 const testMirror = path.join(sandbox, "gh-token.txt");
+const testUploadEmpty = path.join(sandbox, "uploads-empty"); // no .secret files — mirrors the "no fallback" case
+const testUploadFull = path.join(sandbox, "uploads-full"); // holds a .secret — the round-15 fallback case
+mkdirSync(testUploadEmpty, { recursive: true });
+mkdirSync(testUploadFull, { recursive: true });
 
 // Env BEFORE import — db.ts and server-token.ts read these at module load.
 process.env.DATABASE_URL = testDb;
 process.env.HUNTER_TOKEN_FILE = testMirror;
+process.env.HUNTER_UPLOAD_DIR = testUploadEmpty; // isolation: the REAL upload/ (real .secret files) must never leak into this test
 
 // Create the isolated schema (no client regeneration — the project's
 // generated client is reused; only the DATABASE_URL differs).
@@ -41,7 +46,7 @@ execSync("bunx prisma db push --skip-generate --accept-data-loss", {
 });
 
 const { db } = await import("../src/lib/db");
-const { persistToken, clearStoredToken, restoreTokenFromFile, TOKEN_KEY, TOKEN_FILE } =
+const { persistToken, clearStoredToken, restoreTokenFromFile, TOKEN_KEY, TOKEN_FILE, UPLOAD_DIR } =
   await import("../src/lib/server-token");
 
 const FAKE = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"; // structurally valid, never a real PAT
@@ -75,8 +80,32 @@ try {
   check("invalid mirror content → refused", (await restoreTokenFromFile()) === false);
   check("invalid mirror never entered the DB", (await readRow()) === null);
 
+  // 5b. Round 15 — the upload fallback: mirror gone + DB wiped, but upload/
+  //     holds a valid .secret → the token is healed from it AND the mirror is
+  //     re-written (so the next recycle heals from the mirror alone).
+  rmSync(testMirror, { force: true });
+  writeFileSync(path.join(testUploadFull, "טוקן מהמשתמש.secret"), FAKE, "utf8");
+  // HUNTER_UPLOAD_DIR was read at module load — swap the directory contents
+  // by pointing the SAME path at the full dir is impossible; instead prove the
+  // fallback via the resolved UPLOAD_DIR constant: it points at the empty dir,
+  // so seed the file THERE for this phase, then remove it again.
+  writeFileSync(path.join(UPLOAD_DIR, "uploaded-token.secret"), FAKE, "utf8");
+  check("upload fallback: restore returns true", (await restoreTokenFromFile()) === true);
+  check("upload fallback: DB re-seeded from the .secret file", (await readRow()) === FAKE);
+  check("upload fallback: mirror re-written for the next recycle", existsSync(TOKEN_FILE) && readFileSync(TOKEN_FILE, "utf8").trim() === FAKE);
+  rmSync(path.join(UPLOAD_DIR, "uploaded-token.secret"), { force: true });
+
+  // 5c. The upload fallback also refuses garbage .secret files
+  await db.setting.deleteMany({ where: { key: TOKEN_KEY } });
+  rmSync(testMirror, { force: true });
+  writeFileSync(path.join(UPLOAD_DIR, "garbage.secret"), "definitely not a token at all, way too many words here", "utf8");
+  check("upload fallback: garbage .secret refused", (await restoreTokenFromFile()) === false);
+  check("upload fallback: garbage never entered the DB", (await readRow()) === null);
+  rmSync(path.join(UPLOAD_DIR, "garbage.secret"), { force: true });
+  void testUploadFull; // the dir proves the real-world naming (Hebrew) is handled by the scan, not by this test
+
   // 6. persistToken refuses garbage in the first place (no DB row, no file)
-  rmSync(testMirror);
+  rmSync(testMirror, { force: true });
   check("persistToken(garbage) refused", (await persistToken("short")) === false);
   check("persistToken(garbage) wrote nothing", !existsSync(TOKEN_FILE) && (await readRow()) === null);
 

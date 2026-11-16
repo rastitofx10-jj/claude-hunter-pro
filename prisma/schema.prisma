@@ -142,7 +142,6 @@ model SweepRun {
   @@index([status])
 }
 
-// ============================================================
 // Live hunt — a fully autonomous kill chain in one click:
 // live GitHub discovery -> prompt swarm -> DNA mining -> mission compile
 // -> autonomous execution -> field refinement (the library grows) -> campaign verdict.
@@ -167,4 +166,30 @@ model LiveHunt {
 
   // Status is queried on every start/step/previousKnownRepos — previously a full scan without an index
   @@index([status])
+}
+
+// ============================================================
+// Round 15 — Operator Intel: the user's own chat logs, uploaded to
+// upload/*.txt, become field reports the hunter learns from. Each
+// ingested chat births DNA genes (license "self" — our own IP) into
+// the library, and the Q&A endpoint answers the operator's questions
+// grounded in everything the hunter knows. Identical uploads are
+// deduplicated by content hash — never ingested twice.
+// ============================================================
+model ChatIntel {
+  id        Int      @id @default(autoincrement())
+  fileName  String   @unique // base name in upload/
+  fileHash  String   // sha256 of content — the dedupe key across renames
+  bytes     Int      @default(0)
+  language  String?  // detected by the extraction pass (he / en / mixed...)
+  summary   String?  // one-paragraph LLM summary (written in the chat's language)
+  genesBorn Int      @default(0) // DNA genes birthed from this chat
+  status    String   @default("pending") // pending | ingesting | ingested | failed | duplicate
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The ingest-all scan filters on status — previously a full scan without an index
+  @@index([status])
+  @@index([fileHash])
 }

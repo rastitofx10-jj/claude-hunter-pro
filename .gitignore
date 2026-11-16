@@ -26,3 +26,4 @@ agent-ctx/
 # tsc incremental cache + tool session artifacts
 tsconfig.tsbuildinfo
 tool-results/
+dev-daemon.log
