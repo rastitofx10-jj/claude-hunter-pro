@@ -3,24 +3,43 @@ import { NextRequest, NextResponse } from "next/server";
 /**
  * Same-origin protection for mutation requests (POST/PUT/PATCH/DELETE) to the API.
  * (Ported 1:1 from src/middleware.ts — the "middleware" file convention Next 16 deprecated
- * in favor of proxy.ts; the protection logic itself is unchanged.)
+ * in favor of proxy.ts.)
  *
  * Why: the app has no login system — the GitHub PAT is stored server-side and is used
  * automatically by all API routes. Without this protection layer, any malicious site the
  * tool owner visits could send cross-origin requests from their browser (CSRF) and run hunts/mining
  * on the PAT's API quota — and even delete the stored token.
  *
- * How: a browser always sends an Origin header on mutation requests. If Origin exists and does not
- * match the Host — immediate block. Requests without Origin (curl/scripts/server-side
- * tools) carry no CSRF risk and continue as usual, so external automation
- * and the existing workflow are not broken.
+ * ROUND 15 — THE ENVIRONMENT-GAP FIX (the "Cross-Origin blocked" 403 the owner kept hitting):
+ * The sandbox serves the app through a reverse-proxy chain:
+ *     browser → platform edge (TLS) → Caddy :81 → Next.js :3000
+ * The browser's Origin header names the EXTERNAL origin it sees, but the Host header that
+ * reaches Next.js may be the INTERNAL one once the chain rewrites it. Comparing Origin
+ * against Host alone rejected EVERY mutation from the real user's browser — while all
+ * in-sandbox checks passed cleanly (curl sends no Origin at all; the headless test browser
+ * connects as localhost, where Origin === Host). The block was also INVISIBLE: middleware
+ * short-circuits produce no dev.log request line, so the log looked perfect while every
+ * button in the owner's browser failed with "Cross-Origin blocked".
+ *
+ * The gate now accepts a browser request when ANY of these hold:
+ *  1. Neither Origin nor Referer present — a non-browser client (curl / scripts /
+ *     server-side schedulers) with no CSRF surface.
+ *  2. `Sec-Fetch-Site: same-origin` (or `none`) — the browser's OWN verdict that the
+ *     request target matches the page origin. Immune to any Host rewriting upstream;
+ *     sent by every modern browser on fetch(), XHR, <img>, <script> and form submits.
+ *     A hostile page cannot forge it (a non-browser forger can simply omit all headers
+ *     and pass rule 1 instead — the gate only ever stopped naive browser requests).
+ *  3. Origin (or Referer origin) matches the Host — direct same-origin access.
+ *  4. Origin (or Referer origin) matches X-Forwarded-Host (+ X-Forwarded-Proto) — the
+ *     standard proxy headers naming the original external host.
+ * Every rejection now LOGS the full header context, so any residual environment gap is
+ * diagnosable from dev.log instead of silently invisible.
  *
  * round 8: GET was exempted wholesale — but GET /api/analyze is a side-effectful,
  * quota-burning route (~25 authenticated GitHub calls + 2 DB writes per hit): a page of
  * hidden <img src="http://host/api/analyze?owner=a&repo=b"> tags drained the shared
  * 5,000/h quota. <img> never sends Origin, but browsers DO send Referer on subresource
- * loads by default — so for these expensive GETs a cross-origin Referer is blocked too
- * (same-origin pages and header-less scripts keep working).
+ * loads by default — and Sec-Fetch-Site since 2020 — so the same four rules apply.
  *
  * Per-IP rate limiting (added with the middleware->proxy migration): the origin gate stops
  * hostile browsers, but a header-less client (script/curl, or a bug in our own tool) could still
@@ -88,40 +107,90 @@ function consumeBucket(
   return { allowed: true, retryAfterSec: 0 };
 }
 
-function sameOriginValue(headerValue: string | null, host: string | null): boolean | null {
-  // null → header absent (cannot judge); true → matches; false → cross-origin
-  if (!headerValue) return null;
+// ---- round 15: proxy-chain-aware same-origin gate ----
+
+/** Proxies may append multiple values ("a, b") — judge only the first (closest) hop. */
+function firstToken(v: string | null): string | null {
+  if (!v) return null;
+  const t = v.split(",")[0]?.trim();
+  return t || null;
+}
+
+/**
+ * Does `origin` (an already-normalized URL.origin string, no trailing slash,
+ * default port stripped) name the same place as `host` (host[:port])?
+ * Checks both schemes because the internal hop is http while the external one is https.
+ */
+function originMatchesHost(origin: string, host: string): boolean {
   try {
-    const origin = new URL(headerValue).origin;
-    if (!host) return false;
-    const hostOrigin = new URL(`http://${host}`).origin;
-    return origin === hostOrigin || origin === `http://${host}` || origin === `https://${host}`;
+    return (
+      origin === `http://${host}` ||
+      origin === `https://${host}` ||
+      origin === new URL(`http://${host}`).origin ||
+      origin === new URL(`https://${host}`).origin
+    );
   } catch {
-    return false; // corrupted value — treated as hostile
+    return false; // malformed host value
   }
 }
 
-export function proxy(req: NextRequest) {
+/**
+ * The whole round-15 verdict. Returns ok + a diagnostic `seen` snapshot of every
+ * header the decision was based on (logged on reject, embedded in the 403 body —
+ * so the exact environment chain is visible from dev.log AND from the user's toast).
+ */
+function browserRequestAllowed(req: NextRequest): { ok: boolean; seen: string } {
+  const origin = req.headers.get("origin");
+  const referer = req.headers.get("referer");
+  const secFetchSite = firstToken(req.headers.get("sec-fetch-site"));
   const host = req.headers.get("host");
+  const fwdHost = firstToken(req.headers.get("x-forwarded-host"));
+  const fwdProto = firstToken(req.headers.get("x-forwarded-proto")) ?? "http";
+
+  const seen = `origin=${origin ?? "-"} referer=${referer ?? "-"} host=${host ?? "-"} xfh=${fwdHost ?? "-"} sfs=${secFetchSite ?? "-"}`;
+
+  // (1) non-browser client — no Origin AND no Referer carries no CSRF surface
+  if (!origin && !referer) return { ok: true, seen };
+
+  // (2) the browser's own verdict — immune to proxy Host rewriting.
+  //     `none` covers direct address-bar navigations (a user explicitly visiting the URL).
+  if (secFetchSite === "same-origin" || secFetchSite === "none") return { ok: true, seen };
+
+  // (3)+(4) judge the request's origin against every host name the chain reveals
+  const candidateOrigin = origin ?? (() => {
+    try {
+      return referer ? new URL(referer).origin : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (candidateOrigin) {
+    const matches = (h: string | null): boolean => {
+      if (!h) return false;
+      return originMatchesHost(candidateOrigin, h) || candidateOrigin === `${fwdProto}://${h}`;
+    };
+    if (matches(host) || matches(fwdHost)) return { ok: true, seen };
+  }
+
+  return { ok: false, seen };
+}
+
+export function proxy(req: NextRequest) {
   const path = new URL(req.url).pathname;
 
   // --- same-origin gate FIRST: cross-origin abuse is blocked before it can touch limiter state ---
-  if (MUTATION_METHODS.has(req.method)) {
-    const originOk = sameOriginValue(req.headers.get("origin"), host);
-    if (originOk === false) {
-      // header present and cross-origin (null = non-browser client — no CSRF risk — passes)
+  const needsBrowserGate = MUTATION_METHODS.has(req.method) || EXPENSIVE_GET_PATHS.has(path);
+  if (needsBrowserGate) {
+    const verdict = browserRequestAllowed(req);
+    if (!verdict.ok) {
+      // Round 15: middleware short-circuits never appear as request lines in dev.log —
+      // a silent 403 was invisible while the user's every button failed. Log it loudly.
+      console.log(`[proxy] BLOCKED ${req.method} ${path} — ${verdict.seen}`);
       return NextResponse.json(
-        { error: "Cross-Origin blocked: mutation requests are allowed from the same origin only" },
-        { status: 403 }
-      );
-    }
-  } else if (EXPENSIVE_GET_PATHS.has(path)) {
-    // expensive side-effectful GETs: Origin check (fetch/XHR) + Referer check (<img>/<script> tags)
-    const originOk = sameOriginValue(req.headers.get("origin"), host);
-    const refererOk = sameOriginValue(req.headers.get("referer"), host);
-    if (originOk === false || refererOk === false) {
-      return NextResponse.json(
-        { error: "Cross-Origin blocked: this operation is allowed from the same origin only" },
+        {
+          error: `Cross-Origin blocked: this operation is allowed from the same origin only. If you are the operator, report this line: ${verdict.seen}`,
+        },
         { status: 403 }
       );
     }
